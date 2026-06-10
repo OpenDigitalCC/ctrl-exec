@@ -1,3 +1,9 @@
+ctrl-exec (0.8.6) unstable; urgency=medium
+
+  * Release 0.8.6
+
+ -- OpenDigital CC <sjm@opendigital.cc>  Wed, 10 Jun 2026 20:13:35 +0100
+
 ctrl-exec (0.8.5) unstable; urgency=medium
 
   * Initial Debian packaging. Three binary packages from one source:
