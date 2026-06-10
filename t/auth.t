@@ -243,6 +243,30 @@ HOOK
     ok $result->{ok}, 'ENVEXEC_ARGS_JSON: valid JSON array passed to hook';
 }
 
+# --- auth_deny_generic: generic_denials_enabled + deny_fields ---
+
+{
+    ok !Exec::Auth::generic_denials_enabled({}),
+        'generic_denials_enabled: off by default (absent)';
+    ok !Exec::Auth::generic_denials_enabled({ auth_deny_generic => '0' }),
+        'generic_denials_enabled: off for 0';
+    ok  Exec::Auth::generic_denials_enabled({ auth_deny_generic => '1' }),
+        'generic_denials_enabled: on for 1';
+    ok  Exec::Auth::generic_denials_enabled({ auth_deny_generic => 'yes' }),
+        'generic_denials_enabled: on for yes';
+
+    my $denied = { ok => 0, reason => 'insufficient privilege', code => 3 };
+
+    my $detailed = Exec::Auth::deny_fields($denied, {});
+    is $detailed->{error}, 'insufficient privilege', 'deny_fields: detailed reason when off';
+    is $detailed->{code},  3,                         'deny_fields: detailed code when off';
+
+    my $generic = Exec::Auth::deny_fields($denied, { auth_deny_generic => '1' });
+    is $generic->{error}, 'forbidden', 'deny_fields: generic message when on';
+    ok !exists $generic->{code},       'deny_fields: no code disclosed when on';
+    ok !exists $generic->{reason},     'deny_fields: no reason disclosed when on';
+}
+
 # Restore stderr
 open STDERR, '>&', $saved_stderr;
 

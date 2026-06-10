@@ -49,6 +49,14 @@ auth_hook = /etc/ctrl-exec/auth-hook
 # When a hook is configured this setting has no effect.
 api_auth_default = deny
 
+# Generic auth denials (default off).
+# When enabled, the API returns a generic 403 ("forbidden") for denied run,
+# ping, and discovery requests, withholding the specific denial reason and
+# code from the caller. This reduces information disclosure to unauthorised
+# callers. The full reason is still logged server-side regardless. Off
+# preserves the current behaviour of returning the detailed reason.
+# auth_deny_generic = 0
+
 # Pairing port (7444) rate limiting.
 #
 # Per-IP volume limiting on the pairing listener, mirroring the operational

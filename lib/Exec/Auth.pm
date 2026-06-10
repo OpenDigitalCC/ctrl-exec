@@ -152,6 +152,26 @@ sub check {
     return { ok => 0, reason => $reason, code => $exit_code };
 }
 
+# Whether generic (reason-less) auth denials are enabled. When the config flag
+# auth_deny_generic is on, denial responses to callers omit the specific reason
+# and code, reducing information disclosure to unauthorised callers. The full
+# reason is still logged server-side by check(). Default off.
+sub generic_denials_enabled {
+    my ($config) = @_;
+    my $v = $config->{auth_deny_generic} // '';
+    return ($v =~ /^\s*[1y]/i) ? 1 : 0;
+}
+
+# Disclosable fields for a denied auth result, to be merged into a 403 body.
+# With auth_deny_generic off (default): the specific reason and code. With it
+# on: a generic message only. Returns a hashref (no 'ok' key - the caller adds
+# it with its own JSON false value).
+sub deny_fields {
+    my ($auth, $config) = @_;
+    return { error => 'forbidden' } if generic_denials_enabled($config);
+    return { error => $auth->{reason}, code => $auth->{code} };
+}
+
 # --- private ---
 
 # Build the context hashref passed to the hook as env vars and JSON stdin

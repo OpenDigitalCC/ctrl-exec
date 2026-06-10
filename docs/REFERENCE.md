@@ -438,6 +438,17 @@ Key settings:
   api_auth_default = allow
   ```
 
+`auth_deny_generic`
+: When enabled (`1`/`yes`; default off), the API returns a generic `403`
+  with `{"error":"forbidden"}` for denied `run`, `ping`, and `discovery`
+  requests, withholding the specific denial reason and code from the caller
+  to reduce information disclosure. The full reason is still logged
+  server-side. Off returns the detailed reason and code.
+
+  ```
+  auth_deny_generic = 1
+  ```
+
 ### Cert rotation settings
 
 `cert_days`

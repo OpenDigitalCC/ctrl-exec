@@ -193,9 +193,8 @@ sub _handle_connection {
     );
     unless ($auth->{ok}) {
         _send_json($conn, 403, {
-            ok    => JSON::false,
-            error => $auth->{reason},
-            code  => $auth->{code},
+            ok => JSON::false,
+            %{ Exec::Auth::deny_fields($auth, $config) },
         });
         return;
     }
@@ -259,9 +258,8 @@ sub _handle_ping {
     );
     unless ($auth->{ok}) {
         _send_json($conn, 403, {
-            ok    => JSON::false,
-            error => $auth->{reason},
-            code  => $auth->{code},
+            ok => JSON::false,
+            %{ Exec::Auth::deny_fields($auth, $config) },
         });
         return;
     }
@@ -316,9 +314,8 @@ sub _handle_run {
     );
     unless ($auth->{ok}) {
         _send_json($conn, 403, {
-            ok    => JSON::false,
-            error => $auth->{reason},
-            code  => $auth->{code},
+            ok => JSON::false,
+            %{ Exec::Auth::deny_fields($auth, $config) },
         });
         return;
     }
@@ -392,9 +389,8 @@ sub _handle_discovery {
     );
     unless ($auth->{ok}) {
         _send_json($conn, 403, {
-            ok    => JSON::false,
-            error => $auth->{reason},
-            code  => $auth->{code},
+            ok => JSON::false,
+            %{ Exec::Auth::deny_fields($auth, $config) },
         });
         return;
     }
