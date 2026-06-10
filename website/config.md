@@ -1,7 +1,7 @@
 ---
 title: Configuration Reference
 subtitle: All configuration keys for ctrl-exec.conf, agent.conf, and the ENVEXEC_ hook interface.
-updated: 2026-03-16
+updated: 2026-06-10
 github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/CONFIG.md
 current_page: /config
 ---
@@ -20,6 +20,7 @@ current_page: /config
 | `api_key` | — | TLS private key for the API server |
 | `api_bind` | `127.0.0.1` | Address the API server binds to |
 | `api_auth_default` | `deny` | API behaviour when no hook is configured: `deny` or `allow` |
+| `auth_deny_generic` | `0` | When `1`/`yes`, API denials return a generic `403` (`forbidden`) without the specific reason or code |
 | `cert_days` | `365` | Lifetime in days for new and renewed agent certificates |
 | `cert_renewal_days` | `90` | Begin cert renewal when this many days of validity remain |
 | `cert_overlap_days` | `30` | Days to retry serial broadcast before marking an agent stale |

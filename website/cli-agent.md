@@ -1,7 +1,7 @@
 ---
 title: cea — CLI Reference
 subtitle: Complete command reference for ctrl-exec-agent.
-updated: 2026-03-16
+updated: 2026-06-10
 github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/CLI-AGENT.md
 current_page: /cli-agent
 ---
@@ -30,16 +30,19 @@ sudo systemctl kill --signal=HUP ctrl-exec-agent
 # request-pairing
 
 ```
-ctrl-exec-agent request-pairing --dispatcher <hostname> [--port <n>] [--background] [--timeout <s>]
+ctrl-exec-agent request-pairing --dispatcher <hostname> [--port <n>] [--lookup-by ip|hostname] [--background] [--timeout <s>]
 ```
 
-Generates a key pair and CSR, connects to the ctrl-exec pairing port, and waits for approval. On approval, stores the signed certificate, CA certificate, and ctrl-exec serial.
+Generates a key pair and CSR, connects to the ctrl-exec pairing port, and waits for approval. On approval, stores the signed certificate, CA certificate, and ctrl-exec serial. The agent's configured operational port is reported in the request so dispatch can reach it without a per-command port.
 
 `--dispatcher <hostname>`
 : Hostname or IP of the ctrl-exec instance. Required.
 
 `--port <n>`
 : Pairing port on the ctrl-exec host. Default: 7444.
+
+`--lookup-by ip|hostname`
+: Suggests how the control host should resolve this agent for dispatch (default: hostname). The operator's `ced approve --lookup-by` overrides it.
 
 `--background`
 : Prints the request ID and pairing code to stdout, then waits without requiring an interactive terminal. Suitable for automated or orchestrated pairing.

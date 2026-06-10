@@ -1,7 +1,7 @@
 ---
 title: Pairing
 subtitle: How a new agent is introduced to the fleet and what the protocol guarantees.
-updated: 2026-03-16
+updated: 2026-06-10
 github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/PAIRING.md
 current_page: /pairing
 ---
@@ -90,6 +90,15 @@ ced deny <reqid>
 ```
 
 This is the workflow for scripted or orchestrated pairing approval.
+
+At approval the operator can set how dispatch reaches the agent:
+
+```bash
+ced approve <reqid> --lookup-by ip        # connect by the IP seen at pairing
+ced approve <reqid> --agent-port 7450     # agent serves on a non-default port
+```
+
+`--lookup-by ip` is the fix when the agent-reported hostname does not resolve from the control host; `--agent-port` records a non-default operational port. Both can also be changed later without re-pairing via `ced edit-agent`.
 
 # Automated Pairing
 

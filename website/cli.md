@@ -1,7 +1,7 @@
 ---
 title: ced — CLI Reference
 subtitle: Complete command reference for ctrl-exec-dispatcher.
-updated: 2026-03-16
+updated: 2026-06-10
 github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/CLI.md
 current_page: /cli
 ---
@@ -45,6 +45,8 @@ ced run host-a logger -- -t app "deployment complete"
 ced run host-a:7450 backup-mysql --json
 ENVEXEC_TOKEN=mytoken ced run host-a backup-mysql
 ```
+
+A host argument that matches a registered agent is resolved from the registry — its stored address (by the agent's `lookup_by`: hostname, or the IP recorded at pairing) and its operational port. A `<host>:<port>` argument, or one that is not a registered agent, is used verbatim. Results are keyed by the registry name; if the agent reports a different hostname for itself it is shown in brackets, e.g. `web-01 (vm-7a3f)`. The same resolution applies to `ping`.
 
 # ping
 
@@ -94,19 +96,49 @@ Lists pending pairing requests with hostname, source IP, received timestamp, and
 # approve / deny
 
 ```
-ced approve <reqid>
+ced approve <reqid> [--lookup-by ip|hostname] [--agent-port <n>]
 ced deny <reqid>
 ```
 
 Approves or denies a pending pairing request by ID. Used from a separate terminal while `pairing-mode` is running, or in automated pairing workflows.
 
+`--lookup-by`
+: How dispatch resolves this agent — by its registered hostname (default) or by the IP recorded at pairing. Use `ip` when the agent-reported hostname does not resolve from the control host.
+
+`--agent-port <n>`
+: The agent's operational port (default 7443), recorded so dispatch reaches it without a per-command port.
+
+Both override any value the agent suggested at `request-pairing`.
+
 # list-agents
 
 ```
-ced list-agents [--json]
+ced list-agents [--json] [--tags <key=value[,key=value...]>]
 ```
 
-Lists all paired agents with hostname, IP, pairing timestamp, and certificate expiry.
+Lists all paired agents with hostname, IP, operational port, lookup mode, pairing timestamp, and certificate expiry.
+
+`--tags` filters to agents whose cached tags match every given `key=value` pair (AND). Tags are read from the registry cache — refreshed by `discovery`, not by querying agents live — so the filter is fast and works offline. An agent shows no tags until the first discovery against it.
+
+```bash
+ced list-agents
+ced list-agents --tags env=production
+ced list-agents --tags env=production,role=database
+```
+
+# edit-agent
+
+```
+ced edit-agent <name> [--rename <new>] [--ip <addr>] [--agent-port <n>] [--lookup-by ip|hostname]
+```
+
+Edits a registered agent's dispatch fields, or renames it, without re-pairing. Only the dispatch-relevant fields change; the certificate and serial tracking are untouched. Renaming or re-addressing needs no re-pairing because mTLS validates the agent certificate against the CA, not the connect address. At least one change flag is required.
+
+```bash
+ced edit-agent host-a --ip 10.0.0.42
+ced edit-agent host-a --agent-port 7450 --lookup-by ip
+ced edit-agent old-name --rename new-name
+```
 
 # unpair
 

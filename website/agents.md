@@ -1,7 +1,7 @@
 ---
 title: Agents
 subtitle: What an agent is, how it registers, the allowlist model, and agent modes.
-updated: 2026-03-16
+updated: 2026-06-10
 github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/AGENTS.md
 current_page: /agents
 ---
@@ -22,9 +22,11 @@ An agent joins the fleet through the pairing protocol. Pairing is a one-time cer
 - The agent stores the ctrl-exec's certificate serial number, which it verifies on every subsequent connection.
 - ctrl-exec records the agent in the registry at `/var/lib/ctrl-exec/agents/`.
 
-After pairing, the agent is identified by its certificate serial. The registry entry contains the hostname, IP, pairing timestamp, certificate expiry, and serial confirmation state.
+After pairing, the agent is identified by its certificate serial. The registry entry contains the hostname, IP, pairing timestamp, certificate expiry, serial confirmation state, the dispatch fields `lookup_by` (resolve by `hostname` or `ip`) and operational `port`, and the agent's cached tags.
 
-See [Pairing](/pairing) for the full protocol.
+Dispatch resolves a registered agent to its stored address (`lookup_by`) and `port`, so an agent on a non-default port — or one whose reported hostname does not resolve from the control host — is reachable without per-command flags. These dispatch fields can be changed without re-pairing using `ced edit-agent` (rename, address, port, lookup mode); the certificate is unaffected.
+
+See [Pairing](/pairing) for the full protocol and the `--lookup-by` / `--agent-port` options at approval.
 
 # The Allowlist
 
@@ -74,6 +76,8 @@ site = london
 ```
 
 Tags are reloaded on SIGHUP. ctrl-exec does not interpret tag values — they are metadata for callers and integrations.
+
+ctrl-exec caches each agent's tags in the registry, refreshed from the live capabilities response on every `discovery`. `ced list-agents --tags key=value[,key=value...]` filters on the cache (AND across pairs), so the filter is fast and works offline; an agent shows no tags until the first discovery against it.
 
 # Agent Modes
 

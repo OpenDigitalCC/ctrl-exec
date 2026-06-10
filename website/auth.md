@@ -1,7 +1,7 @@
 ---
 title: Auth Hooks
 subtitle: The hook system for access control beyond the allowlist.
-updated: 2026-03-16
+updated: 2026-06-10
 github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/AUTH.md
 current_page: /auth
 ---
@@ -56,6 +56,8 @@ Always use `ENVEXEC_ARGS_JSON` for argument inspection. `ENVEXEC_ARGS` is space-
 ```
 
 Any non-zero exit aborts the request. The specific code is logged at `ACTION=auth` and returned to the caller. The API includes the code in the error response body.
+
+Setting `auth_deny_generic = 1` in `ctrl-exec.conf` withholds that detail from API callers: denied `run`, `ping`, and `discovery` requests return a generic `403` (`{"error":"forbidden"}`) with no reason or code, reducing information disclosure to unauthorised callers. The full reason is still logged server-side at `ACTION=auth`. Default off.
 
 # Token Forwarding
 

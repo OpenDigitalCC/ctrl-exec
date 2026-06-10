@@ -1,7 +1,7 @@
 ---
 title: API Reference
 subtitle: HTTP API reference for ctrl-exec-api.
-updated: 2026-03-16
+updated: 2026-06-10
 github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/API.md
 current_page: /api
 ---
@@ -179,7 +179,7 @@ Response (not found): HTTP 404 with `{ "ok": false, "error": "not found" }`.
 
 # GET /discovery or POST /discovery
 
-Returns all registered agents and their current allowlisted scripts and tags. `GET` queries all registered agents. `POST` accepts an optional `hosts` array to filter the response.
+Returns all registered agents and their current allowlisted scripts and tags. `GET` queries all registered agents. `POST` accepts an optional `hosts` array to filter the response. Results are keyed by the canonical registry name (the agent's reported hostname appears as `reported_hostname` when it differs), and each agent is queried at its registry-resolved address and port. Discovery also refreshes the registry's cached tags from this response, which is what `ced list-agents --tags` filters on offline.
 
 Optional POST body:
 
@@ -234,6 +234,8 @@ Use this endpoint to generate accurate client code or to drive tooling that need
 | `404` | Unknown route or unknown/expired reqid |
 | `409` | Lock conflict |
 | `500` | Server error |
+
+When `auth_deny_generic` is enabled in `ctrl-exec.conf`, a denied request returns a generic `403` (`{"error":"forbidden"}`) with no `code` or reason; the codes below are returned only when it is off (the default).
 
 Auth error codes in the `code` field:
 
