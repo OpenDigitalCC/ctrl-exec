@@ -68,6 +68,60 @@ entry appears until the script eventually exits. An operator cannot
 determine from syslog alone that a script is currently running.
 
 
+## Remote Forwarding
+
+ctrl-exec writes to the local syslog socket via `Sys::Syslog`; getting those
+lines to a central collector is a syslog-daemon concern, not an application
+one. Because everything is emitted on the `daemon` facility (see *Format
+Overview*), a single selector — `daemon.*` — captures all ctrl-exec,
+ctrl-exec-api, and ctrl-exec-agent logging. The `REQID` correlation field is
+part of the message text, so it survives forwarding intact: a `grep REQID=…`
+at the collector traces an operation across every host that forwarded to it.
+
+On a bare-metal or VM install there is nothing ctrl-exec-specific to do — the
+host's existing rsyslog or syslog-ng forwards `daemon.*` like any other
+facility. Point it at the collector and ctrl-exec logs follow.
+
+### TLS forwarding with rsyslog
+
+`Sys::Syslog` has no native TLS, so when the transport to the collector must
+be encrypted, forward through rsyslog rather than connecting from the
+application. rsyslog reads the local socket and forwards `daemon.*` over TLS,
+and also buffers on disk if the collector is briefly unreachable. The
+forwarding action:
+
+```
+global(
+    defaultNetstreamDriver="gtls"
+    defaultNetstreamDriverCAFile="/etc/ssl/certs/ca-certificates.crt"
+)
+
+daemon.* action(
+    type="omfwd"
+    target="<collector-host>"
+    port="6514"
+    protocol="tcp"
+    StreamDriver="gtls"
+    StreamDriverMode="1"
+    StreamDriverAuthMode="x509/name"
+    StreamDriverPermittedPeers="<collector-host>"
+    template="RSYSLOG_SyslogProtocol23Format"
+)
+```
+
+Port 6514 is the syslog-over-TLS port. `x509/name` validates the collector's
+certificate against the system CA bundle and checks its name, so a
+publicly-trusted (e.g. Let's Encrypt) collector certificate needs no custom
+CA or client certificate when the collector is configured for server-only
+(`anon`) authentication.
+
+In containers there is no host syslog daemon, so rsyslog is run inside the
+image and configured from `SYSLOG_HOST` / `SYSLOG_PORT` on start. See
+`DOCKER.md` (*Remote syslog forwarding*) for the dispatcher and agent
+container setup, including why an in-container rsyslog is used in preference
+to a direct connection.
+
+
 ## ctrl-exec-Side Actions
 
 These actions are emitted by `bin/ctrl-exec` and `bin/ctrl-exec-api` via

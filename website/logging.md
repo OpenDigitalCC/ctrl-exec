@@ -1,7 +1,7 @@
 ---
 title: Logging Reference
 subtitle: Every ACTION= value emitted by ctrl-exec-dispatcher and ctrl-exec-agent, with fields and alert patterns.
-updated: 2026-03-16
+updated: 2026-06-10
 github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/LOGGING.md
 current_page: /logging
 ---
@@ -27,6 +27,28 @@ To filter to WARNING and above:
 journalctl -u ctrl-exec-agent -p warning
 journalctl -u ctrl-exec-dispatcher -p warning
 ```
+
+# Remote Forwarding
+
+Because everything is on the `daemon` facility, a single `daemon.*` selector captures all ctrl-exec logging, and the `REQID` field survives forwarding so an operation can be traced at a central collector. On bare metal the host's existing rsyslog/syslog-ng forwards `daemon.*` like any other facility — nothing ctrl-exec-specific is required.
+
+`Sys::Syslog` has no native TLS, so when the link to the collector must be encrypted, forward through rsyslog rather than from the application:
+
+```
+daemon.* action(
+    type="omfwd"
+    target="<collector-host>"
+    port="6514"
+    protocol="tcp"
+    StreamDriver="gtls"
+    StreamDriverMode="1"
+    StreamDriverAuthMode="x509/name"
+    StreamDriverPermittedPeers="<collector-host>"
+    template="RSYSLOG_SyslogProtocol23Format"
+)
+```
+
+In containers, rsyslog runs inside the image and is configured from `SYSLOG_HOST` / `SYSLOG_PORT` at start — see the Docker deployment guide for the dispatcher and agent setup.
 
 # Dispatcher-Side Actions
 
