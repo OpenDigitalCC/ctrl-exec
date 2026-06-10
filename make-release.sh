@@ -155,10 +155,12 @@ if [[ -n "$BRAND" ]]; then
     tar -xzf "$FROM" -C "$STAGE_DIR"
 
     # Detect the actual top-level directory name inside the tarball
-    # (may be ctrl-exec-<version> or dispatcher-<version> from a pre-rename build)
-    UNPACKED_DIR=$(tar -tzf "$FROM" | head -1 | cut -d/ -f1)
-    [[ -d "$STAGE_DIR/$UNPACKED_DIR" ]] \
-        || die "Expected unpacked directory not found: $STAGE_DIR/$UNPACKED_DIR"
+    # (may be ctrl-exec-<version> or dispatcher-<version> from a pre-rename
+    # build). Read it from the just-extracted tree rather than piping
+    # `tar -tzf | head`, which raises SIGPIPE under `set -o pipefail`.
+    UNPACKED_DIR=$(find "$STAGE_DIR" -maxdepth 1 -mindepth 1 -type d -printf '%f\n')
+    [[ -n "$UNPACKED_DIR" && -d "$STAGE_DIR/$UNPACKED_DIR" ]] \
+        || die "Expected unpacked directory not found under $STAGE_DIR"
 
     # Rename top-level directory to brand name
     mv "$STAGE_DIR/$UNPACKED_DIR" "$STAGE_DIR/$BRAND_NAME"
@@ -212,6 +214,34 @@ if [[ -n "$BRAND" ]]; then
         new="${FMAP[$old]}"
         [[ -f "$STAGE/$old" ]] && mv "$STAGE/$old" "$STAGE/$new"
     done
+
+    # -----------------------------------------------------------------------
+    # Verify the rebrand produced valid Perl. Substituting ctrl -> BRAND turns
+    # an unquoted hyphenated bareword (e.g. a hash key $opts{ctrl-exec}) into
+    # BRAND-exec, which 'use strict' rejects. A compile check of every staged
+    # bin and module catches that class of breakage - which had to be fixed by
+    # hand during the original dispatcher -> ctrl-exec rename - and any other
+    # damage the substitution might do.
+    # -----------------------------------------------------------------------
+    info "Verifying rebranded Perl compiles..."
+    rebrand_err=0
+    while IFS= read -r pf; do
+        # Only check Perl: library modules and scripts with a perl shebang.
+        # bin/ also holds shell helpers (e.g. update-*-serial) that perl -c
+        # must skip.
+        if [[ "$pf" != *.pm ]]; then
+            read -r shebang < "$pf" || true
+            [[ "$shebang" == *perl* ]] || continue
+        fi
+        if ! perl -c -I"$STAGE/lib" "$pf" >/dev/null 2>&1; then
+            warn "Rebranded Perl fails to compile: ${pf#"$STAGE"/}"
+            perl -c -I"$STAGE/lib" "$pf" 2>&1 | sed 's/^/    /' >&2
+            rebrand_err=1
+        fi
+    done < <(find "$STAGE/bin" "$STAGE/lib" -type f \
+                  \( -name '*.pm' -o -path "$STAGE/bin/*" \) 2>/dev/null)
+    [[ "$rebrand_err" -eq 0 ]] \
+        || die "Rebrand introduced invalid Perl (see above). Quote any hyphenated hash keys in the source (e.g. \$opts{'ctrl-exec'}) and retry."
 
     # -----------------------------------------------------------------------
     # Brand SBOM (separate from ctrl-exec sbom.json)
