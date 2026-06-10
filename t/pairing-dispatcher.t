@@ -121,4 +121,26 @@ subtest 'list_requests: stale requests cleaned before listing' => sub {
     is $requests->[0]{hostname}, 'fresh-host', 'fresh host present';
 };
 
+# --- lookup_by helpers ---
+
+subtest '_valid_lookup_by: accepts ip/hostname, rejects others' => sub {
+    is Exec::Pairing::_valid_lookup_by('ip'),       'ip',       'ip accepted';
+    is Exec::Pairing::_valid_lookup_by('hostname'), 'hostname', 'hostname accepted';
+    is Exec::Pairing::_valid_lookup_by('bogus'),    undef,      'invalid value rejected';
+    is Exec::Pairing::_valid_lookup_by(undef),      undef,      'undef rejected';
+};
+
+subtest '_effective_lookup_by: override beats suggested beats default' => sub {
+    is Exec::Pairing::_effective_lookup_by('ip', 'hostname'), 'ip',
+        'operator override wins over agent-suggested value';
+    is Exec::Pairing::_effective_lookup_by(undef, 'ip'), 'ip',
+        'agent-suggested value used when no override';
+    is Exec::Pairing::_effective_lookup_by(undef, undef), 'hostname',
+        'defaults to hostname when neither given';
+    is Exec::Pairing::_effective_lookup_by('bogus', 'ip'), 'ip',
+        'invalid override ignored, suggested used';
+    is Exec::Pairing::_effective_lookup_by(undef, 'bogus'), 'hostname',
+        'invalid suggested ignored, falls to default';
+};
+
 done_testing;

@@ -33,6 +33,7 @@ sub main {
         'port=i'     => \$opts{port},
         'username=s' => \$opts{username},
         'token=s'    => \$opts{token},
+        'lookup-by=s' => \$opts{lookup_by},
     ) or die usage();
 
     my $mode = shift @ARGV // die usage();
@@ -59,6 +60,18 @@ sub main {
         or die "Unknown mode '$mode'\n" . usage();
 
     $handler->(\%opts, @ARGV);
+}
+
+# Resolve operator-supplied host arguments to the addresses dispatch should
+# connect to, honouring each registered agent's lookup_by field. An argument
+# with an explicit :port, or one that is not a registered agent, passes
+# through unchanged. Applied after auth/lock so those operate on the name the
+# operator gave; only the connection target is rewritten.
+sub _resolve_dispatch_hosts {
+    my ($hosts) = @_;
+    return [ map {
+        /:\d+$/ ? $_ : Exec::Registry::resolve_host(hostname => $_)
+    } @$hosts ];
 }
 
 sub mode_run {
@@ -97,7 +110,7 @@ sub mode_run {
     }
 
     my $results = Exec::Engine::dispatch_all(
-        hosts    => $hosts,
+        hosts    => _resolve_dispatch_hosts($hosts),
         script   => $script,
         args     => $script_args,
         config   => $config,
@@ -140,7 +153,7 @@ sub mode_ping {
     }
 
     my $results = Exec::Engine::ping_all(
-        hosts  => \@hosts,
+        hosts  => _resolve_dispatch_hosts(\@hosts),
         config => $config,
         port   => $opts->{port},
     );
@@ -175,15 +188,16 @@ sub mode_list_agents {
         return;
     }
 
-    printf "%-30s  %-16s  %-22s  %s\n",
-        'HOSTNAME', 'IP', 'PAIRED', 'CERT EXPIRY';
-    printf "%s\n", '-' x 85;
+    printf "%-30s  %-16s  %-8s  %-22s  %s\n",
+        'HOSTNAME', 'IP', 'LOOKUP', 'PAIRED', 'CERT EXPIRY';
+    printf "%s\n", '-' x 95;
     for my $a (@$agents) {
-        printf "%-30s  %-16s  %-22s  %s\n",
-            $a->{hostname} // '?',
-            $a->{ip}       // '?',
-            $a->{paired}   // '?',
-            $a->{expiry}   // '?';
+        printf "%-30s  %-16s  %-8s  %-22s  %s\n",
+            $a->{hostname}  // '?',
+            $a->{ip}        // '?',
+            $a->{lookup_by} // 'hostname',
+            $a->{paired}    // '?',
+            $a->{expiry}    // '?';
     }
 }
 
@@ -250,11 +264,18 @@ sub mode_list_requests {
 
 sub mode_approve {
     my ($opts, $reqid) = @_;
-    die "Usage: ctrl-exec approve <reqid>\n" unless $reqid;
+    die "Usage: ctrl-exec approve <reqid> [--lookup-by ip|hostname]\n" unless $reqid;
+
+    my $lookup_by = $opts->{lookup_by};
+    if (defined $lookup_by && $lookup_by ne 'ip' && $lookup_by ne 'hostname') {
+        die "--lookup-by must be 'ip' or 'hostname'\n";
+    }
+
     Exec::Pairing::approve_request(
-        reqid  => $reqid,
-        ca_dir => '/etc/ctrl-exec',
-        log_fn => sub { Exec::Log::log_action('INFO', $_[0]) },
+        reqid     => $reqid,
+        ca_dir    => '/etc/ctrl-exec',
+        lookup_by => $lookup_by,
+        log_fn    => sub { Exec::Log::log_action('INFO', $_[0]) },
     );
 }
 
@@ -558,6 +579,8 @@ Modes:
   pairing-mode               Accept agent pairing requests
   list-requests              Show pending pairing requests
   approve <reqid>            Approve a pairing request
+                             [--lookup-by ip|hostname] sets how dispatch
+                             resolves this agent (default: hostname)
   deny <reqid>               Deny a pairing request
   setup-ca                   One-time CA initialisation
   setup-ctrl-exec           Generate ctrl-exec key and certificate

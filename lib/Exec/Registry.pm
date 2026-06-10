@@ -26,6 +26,11 @@ my $REGISTRY_DIR = '/var/lib/ctrl-exec/agents';
 #   serial_status     => $str    (current|pending|stale|unknown)
 #   serial_broadcast  => $iso8601
 #   serial_confirmed  => $iso8601
+#
+# Optional dispatch-resolution opt:
+#   lookup_by => 'ip' | 'hostname'   how dispatch resolves the connect
+#       address for this agent. Default 'hostname'. Any other value
+#       normalises to 'hostname'. See resolve_host.
 sub register_agent {
     my (%opts) = @_;
     my $hostname = $opts{hostname} or croak "hostname required";
@@ -39,6 +44,7 @@ sub register_agent {
         paired            => $opts{paired}            // '',
         expiry            => $opts{expiry}            // '',
         reqid             => $opts{reqid}             // '',
+        lookup_by         => _norm_lookup_by($opts{lookup_by}),
         dispatcher_serial => $opts{dispatcher_serial} // '',
         serial_status     => $opts{serial_status}     // 'unknown',
         serial_broadcast  => $opts{serial_broadcast}  // '',
@@ -129,6 +135,33 @@ sub list_agents {
     return [ sort { $a->{hostname} cmp $b->{hostname} } @agents ];
 }
 
+# Resolve an operator-supplied agent name to the address dispatch should
+# connect to, honouring the record's lookup_by field:
+#   lookup_by 'ip'       -> stored ip (falls back to hostname if ip is empty)
+#   lookup_by 'hostname' -> stored hostname (default)
+# Returns the supplied name unchanged when it is not a registered agent (or
+# the registry cannot be read), preserving support for ad-hoc targets. This
+# lets dispatch reach an agent by its stored IP when its reported hostname
+# does not resolve from the dispatcher.
+#
+# Required opts:
+#   hostname => $str
+sub resolve_host {
+    my (%opts) = @_;
+    my $name = $opts{hostname};
+    croak "hostname required" unless defined $name && length $name;
+    my $dir  = $opts{registry_dir} // $REGISTRY_DIR;
+
+    my $record = eval { get_agent(hostname => $name, registry_dir => $dir) };
+    return $name unless $record;
+
+    if (_norm_lookup_by($record->{lookup_by}) eq 'ip'
+        && defined $record->{ip} && length $record->{ip}) {
+        return $record->{ip};
+    }
+    return $record->{hostname} // $name;
+}
+
 # Return the registry record for a single agent, or undef if not found.
 #
 # Required opts:
@@ -175,6 +208,12 @@ sub list_hostnames {
 }
 
 # --- private ---
+
+# Normalise a lookup_by value to 'ip' or the default 'hostname'.
+sub _norm_lookup_by {
+    my ($v) = @_;
+    return (defined $v && $v eq 'ip') ? 'ip' : 'hostname';
+}
 
 sub _slurp {
     my ($path) = @_;

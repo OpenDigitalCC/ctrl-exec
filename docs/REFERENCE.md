@@ -111,6 +111,23 @@ Output shows per-host status, exit code, round-trip time, stdout, and stderr.
 Exit code is 0 if all hosts succeeded, 1 if any host failed or returned
 a non-zero exit.
 
+#### Dispatch host resolution
+
+When a host argument matches a registered agent name, the connect address is
+resolved from the registry according to that agent's `lookup_by` field
+(set at pairing — see `approve --lookup-by`):
+
+- `hostname` (default): connect to the agent's registered hostname.
+- `ip`: connect to the IP recorded at pairing. Use this when the
+  agent-reported hostname does not resolve from the dispatcher.
+
+A host argument that is not a registered agent, or one given with an explicit
+`:port`, is used verbatim (DNS resolution as before) — so ad-hoc and
+non-default-port targets still work. mTLS is unaffected: the agent
+certificate is validated against the CA, not matched to the connect address.
+`list-agents` always shows the registered hostname; with `lookup_by = ip`,
+`run`/`ping` output and logs show the IP actually connected to.
+
 ---
 
 ### ping
@@ -180,9 +197,18 @@ delivers the certificate on the agent's next poll.
 
 ```bash
 ctrl-exec approve <reqid>
+ctrl-exec approve <reqid> --lookup-by ip
 ```
 
 The request ID is shown by `list-requests` and `pairing-mode`.
+
+`--lookup-by <ip|hostname>`
+: How dispatch resolves this agent's connect address (stored in the registry
+  as `lookup_by`). `hostname` (default) connects to the agent's registered
+  hostname; `ip` connects to the IP recorded at pairing. Use `ip` when the
+  agent-reported hostname does not resolve from the dispatcher. This overrides
+  any value the agent suggested with `request-pairing --lookup-by`. See
+  *Dispatch host resolution* under `run`.
 
 ---
 
@@ -206,7 +232,8 @@ ctrl-exec list-agents
 ctrl-exec list-agents --json
 ```
 
-Output columns: hostname, IP address, paired timestamp, cert expiry.
+Output columns: hostname, IP address, lookup mode, paired timestamp, cert
+expiry.
 
 With `--json`, returns an array of objects with fields:
 
@@ -215,6 +242,10 @@ With `--json`, returns an array of objects with fields:
 
 `ip`
 : IP address of the agent at last contact.
+
+`lookup_by`
+: How dispatch resolves this agent: `hostname` (default) or `ip`. See
+  *Dispatch host resolution* under `run`.
 
 `paired_at`
 : ISO 8601 timestamp of when the agent was paired.
@@ -632,6 +663,12 @@ ctrl-exec-agent request-pairing --dispatcher <host> --background [--timeout <n>]
 
 `--port <n>`
 : Override the pairing port on the ctrl-exec (default 7444).
+
+`--lookup-by <ip|hostname>`
+: Suggest how the dispatcher should resolve this agent for dispatch
+  (default: `hostname`). Sent with the pairing request; the operator's
+  `approve --lookup-by` overrides it. See *Dispatch host resolution* under
+  `ctrl-exec run`.
 
 `--background`
 : Non-interactive mode for orchestrated installations. Prints the request

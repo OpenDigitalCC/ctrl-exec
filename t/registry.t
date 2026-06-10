@@ -212,4 +212,55 @@ my $dir = tempdir(CLEANUP => 1);
     ok !defined $agent, 'remove_agent: get_agent returns undef after removal';
 }
 
+# --- lookup_by storage + resolve_host ---
+
+{
+    my $rdir = tempdir(CLEANUP => 1);
+
+    Exec::Registry::register_agent(
+        hostname     => 'lb-default',
+        ip           => '10.1.0.1',
+        registry_dir => $rdir,
+    );
+    is Exec::Registry::get_agent(hostname => 'lb-default', registry_dir => $rdir)->{lookup_by},
+       'hostname', 'register_agent: lookup_by defaults to hostname';
+
+    Exec::Registry::register_agent(
+        hostname     => 'lb-ip',
+        ip           => '10.1.0.2',
+        lookup_by    => 'ip',
+        registry_dir => $rdir,
+    );
+    is Exec::Registry::get_agent(hostname => 'lb-ip', registry_dir => $rdir)->{lookup_by},
+       'ip', 'register_agent: stores explicit lookup_by=ip';
+
+    Exec::Registry::register_agent(
+        hostname     => 'lb-bogus',
+        ip           => '10.1.0.3',
+        lookup_by    => 'bogus',
+        registry_dir => $rdir,
+    );
+    is Exec::Registry::get_agent(hostname => 'lb-bogus', registry_dir => $rdir)->{lookup_by},
+       'hostname', 'register_agent: invalid lookup_by normalises to hostname';
+
+    is Exec::Registry::resolve_host(hostname => 'lb-ip', registry_dir => $rdir),
+       '10.1.0.2', 'resolve_host: lookup_by=ip resolves to stored ip';
+    is Exec::Registry::resolve_host(hostname => 'lb-default', registry_dir => $rdir),
+       'lb-default', 'resolve_host: lookup_by=hostname resolves to hostname';
+    is Exec::Registry::resolve_host(hostname => 'not-registered', registry_dir => $rdir),
+       'not-registered', 'resolve_host: unregistered name passes through unchanged';
+
+    Exec::Registry::register_agent(
+        hostname     => 'lb-ip-empty',
+        ip           => '',
+        lookup_by    => 'ip',
+        registry_dir => $rdir,
+    );
+    is Exec::Registry::resolve_host(hostname => 'lb-ip-empty', registry_dir => $rdir),
+       'lb-ip-empty', 'resolve_host: lookup_by=ip with empty ip falls back to hostname';
+
+    eval { Exec::Registry::resolve_host(registry_dir => $rdir) };
+    like $@, qr/hostname required/, 'resolve_host: dies without hostname';
+}
+
 done_testing;

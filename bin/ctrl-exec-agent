@@ -35,6 +35,7 @@ sub main {
         'port=i'        => \$opts{port},
         'background'    => \$opts{background},
         'timeout=i'     => \$opts{timeout},
+        'lookup-by=s'   => \$opts{lookup_by},
     ) or die usage();
 
     $mode = shift @ARGV // 'serve';
@@ -196,6 +197,11 @@ sub mode_request_pairing {
         or die "--dispatcher <host> required for request-pairing\n";
     my $background  = $opts->{background} // 0;
     my $timeout     = $opts->{timeout}    // 30;
+    my $lookup_by   = $opts->{lookup_by};
+
+    if (defined $lookup_by && $lookup_by ne 'ip' && $lookup_by ne 'hostname') {
+        die "--lookup-by must be 'ip' or 'hostname'\n";
+    }
 
     if ($background && $timeout > 600) {
         die "Error: --timeout cannot exceed 600 seconds in background mode.\n"
@@ -233,6 +239,7 @@ sub mode_request_pairing {
         port       => $opts->{port} // 7444,
         csr_pem    => $pair->{csr_pem},
         hostname   => $host,
+        lookup_by  => $lookup_by,
     );
 
     unless ($submitted->{ok}) {
@@ -822,6 +829,9 @@ Options:
   --config <path>                Path to agent.conf
   --allowlist <path>             Path to scripts.conf
   --port <n>                     Override pairing port (default 7444)
+  --lookup-by <ip|hostname>      Suggest how the dispatcher should resolve this
+                                 agent for dispatch (default: hostname). The
+                                 dispatcher's approve --lookup-by overrides it.
   --background                   Non-interactive pairing: print reqid and wait
                                  for approval (for orchestrated installations)
   --timeout <n>                  Seconds to wait for approval in background

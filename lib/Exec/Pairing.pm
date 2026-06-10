@@ -256,6 +256,10 @@ sub approve_request {
 
     my $req = decode_json(_slurp($req_file));
 
+    # Dispatch-resolution preference: operator override (approve --lookup-by)
+    # wins over the agent-suggested value in the request; default 'hostname'.
+    my $lookup_by = _effective_lookup_by($opts{lookup_by}, $req->{lookup_by});
+
     require Exec::CA;
 
     # Serialise concurrent signing through an exclusive lock on ca.serial.
@@ -307,6 +311,7 @@ sub approve_request {
         paired            => strftime('%Y-%m-%dT%H:%M:%SZ', gmtime),
         expiry            => $expiry // '',
         reqid             => $reqid,
+        lookup_by         => $lookup_by,
         dispatcher_serial => $disp_serial,
         serial_status     => (length $disp_serial ? 'current' : 'unknown'),
         serial_confirmed  => (length $disp_serial
@@ -344,6 +349,23 @@ sub deny_request {
 }
 
 # --- private ---
+
+# Return $v if it is a valid lookup_by value ('ip' or 'hostname'), else undef.
+# Used to sanitise the optional agent-suggested hint off the wire.
+sub _valid_lookup_by {
+    my ($v) = @_;
+    return (defined $v && ($v eq 'ip' || $v eq 'hostname')) ? $v : undef;
+}
+
+# Effective lookup_by for an approval: operator override wins over the
+# agent-suggested value; default 'hostname'. Returns 'ip' or 'hostname'.
+sub _effective_lookup_by {
+    my ($override, $suggested) = @_;
+    for my $v ($override, $suggested) {
+        return $v if defined $v && ($v eq 'ip' || $v eq 'hostname');
+    }
+    return 'hostname';
+}
 
 # --- interactive pairing helpers ---
 
@@ -475,12 +497,13 @@ sub _handle_pair_request {
         return;
     }
 
-    my $reqid    = _gen_reqid();
-    my $hostname = $data->{hostname};
-    my $csr      = $data->{csr};
-    my $nonce    = $data->{nonce} // '';
-    my $received = strftime('%Y-%m-%dT%H:%M:%SZ', gmtime);
-    my $code     = _pairing_code($csr);
+    my $reqid     = _gen_reqid();
+    my $hostname  = $data->{hostname};
+    my $csr       = $data->{csr};
+    my $nonce     = $data->{nonce} // '';
+    my $lookup_by = _valid_lookup_by($data->{lookup_by});  # agent-suggested hint
+    my $received  = strftime('%Y-%m-%dT%H:%M:%SZ', gmtime);
+    my $code      = _pairing_code($csr);
 
     # Queue depth check - expire stale entries first, then count remaining
     _expire_stale_requests($pairing_dir);
@@ -497,13 +520,14 @@ sub _handle_pair_request {
     # Queue the request
     make_path($pairing_dir) unless -d $pairing_dir;
     _write_file("$pairing_dir/$reqid.json", encode_json({
-        id       => $reqid,
-        hostname => $hostname,
-        ip       => $peer_ip,
-        csr      => $csr,
-        nonce    => $nonce,
-        received => $received,
-        code     => $code,
+        id        => $reqid,
+        hostname  => $hostname,
+        ip        => $peer_ip,
+        csr       => $csr,
+        nonce     => $nonce,
+        lookup_by => $lookup_by,
+        received  => $received,
+        code      => $code,
     }));
 
     $log_fn->({ ACTION => 'pair-request', AGENT => $hostname, IP => $peer_ip, REQID => $reqid, STATUS => 'pending' });

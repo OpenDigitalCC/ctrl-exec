@@ -135,6 +135,7 @@ sub submit_pairing_request {
     my $csr_pem         = $opts{csr_pem}    or croak "csr_pem required";
     my $hostname        = $opts{hostname}   or croak "hostname required";
     my $ca_cert         = $opts{ca_cert};
+    my $lookup_by       = $opts{lookup_by};   # optional dispatch-resolution hint
 
     require IO::Socket::SSL;
     require JSON;
@@ -154,11 +155,13 @@ sub submit_pairing_request {
     my $sock = IO::Socket::SSL->new(%ssl_opts)
         or return { ok => 0, error => "connect failed: $IO::Socket::SSL::SSL_ERROR" };
 
-    my $payload = JSON::encode_json({
+    my %request = (
         hostname => $hostname,
         csr      => $csr_pem,
         nonce    => $nonce,
-    });
+    );
+    $request{lookup_by} = $lookup_by if defined $lookup_by;
+    my $payload = JSON::encode_json(\%request);
 
     print $sock "POST /pair HTTP/1.0\r\n",
                 "Content-Type: application/json\r\n",
