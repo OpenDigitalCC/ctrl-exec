@@ -48,6 +48,33 @@ my $dir = tempdir(CLEANUP => 1);
     is $agent->{expiry}, 'Jun  7 13:00:00 2029 GMT', 'register_agent: updates expiry on overwrite';
 }
 
+# --- update_expiry ---
+
+{
+    eval { Exec::Registry::update_expiry(registry_dir => $dir) };
+    like $@, qr/hostname required/, 'update_expiry: dies without hostname';
+
+    eval { Exec::Registry::update_expiry(hostname => 'host-a', registry_dir => $dir) };
+    like $@, qr/expiry required/, 'update_expiry: dies without expiry';
+}
+
+{
+    # host-a currently has ip 10.0.0.2, reqid eeff0011 from the re-register above.
+    Exec::Registry::update_expiry(
+        hostname     => 'host-a',
+        expiry       => 'Jun  7 13:00:00 2030 GMT',
+        registry_dir => $dir,
+    );
+
+    my $agent = Exec::Registry::get_agent(
+        hostname     => 'host-a',
+        registry_dir => $dir,
+    );
+    is $agent->{expiry}, 'Jun  7 13:00:00 2030 GMT', 'update_expiry: updates expiry';
+    is $agent->{ip},     '10.0.0.2',  'update_expiry: preserves ip';
+    is $agent->{reqid},  'eeff0011',  'update_expiry: preserves other fields';
+}
+
 # --- get_agent ---
 
 {

@@ -80,6 +80,31 @@ sub update_agent_serial_status {
     _write_atomic($path, encode_json($record));
 }
 
+# Update the cert expiry for an existing agent record. Merges the new expiry
+# into the existing record without touching other fields. Called by
+# Exec::Engine::_renew_one after a successful cert renewal so list-agents
+# reflects the new expiry.
+#
+# Required opts:
+#   hostname => $str
+#   expiry   => $str    (openssl notAfter string)
+sub update_expiry {
+    my (%opts) = @_;
+    my $hostname = $opts{hostname} or croak "hostname required";
+    croak "expiry required" unless defined $opts{expiry};
+    my $dir      = $opts{registry_dir} // $REGISTRY_DIR;
+    my $path     = "$dir/$hostname.json";
+
+    my $record = -f $path
+        ? (eval { decode_json(_slurp($path)) } // {})
+        : {};
+
+    $record->{hostname} = $hostname;
+    $record->{expiry}   = $opts{expiry};
+
+    _write_atomic($path, encode_json($record));
+}
+
 # Return a list of all registered agents as an arrayref of hashrefs,
 # sorted by hostname.
 #
