@@ -3,9 +3,13 @@
 # or repackage a ctrl-exec release under a licensed brand name.
 #
 # Usage:
-#   ./make-release.sh [--auto]
+#   ./make-release.sh [--auto] [--no-deb]
 #       Build ctrl-exec-<version>.tar.gz from the current source tree.
-#       Bumps VERSION, creates git tag, generates sbom.json.
+#       Bumps VERSION, creates git tag, generates sbom.json. Also builds the
+#       versioned .deb packages (ctrl-exec-common, ctrl-exec-agent, ctrl-exec)
+#       from debian/ into dist/, keeping debian/changelog in step with the
+#       release version. --no-deb skips the .deb build; it is also skipped
+#       gracefully when debian/ or dpkg-buildpackage is absent.
 #
 #   ./make-release.sh --brand <name> [--from ctrl-exec-<version>.tar.gz]
 #       Repackage an existing ctrl-exec tarball as <name>-exec-<version>.tar.gz.
@@ -34,6 +38,59 @@ info()  { echo -e "${GREEN}[INFO]${NC}  $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 die()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
+# Build the versioned .deb packages from debian/ and place them alongside the
+# release tarball in $1=dist dir, for release version $2. Keeps the Debian
+# changelog version in step with the release. Skips gracefully (warn, no fail)
+# when debian/ or dpkg-buildpackage is absent so the tarball release still
+# succeeds on non-Debian hosts.
+build_debs() {
+    local dist="$1" version="$2"
+    local parent
+    parent=$(dirname "$PWD")
+
+    if [[ ! -d debian ]]; then
+        warn "No debian/ directory - skipping .deb build."
+        return 0
+    fi
+    if ! command -v dpkg-buildpackage &>/dev/null; then
+        warn "dpkg-buildpackage not found - skipping .deb build (tarball still produced)."
+        return 0
+    fi
+
+    # Keep the Debian changelog version in step with the release version, so
+    # the produced .debs are versioned to match. Only add an entry when it
+    # differs (the first release at the current changelog version is a no-op).
+    local cl_version
+    cl_version=$(dpkg-parsechangelog -l debian/changelog -S Version 2>/dev/null || echo "")
+    if [[ "$cl_version" != "$version" ]]; then
+        info "Adding debian/changelog entry for $version (was ${cl_version:-none})..."
+        DEBEMAIL="${DEBEMAIL:-sjm@opendigital.cc}" \
+        DEBFULLNAME="${DEBFULLNAME:-OpenDigital CC}" \
+        dch --changelog debian/changelog --newversion "$version" \
+            --distribution unstable "Release $version" \
+            || die "dch failed to set debian/changelog to $version"
+    fi
+
+    info "Building .deb packages (version $version)..."
+    # -d: pure-Perl Architecture: all packages compile nothing, so the
+    # build-essential implied build-dependency is not required.
+    dpkg-buildpackage -us -uc -b -d || die ".deb build failed."
+
+    mkdir -p "$dist"
+    local moved=0 f
+    for f in "$parent"/ctrl-exec*_"${version}"_*.deb \
+             "$parent"/ctrl-exec_"${version}"_*.buildinfo \
+             "$parent"/ctrl-exec_"${version}"_*.changes; do
+        [[ -e "$f" ]] || continue
+        mv -f "$f" "$dist/"
+        moved=$((moved + 1))
+    done
+    info "Placed $moved .deb artifact(s) in $dist/"
+
+    # Remove build byproducts from the working tree.
+    fakeroot debian/rules clean >/dev/null 2>&1 || true
+}
+
 
 # --- output directory ---
 
@@ -46,6 +103,7 @@ DIST_DIR="dist"
 AUTO=0
 BRAND=""
 FROM=""
+BUILD_DEBS=1
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -57,6 +115,8 @@ while [[ $# -gt 0 ]]; do
         --from)
             [[ -n "${2:-}" ]] || die "--from requires a tarball path"
             FROM="$2"; shift 2 ;;
+        --no-deb)
+            BUILD_DEBS=0; shift ;;
         *)
             die "Unknown argument: $1" ;;
     esac
@@ -500,6 +560,12 @@ TARBALL_HASH=$(sha256sum "$TARBALL" | awk '{print $1}')
 info "SHA-256: $TARBALL_HASH"
 echo "$TARBALL_HASH  $TARBALL" > "${TARBALL}.sha256"
 
+if [[ "$BUILD_DEBS" -eq 1 ]]; then
+    build_debs "$DIST_DIR" "$VERSION"
+else
+    info "Skipping .deb build (--no-deb)."
+fi
+
 TAG="v${VERSION}"
 if git rev-parse "$TAG" &>/dev/null 2>&1; then
     warn "Tag $TAG already exists - skipping tag creation."
@@ -524,6 +590,11 @@ echo ""
 echo "  Tarball:   $TARBALL"
 echo "  Checksum:  ${TARBALL}.sha256"
 echo "  SBOM:      sbom.json"
+if [[ "$BUILD_DEBS" -eq 1 ]] && compgen -G "$DIST_DIR/ctrl-exec*_${VERSION}_all.deb" >/dev/null; then
+    echo "  Packages:  $DIST_DIR/ctrl-exec-common_${VERSION}_all.deb"
+    echo "             $DIST_DIR/ctrl-exec-agent_${VERSION}_all.deb"
+    echo "             $DIST_DIR/ctrl-exec_${VERSION}_all.deb"
+fi
 echo "  Tag:       $TAG  ($COMMIT)"
 echo "  Next ver:  $NEXT_VERSION  (written to NEXT_VERSION)"
 echo ""
@@ -534,7 +605,7 @@ echo ""
 if [[ "$AUTO" -eq 1 ]]; then
     info "Auto mode: committing and pushing..."
     git add -u                             # stages any deletions from git rm above
-    git add sbom.json VERSION NEXT_VERSION
+    git add sbom.json VERSION NEXT_VERSION debian/changelog
     git add -f "$TARBALL" "${TARBALL}.sha256"
     git commit -m "release: $VERSION"
     git push
@@ -545,13 +616,18 @@ else
     echo ""
     echo "  1. Review sbom.json and commit everything for the release:"
     echo "       git add -u"
-    echo "       git add sbom.json VERSION NEXT_VERSION"
+    echo "       git add sbom.json VERSION NEXT_VERSION debian/changelog"
     echo "       git add -f $TARBALL ${TARBALL}.sha256"
     echo "       git commit -m 'release: $VERSION'"
     echo ""
     echo "  2. Push commits and tag:"
     echo "       git push && git push origin $TAG"
     echo ""
+    if [[ "$BUILD_DEBS" -eq 1 ]]; then
+        echo "  The .deb packages are in $DIST_DIR/ (gitignored; copy to"
+        echo "  /srv/projects/packages/ or your apt repo as needed)."
+        echo ""
+    fi
 fi
 
 echo "================================================================"

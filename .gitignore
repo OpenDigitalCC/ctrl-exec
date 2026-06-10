@@ -6,6 +6,11 @@
 ctrl-exec-*.tar.gz
 ctrl-exec-*.tar.gz.sha256
 
+# built Debian packages (produced by make-release.sh into dist/)
+*.deb
+*.buildinfo
+*.changes
+
 # Keep local for now
 TODO.md
 
