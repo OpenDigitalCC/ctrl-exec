@@ -290,8 +290,31 @@ services:
       SYSLOG_PORT: 6514
 ```
 
-`Sys::Syslog` has no native TLS, which is why an in-container rsyslog is used
-rather than forwarding directly from the application.
+#### Why in-container rsyslog rather than a direct connection
+
+`Sys::Syslog` can connect directly to a remote server over TCP or UDP via
+`setlogsock`, which would avoid running rsyslog at all. It is not used here
+because it has **no native TLS**: a direct connection would send logs — which
+include usernames, source IPs, script names, and arguments — in plaintext.
+The collector requires TLS on 6514, so a plaintext direct path is not an
+option.
+
+Running rsyslog inside the container also buys properties a direct
+application connection would not have:
+
+- TLS (the GnuTLS `gtls` driver) with server-certificate validation against
+  the system CA bundle.
+- On-disk queueing, so logs survive a briefly unreachable collector instead
+  of being dropped by the application.
+- Standard syslog framing (`RSYSLOG_SyslogProtocol23Format`) without the
+  application needing to know anything about the transport.
+
+If a TLS-capable direct path without rsyslog is wanted later, the usual
+approach is `stunnel`: point `Sys::Syslog` at a local plaintext endpoint that
+stunnel wraps in TLS to the collector. That trades one auxiliary process
+(rsyslog) for another (stunnel) and loses the queueing, so rsyslog is
+preferred unless a deployment specifically cannot run it. No code change is
+needed for the stunnel path — it is purely a container/runtime arrangement.
 
 ### Auth hook
 
