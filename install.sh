@@ -829,86 +829,95 @@ print_next_steps_api() {
     echo "================================================================"
 }
 
-# --- argument parsing ---
-
-ROLE=""
-DO_UNINSTALL=false
-DO_RUN_TESTS=false
-
-for arg in "$@"; do
-    case "$arg" in
-        --agent)      ROLE="agent" ;;
-        --dispatcher) ROLE="ctrl-exec-dispatcher" ;;
-        --api)        ROLE="api" ;;
-        --uninstall)  DO_UNINSTALL=true ;;
-        --run-tests)  DO_RUN_TESTS=true ;;
-        --help|-h)
-            echo "Usage: $0 --agent | --dispatcher | --api | --uninstall [--run-tests]"
-            echo ""
-            echo "  --agent        Install the agent service (on remote hosts)"
-            echo "  --dispatcher   Install ctrl-exec-dispatcher (on control host)"
-            echo "  --api          Install ctrl-exec-api (on control host, after --dispatcher)"
-            echo "  --uninstall    Remove installed files (config, certs, and agent registry preserved)"
-            echo "  --run-tests    Run test suite from source directory after installation"
-            echo ""
-            echo "Supported platforms: Debian/Ubuntu (apt), Alpine Linux (apk), OpenWrt 25.x (apk), OpenWrt 23.x and older (opkg)"
-            exit 0
-            ;;
-        *)
-            die "Unknown argument: $arg. Use --help for usage."
-            ;;
-    esac
-done
-
 # --- main ---
 
-check_root
-detect_platform
-detect_init
+# Parse arguments and drive the installation. Wrapped in a function and
+# guarded below so the script can be sourced (e.g. by t/install-version.t)
+# to exercise individual helpers like install_lib() without running an
+# install.
+main() {
+    ROLE=""
+    DO_UNINSTALL=false
+    DO_RUN_TESTS=false
 
-# Read release version - present in distributed tarballs, absent in dev checkouts
-if [[ -f "$SOURCE_DIR/VERSION" ]]; then
-    RELEASE_VERSION=$(cat "$SOURCE_DIR/VERSION" | tr -d '[:space:]')
-else
-    RELEASE_VERSION="UNINSTALLED"
-fi
+    for arg in "$@"; do
+        case "$arg" in
+            --agent)      ROLE="agent" ;;
+            --dispatcher) ROLE="ctrl-exec-dispatcher" ;;
+            --api)        ROLE="api" ;;
+            --uninstall)  DO_UNINSTALL=true ;;
+            --run-tests)  DO_RUN_TESTS=true ;;
+            --help|-h)
+                echo "Usage: $0 --agent | --dispatcher | --api | --uninstall [--run-tests]"
+                echo ""
+                echo "  --agent        Install the agent service (on remote hosts)"
+                echo "  --dispatcher   Install ctrl-exec-dispatcher (on control host)"
+                echo "  --api          Install ctrl-exec-api (on control host, after --dispatcher)"
+                echo "  --uninstall    Remove installed files (config, certs, and agent registry preserved)"
+                echo "  --run-tests    Run test suite from source directory after installation"
+                echo ""
+                echo "Supported platforms: Debian/Ubuntu (apt), Alpine Linux (apk), OpenWrt 25.x (apk), OpenWrt 23.x and older (opkg)"
+                exit 0
+                ;;
+            *)
+                die "Unknown argument: $arg. Use --help for usage."
+                ;;
+        esac
+    done
 
-if [[ "$DO_UNINSTALL" == true ]]; then
-    uninstall
-    exit 0
-fi
+    check_root
+    detect_platform
+    detect_init
 
-# Allow --run-tests without a role (runs tests from source dir only)
-if [[ "$DO_RUN_TESTS" == true && -z "$ROLE" ]]; then
-    run_tests
-    exit 0
-fi
+    # Read release version - present in distributed tarballs, absent in dev checkouts
+    if [[ -f "$SOURCE_DIR/VERSION" ]]; then
+        RELEASE_VERSION=$(cat "$SOURCE_DIR/VERSION" | tr -d '[:space:]')
+    else
+        RELEASE_VERSION="UNINSTALLED"
+    fi
 
-[[ -n "$ROLE" ]] || die "Role must be specified. Use --agent, --dispatcher, --api, --uninstall, or --run-tests. See --help."
+    if [[ "$DO_UNINSTALL" == true ]]; then
+        uninstall
+        exit 0
+    fi
 
-check_openssl
-check_perl_modules "$ROLE"
-install_lib
+    # Allow --run-tests without a role (runs tests from source dir only)
+    if [[ "$DO_RUN_TESTS" == true && -z "$ROLE" ]]; then
+        run_tests
+        exit 0
+    fi
 
-case "$ROLE" in
-    agent)
-        install_agent
-        print_next_steps_agent
-        ;;
-    ctrl-exec-dispatcher)
-        install_ctrl_exec_dispatcher
-        print_next_steps_ctrl_exec_dispatcher
-        ;;
-    api)
-        # API requires the ctrl-exec role to already be installed
-        if [[ ! -f "$EXEC_CONF_DIR/ctrl-exec.conf" ]]; then
-            die "--api requires --dispatcher to be installed first."
-        fi
-        install_api
-        print_next_steps_api
-        ;;
-esac
+    [[ -n "$ROLE" ]] || die "Role must be specified. Use --agent, --dispatcher, --api, --uninstall, or --run-tests. See --help."
 
-if [[ "$DO_RUN_TESTS" == true ]]; then
-    run_tests
+    check_openssl
+    check_perl_modules "$ROLE"
+    install_lib
+
+    case "$ROLE" in
+        agent)
+            install_agent
+            print_next_steps_agent
+            ;;
+        ctrl-exec-dispatcher)
+            install_ctrl_exec_dispatcher
+            print_next_steps_ctrl_exec_dispatcher
+            ;;
+        api)
+            # API requires the ctrl-exec role to already be installed
+            if [[ ! -f "$EXEC_CONF_DIR/ctrl-exec.conf" ]]; then
+                die "--api requires --dispatcher to be installed first."
+            fi
+            install_api
+            print_next_steps_api
+            ;;
+    esac
+
+    if [[ "$DO_RUN_TESTS" == true ]]; then
+        run_tests
+    fi
+}
+
+# Run main only when executed directly, not when sourced.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
 fi
