@@ -35,6 +35,8 @@ sub main {
         'token=s'    => \$opts{token},
         'lookup-by=s' => \$opts{lookup_by},
         'agent-port=i' => \$opts{agent_port},
+        'ip=s'        => \$opts{ip},
+        'rename=s'    => \$opts{rename},
     ) or die usage();
 
     my $mode = shift @ARGV // die usage();
@@ -51,6 +53,7 @@ sub main {
         'setup-ca'          => \&mode_setup_ca,
         'setup-ctrl-exec'  => \&mode_setup_dispatcher,
         'list-agents'       => \&mode_list_agents,
+        'edit-agent'        => \&mode_edit_agent,
         'list-locks'        => \&mode_list_locks,
         'rotate-cert'       => \&mode_rotate_cert,
         'serial-status'     => \&mode_serial_status,
@@ -580,6 +583,63 @@ sub mode_unpair {
     print "Decommission the agent promptly or add its serial to the revocation list.\n";
 }
 
+sub mode_edit_agent {
+    my ($opts, $name) = @_;
+    die "Usage: ctrl-exec edit-agent <name> "
+      . "[--rename <new>] [--ip <addr>] [--agent-port <n>] [--lookup-by ip|hostname]\n"
+        unless $name;
+
+    my %changes;
+    $changes{new_name}  = $opts->{rename}     if defined $opts->{rename};
+    $changes{ip}        = $opts->{ip}         if defined $opts->{ip};
+    $changes{port}      = $opts->{agent_port} if defined $opts->{agent_port};
+    $changes{lookup_by} = $opts->{lookup_by}  if defined $opts->{lookup_by};
+
+    die "Nothing to change. Pass at least one of "
+      . "--rename, --ip, --agent-port, --lookup-by.\n"
+        unless %changes;
+
+    if (defined $changes{lookup_by}
+        && $changes{lookup_by} ne 'ip' && $changes{lookup_by} ne 'hostname') {
+        die "--lookup-by must be 'ip' or 'hostname'\n";
+    }
+    if (defined $changes{port}
+        && ($changes{port} !~ /^\d+$/ || $changes{port} < 1 || $changes{port} > 65535)) {
+        die "--agent-port must be a port number (1-65535)\n";
+    }
+    if (defined $changes{ip} && !length $changes{ip}) {
+        die "--ip must not be empty\n";
+    }
+
+    my $record = eval {
+        Exec::Registry::edit_agent(hostname => $name, %changes);
+    };
+    if ($@) {
+        chomp(my $err = $@);
+        die "Edit failed: $err\n";
+    }
+
+    Exec::Log::log_action('INFO', {
+        ACTION => 'edit-agent',
+        AGENT  => $record->{hostname},
+        (defined $changes{new_name} ? (RENAMED_FROM => $name)            : ()),
+        (defined $changes{ip}       ? (IP          => $record->{ip})     : ()),
+        (defined $changes{port}     ? (PORT        => $record->{port})   : ()),
+        (defined $changes{lookup_by}? (LOOKUP_BY   => $record->{lookup_by}) : ()),
+    });
+
+    if ($opts->{json}) {
+        print encode_json($record), "\n";
+        return;
+    }
+
+    print "Updated agent '$record->{hostname}'.\n";
+    print "  renamed from: $name\n" if defined $changes{new_name};
+    printf "  ip:        %s\n", $record->{ip}        // '';
+    printf "  port:      %s\n", $record->{port}      // 7443;
+    printf "  lookup_by: %s\n", $record->{lookup_by} // 'hostname';
+}
+
 sub usage {
     return <<'END';
 Usage: ctrl-exec <mode> [options] [args]
@@ -600,6 +660,9 @@ Modes:
   setup-ca                   One-time CA initialisation
   setup-ctrl-exec           Generate ctrl-exec key and certificate
   list-agents                List all registered (paired) agents
+  edit-agent <name>          Edit a registered agent without re-pairing:
+                             [--rename <new>] [--ip <addr>]
+                             [--agent-port <n>] [--lookup-by ip|hostname]
   list-locks                 Show currently held script locks
   rotate-cert                Rotate ctrl-exec certificate and broadcast new serial
   serial-status              Show ctrl-exec serial and per-agent serial state

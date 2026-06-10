@@ -281,6 +281,39 @@ With `--json`, returns an array of objects with fields:
 
 ---
 
+### edit-agent
+
+Edit a registered agent's dispatch fields, or rename it, without re-pairing.
+Only the dispatch-relevant fields are editable; the certificate and serial
+tracking are left intact. At least one change flag is required.
+
+```bash
+ctrl-exec edit-agent <name> --ip 10.0.0.42
+ctrl-exec edit-agent <name> --agent-port 7450 --lookup-by ip
+ctrl-exec edit-agent old-name --rename new-name
+```
+
+`--rename <new-name>`
+: Move the registry entry to a new canonical name. Fails if the new name is
+  already in use or is not a valid name (letters, digits, `.`, `-`, `_`;
+  must start with a letter or digit).
+
+`--ip <addr>`
+: Update the stored address used when `lookup_by = ip`.
+
+`--agent-port <n>`
+: Update the stored operational port (1–65535).
+
+`--lookup-by <ip|hostname>`
+: Update how dispatch resolves this agent. See *Dispatch host resolution*
+  under `run`.
+
+`--json` prints the updated record. The agent's certificate is unaffected;
+renaming or re-addressing does not require the agent to re-pair, since mTLS
+validates the certificate against the CA rather than the connect address.
+
+---
+
 ### setup-ca
 
 One-time initialisation of the ctrl-exec CA. Generates the CA key and

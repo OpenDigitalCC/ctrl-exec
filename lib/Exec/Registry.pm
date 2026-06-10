@@ -222,6 +222,50 @@ sub remove_agent {
     return $record;
 }
 
+# Edit a registered agent's dispatch-relevant fields in place, and/or rename
+# it, without re-pairing. Only ip, port, and lookup_by are editable here;
+# cert/serial fields are managed by pairing and rotation and are left intact.
+# Dies if the agent is not found, if a rename target name is invalid, or if a
+# rename would clobber an existing agent. Returns the updated record.
+#
+# Required opts:
+#   hostname => $str        the agent to edit
+#
+# Optional opts (at least one expected by callers):
+#   new_name  => $str       rename: move the record to this name
+#   ip        => $str       new address
+#   port      => $int       new operational port (normalised)
+#   lookup_by => $str       'ip' | 'hostname' (normalised)
+sub edit_agent {
+    my (%opts) = @_;
+    my $hostname = $opts{hostname} or croak "hostname required";
+    my $dir      = $opts{registry_dir} // $REGISTRY_DIR;
+    my $path     = "$dir/$hostname.json";
+
+    croak "No registry entry for '$hostname'" unless -f $path;
+    my $record = eval { decode_json(_slurp($path)) }
+        or croak "Registry entry for '$hostname' is unreadable";
+
+    $record->{ip}        = $opts{ip}                       if defined $opts{ip};
+    $record->{port}      = _norm_port($opts{port})         if defined $opts{port};
+    $record->{lookup_by} = _norm_lookup_by($opts{lookup_by}) if defined $opts{lookup_by};
+
+    my $new = $opts{new_name};
+    if (defined $new && length $new && $new ne $hostname) {
+        _valid_agent_name($new)
+            or croak "invalid agent name '$new' (use letters, digits, '.', '-', '_')";
+        croak "agent '$new' already exists" if -f "$dir/$new.json";
+
+        $record->{hostname} = $new;
+        _write_atomic("$dir/$new.json", encode_json($record));
+        unlink $path or croak "Cannot remove old registry entry '$path': $!";
+        return $record;
+    }
+
+    _write_atomic($path, encode_json($record));
+    return $record;
+}
+
 # Return list of hostnames only - convenience for building host lists
 # to pass to Engine functions.
 sub list_hostnames {
@@ -236,6 +280,15 @@ sub list_hostnames {
 sub _norm_lookup_by {
     my ($v) = @_;
     return (defined $v && $v eq 'ip') ? 'ip' : 'hostname';
+}
+
+# Validate an agent name for use as a registry key (filename component).
+# Must start with an alphanumeric and contain only letters, digits, dot,
+# hyphen, underscore - which excludes '/' and a leading '.', so it cannot
+# escape the registry directory.
+sub _valid_agent_name {
+    my ($name) = @_;
+    return defined $name && $name =~ /^[A-Za-z0-9][A-Za-z0-9._-]*\z/;
 }
 
 # Normalise a port to an integer in 1..65535, or the default 7443.

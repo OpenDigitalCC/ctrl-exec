@@ -315,4 +315,63 @@ my $dir = tempdir(CLEANUP => 1);
     like $@, qr/hostname required/, 'resolve_target: dies without hostname';
 }
 
+# --- _valid_agent_name ---
+
+{
+    ok  Exec::Registry::_valid_agent_name('web-01'),       'valid: simple name';
+    ok  Exec::Registry::_valid_agent_name('db.example.com'),'valid: FQDN with dots';
+    ok  Exec::Registry::_valid_agent_name('a_b-1'),         'valid: underscore and hyphen';
+    ok !Exec::Registry::_valid_agent_name('../etc'),        'invalid: path traversal';
+    ok !Exec::Registry::_valid_agent_name('a/b'),           'invalid: slash';
+    ok !Exec::Registry::_valid_agent_name('.hidden'),       'invalid: leading dot';
+    ok !Exec::Registry::_valid_agent_name(''),              'invalid: empty';
+}
+
+# --- edit_agent: field edits and rename ---
+
+{
+    my $rdir = tempdir(CLEANUP => 1);
+
+    Exec::Registry::register_agent(
+        hostname => 'edit-me', ip => '10.3.0.1', reqid => 'cafe1234',
+        dispatcher_serial => 'abc', registry_dir => $rdir,
+    );
+
+    eval { Exec::Registry::edit_agent(hostname => 'nope', ip => '1.1.1.1', registry_dir => $rdir) };
+    like $@, qr/No registry entry/, 'edit_agent: dies for unknown agent';
+
+    # in-place field edits preserve untouched fields (incl. serial)
+    my $rec = Exec::Registry::edit_agent(
+        hostname => 'edit-me', ip => '10.3.0.99', port => 7470,
+        lookup_by => 'ip', registry_dir => $rdir,
+    );
+    is $rec->{ip},        '10.3.0.99', 'edit_agent: updates ip';
+    is $rec->{port},      7470,        'edit_agent: updates port';
+    is $rec->{lookup_by}, 'ip',        'edit_agent: updates lookup_by';
+    is $rec->{reqid},     'cafe1234',  'edit_agent: preserves reqid';
+    is $rec->{dispatcher_serial}, 'abc', 'edit_agent: preserves serial fields';
+
+    # rename moves the record and updates the hostname field
+    my $renamed = Exec::Registry::edit_agent(
+        hostname => 'edit-me', new_name => 'renamed-host', registry_dir => $rdir,
+    );
+    is $renamed->{hostname}, 'renamed-host', 'edit_agent: rename updates hostname';
+    is $renamed->{ip},       '10.3.0.99',    'edit_agent: rename preserves fields';
+    ok !-f "$rdir/edit-me.json",      'edit_agent: old registry file removed';
+    ok  -f "$rdir/renamed-host.json", 'edit_agent: new registry file created';
+    ok !defined Exec::Registry::get_agent(hostname => 'edit-me', registry_dir => $rdir),
+        'edit_agent: old name no longer resolves';
+
+    # rename collision is refused
+    Exec::Registry::register_agent(hostname => 'occupied', ip => '10.3.0.5', registry_dir => $rdir);
+    eval { Exec::Registry::edit_agent(
+        hostname => 'renamed-host', new_name => 'occupied', registry_dir => $rdir) };
+    like $@, qr/already exists/, 'edit_agent: refuses rename onto existing agent';
+
+    # invalid rename target is refused
+    eval { Exec::Registry::edit_agent(
+        hostname => 'renamed-host', new_name => '../evil', registry_dir => $rdir) };
+    like $@, qr/invalid agent name/, 'edit_agent: refuses invalid rename target';
+}
+
 done_testing;
