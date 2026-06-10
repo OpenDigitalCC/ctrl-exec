@@ -9,8 +9,47 @@ use JSON        qw(encode_json decode_json);
 use POSIX       qw(strftime);
 use Carp        qw(croak);
 
+use Exec::RateLimit qw();
+
 
 my $PAIRING_DIR = '/var/lib/ctrl-exec/pairing';
+
+
+# Build a rate-limit config hashref for the pairing port from the dispatcher
+# config. The pairing port reuses the operational-port volume limiter
+# (Exec::RateLimit); it is volume-only, since the pairing listener requires no
+# client certificate and so has no TLS-handshake-failure (probe) vector.
+#
+# Recognised keys in ctrl-exec.conf:
+#   pairing_rate_limit_disable = 1                  disable rate limiting
+#   pairing_rate_limit_volume  = limit/window/block e.g. 10/60/300
+#
+# Absent or malformed values leave the Exec::RateLimit defaults in place.
+# Returns a hashref suitable as the third argument to Exec::RateLimit::check.
+sub build_rate_config {
+    my ($config) = @_;
+    $config //= {};
+
+    my %rl;
+    if ($config->{pairing_rate_limit_disable}
+        && $config->{pairing_rate_limit_disable} =~ /^[1y]/i) {
+        $rl{disabled} = 1;
+    }
+
+    if (my $raw = $config->{pairing_rate_limit_volume}) {
+        my ($limit, $window, $block) = split m{/}, $raw, 3;
+        if (defined $limit  && $limit  =~ /^\d+$/ &&
+            defined $window && $window =~ /^\d+$/ &&
+            defined $block  && $block  =~ /^\d+$/) {
+            $rl{volume_limit}  = int($limit);
+            $rl{volume_window} = int($window);
+            $rl{volume_block}  = int($block);
+        }
+        # Malformed value: fall back to defaults silently.
+    }
+
+    return \%rl;
+}
 
 # Start pairing mode - listen on port for agent CSR requests
 # Blocks until interrupted (SIGINT/SIGTERM)
@@ -22,6 +61,7 @@ sub run_pairing_mode {
     my $key       = $opts{key}       or croak "key required";
     my $log_fn    = $opts{log_fn}    // sub {};
     my $max_queue = $opts{max_queue} // 10;
+    my $rate_config = $opts{rate_limit} // {};
 
     make_path($PAIRING_DIR) unless -d $PAIRING_DIR;
 
@@ -63,6 +103,9 @@ sub run_pairing_mode {
     my $sel = IO::Select->new($server);
     $sel->add(\*STDIN) if $interactive;
 
+    # Per-IP rate-limit state for the pairing port, kept in the parent loop.
+    my %rate_state;
+
     while (1) {
         # Block until the server socket or STDIN is ready.
         # Timeout every 5 seconds to reap finished children.
@@ -75,6 +118,14 @@ sub run_pairing_mode {
                 # Incoming pairing connection
                 my $conn = $server->accept or next;
                 my $peer_ip = $conn->peerhost // 'unknown';
+
+                # Per-IP rate limit (volume) before forking, mirroring the
+                # operational port. Exec::RateLimit::check logs the block.
+                if (Exec::RateLimit::check($peer_ip, \%rate_state, $rate_config)) {
+                    $conn->close(SSL_no_shutdown => 1);
+                    next;
+                }
+                Exec::RateLimit::record_connection($peer_ip, \%rate_state, $rate_config);
 
                 my $pid = fork();
                 if (!defined $pid) {

@@ -225,6 +225,7 @@ sub mode_pairing {
         cert      => $config->{cert},
         key       => $config->{key},
         max_queue => $config->{pairing_max_queue} // 10,
+        rate_limit => Exec::Pairing::build_rate_config($config),
         log_fn    => sub { Exec::Log::log_action('INFO', $_[0]) },
     );
 }

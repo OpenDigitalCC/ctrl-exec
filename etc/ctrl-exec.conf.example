@@ -48,3 +48,18 @@ auth_hook = /etc/ctrl-exec/auth-hook
 # 'allow' - all requests are authorised without a hook (suitable for isolated networks).
 # When a hook is configured this setting has no effect.
 api_auth_default = deny
+
+# Pairing port (7444) rate limiting.
+#
+# Per-IP volume limiting on the pairing listener, mirroring the operational
+# port. Limits how many pairing connections a single IP may open within a
+# window before it is blocked, mitigating pairing-port abuse. Volume-only:
+# the pairing port requires no client certificate, so there is no
+# handshake-failure (probe) vector to track.
+#
+# pairing_rate_limit_volume = limit/window/block (seconds), default 10/60/300:
+#   10 connections within 60s triggers a 300s (5 min) block for that IP.
+# pairing_rate_limit_disable = 1  disables pairing-port rate limiting entirely.
+#
+# pairing_rate_limit_volume  = 10/60/300
+# pairing_rate_limit_disable = 0
