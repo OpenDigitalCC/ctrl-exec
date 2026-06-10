@@ -71,6 +71,7 @@ sub run_pairing_mode {
     require IO::Select;
 
     # Pairing port: TLS server cert only, no client cert required
+    require Exec::TLS;
     my $server = IO::Socket::SSL->new(
         LocalPort       => $port,
         Listen          => 5,
@@ -78,6 +79,7 @@ sub run_pairing_mode {
         SSL_cert_file   => $cert,
         SSL_key_file    => $key,
         SSL_verify_mode => IO::Socket::SSL::SSL_VERIFY_NONE(),
+        Exec::TLS::hardening(),
     ) or die "Cannot start pairing server: $IO::Socket::SSL::SSL_ERROR\n";
 
     $log_fn->({ ACTION => 'pairing-mode-start', PORT => $port });
@@ -514,6 +516,16 @@ sub _handle_pair_request {
     my $data = eval { decode_json($body) };
     unless ($data && $data->{csr} && $data->{hostname}) {
         _send_raw($conn, encode_json({ status => 'error', reason => 'invalid request' }));
+        return;
+    }
+
+    # The hostname becomes the registry key (a filename). Reject anything that
+    # is not a plain agent name/hostname so a hostile pairing client cannot
+    # traverse out of the registry directory on approval.
+    require Exec::Registry;
+    unless (Exec::Registry::valid_agent_name($data->{hostname})) {
+        _send_raw($conn, encode_json({ status => 'error', reason => 'invalid hostname' }));
+        $log_fn->({ ACTION => 'pair-reject', IP => $peer_ip, REASON => 'invalid-hostname' });
         return;
     }
 

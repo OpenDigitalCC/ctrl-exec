@@ -315,16 +315,30 @@ my $dir = tempdir(CLEANUP => 1);
     like $@, qr/hostname required/, 'resolve_target: dies without hostname';
 }
 
-# --- _valid_agent_name ---
+# --- valid_agent_name ---
 
 {
-    ok  Exec::Registry::_valid_agent_name('web-01'),       'valid: simple name';
-    ok  Exec::Registry::_valid_agent_name('db.example.com'),'valid: FQDN with dots';
-    ok  Exec::Registry::_valid_agent_name('a_b-1'),         'valid: underscore and hyphen';
-    ok !Exec::Registry::_valid_agent_name('../etc'),        'invalid: path traversal';
-    ok !Exec::Registry::_valid_agent_name('a/b'),           'invalid: slash';
-    ok !Exec::Registry::_valid_agent_name('.hidden'),       'invalid: leading dot';
-    ok !Exec::Registry::_valid_agent_name(''),              'invalid: empty';
+    ok  Exec::Registry::valid_agent_name('web-01'),       'valid: simple name';
+    ok  Exec::Registry::valid_agent_name('db.example.com'),'valid: FQDN with dots';
+    ok  Exec::Registry::valid_agent_name('a_b-1'),         'valid: underscore and hyphen';
+    ok !Exec::Registry::valid_agent_name('../etc'),        'invalid: path traversal';
+    ok !Exec::Registry::valid_agent_name('a/b'),           'invalid: slash';
+    ok !Exec::Registry::valid_agent_name('.hidden'),       'invalid: leading dot';
+    ok !Exec::Registry::valid_agent_name(''),              'invalid: empty';
+}
+
+# --- register_agent rejects a hostile hostname (path traversal guard) ---
+
+{
+    my $rdir = tempdir(CLEANUP => 1);
+    eval { Exec::Registry::register_agent(
+        hostname => '../../tmp/evil', ip => '10.0.0.1', registry_dir => $rdir) };
+    like $@, qr/invalid hostname/, 'register_agent: refuses path-traversal hostname';
+    ok !-e "$rdir/../../tmp/evil.json", 'register_agent: no file written outside registry dir';
+
+    eval { Exec::Registry::register_agent(
+        hostname => 'a/b', ip => '10.0.0.1', registry_dir => $rdir) };
+    like $@, qr/invalid hostname/, 'register_agent: refuses hostname with slash';
 }
 
 # --- edit_agent: field edits and rename ---

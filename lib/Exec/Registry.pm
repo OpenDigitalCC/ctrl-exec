@@ -38,6 +38,8 @@ my $DEFAULT_PORT = 7443;
 sub register_agent {
     my (%opts) = @_;
     my $hostname = $opts{hostname} or croak "hostname required";
+    valid_agent_name($hostname)
+        or croak "invalid hostname '$hostname' - refusing to use as a registry key";
     my $dir      = $opts{registry_dir} // $REGISTRY_DIR;
 
     make_path($dir) unless -d $dir;
@@ -275,7 +277,7 @@ sub edit_agent {
 
     my $new = $opts{new_name};
     if (defined $new && length $new && $new ne $hostname) {
-        _valid_agent_name($new)
+        valid_agent_name($new)
             or croak "invalid agent name '$new' (use letters, digits, '.', '-', '_')";
         croak "agent '$new' already exists" if -f "$dir/$new.json";
 
@@ -333,11 +335,12 @@ sub _norm_lookup_by {
     return (defined $v && $v eq 'ip') ? 'ip' : 'hostname';
 }
 
-# Validate an agent name for use as a registry key (filename component).
-# Must start with an alphanumeric and contain only letters, digits, dot,
-# hyphen, underscore - which excludes '/' and a leading '.', so it cannot
-# escape the registry directory.
-sub _valid_agent_name {
+# Validate an agent name/hostname for use as a registry key (filename
+# component). Must start with an alphanumeric and contain only letters,
+# digits, dot, hyphen, underscore - which excludes '/' and a leading '.', so
+# it cannot escape the registry directory. Public so the pairing path can
+# reject a hostile agent-supplied hostname before it becomes a filename.
+sub valid_agent_name {
     my ($name) = @_;
     return defined $name && $name =~ /^[A-Za-z0-9][A-Za-z0-9._-]*\z/;
 }

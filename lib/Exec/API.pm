@@ -109,6 +109,7 @@ sub _make_server {
 
     if ($use_tls) {
         require IO::Socket::SSL;
+        require Exec::TLS;
         my $srv = IO::Socket::SSL->new(
             LocalAddr       => $bind,
             LocalPort       => $port,
@@ -117,6 +118,7 @@ sub _make_server {
             SSL_cert_file   => $cert,
             SSL_key_file    => $key,
             SSL_verify_mode => IO::Socket::SSL::SSL_VERIFY_NONE(),
+            Exec::TLS::hardening(),
         ) or die "Cannot start TLS API server on $bind:$port: "
                . "$IO::Socket::SSL::SSL_ERROR\n";
         return $srv;
