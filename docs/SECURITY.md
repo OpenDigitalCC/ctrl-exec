@@ -78,6 +78,14 @@ Stale request cleanup
 : Pending requests older than 10 minutes with no approval or denial are
   automatically deleted from the pairing queue.
 
+Hostname validation
+: The agent-supplied hostname becomes the agent's registry key (a filename).
+  It is validated against `^[A-Za-z0-9][A-Za-z0-9._-]*$` before the request is
+  queued and again before the registry entry is written, so a hostile pairing
+  client cannot use a crafted hostname (e.g. `../../...`) to write outside the
+  registry directory on approval. The same validation guards `edit-agent`
+  renames.
+
 Queue depth limit
 : The pairing queue is capped at 10 pending requests by default (configurable
   via `pairing_max_queue` in `ctrl-exec.conf`). Once the cap is reached,
@@ -471,11 +479,13 @@ IP allowlist
   `allowed_ips` is absent, all source IPs are permitted.
 
 TLS version and cipher restriction
-: The agent accepts TLS 1.2 and TLS 1.3 only. TLS 1.0 and 1.1 are rejected.
-  For TLS 1.2 connections, only ECDHE cipher suites using AES-256-GCM or
-  ChaCha20-Poly1305 are permitted. CBC mode, RC4, export-grade, and anonymous
-  ciphers are excluded. TLS 1.3 cipher suites are governed by OpenSSL defaults,
-  which are all AEAD on current releases.
+: TLS 1.2 and TLS 1.3 only - TLS 1.0/1.1 (and SSLv3) are disabled explicitly
+  via `SSL_version`, not left to the system OpenSSL policy. For TLS 1.2, only
+  ECDHE cipher suites using AES-GCM are permitted; CBC mode, RC4, export-grade,
+  and anonymous ciphers are excluded. TLS 1.3 suites are AEAD-only. This policy
+  is defined once in `Exec::TLS::hardening` and applied to every TLS endpoint -
+  the agent operational server, the dispatcher client, the pairing listener,
+  and the API server (when TLS is enabled) - so it cannot drift between them.
 
 Request body size limit
 : The agent limits incoming request bodies to 1 MB. Any request declaring a
