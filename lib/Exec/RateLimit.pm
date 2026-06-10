@@ -1,4 +1,4 @@
-package Exec::Agent::RateLimit;
+package Exec::RateLimit;
 
 use strict;
 use warnings;

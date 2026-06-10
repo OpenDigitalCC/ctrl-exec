@@ -8,7 +8,7 @@ use lib "$Bin/../lib";
 use Exec::Agent::Config    qw();
 use Exec::Agent::Runner    qw();
 use Exec::Agent::AgentPairing   qw();
-use Exec::Agent::RateLimit qw();
+use Exec::RateLimit qw();
 use Exec::Auth           qw();
 use Exec::Log            qw();
 use JSON                       qw(encode_json decode_json);
@@ -138,13 +138,13 @@ sub mode_serve {
                 last;
             }
 
-            Exec::Agent::RateLimit::record_failure($peer, \%rate_state, $rate_config);
+            Exec::RateLimit::record_failure($peer, \%rate_state, $rate_config);
             Exec::Log::log_action('WARNING', {
                 ACTION => 'tls-failure',
                 PEER   => $peer,
                 REASON => $err,
             });
-            Exec::Agent::RateLimit::check($peer, \%rate_state, $rate_config);
+            Exec::RateLimit::check($peer, \%rate_state, $rate_config);
             next;
         }
 
@@ -161,11 +161,11 @@ sub mode_serve {
             next;
         }
 
-        if (Exec::Agent::RateLimit::check($peer, \%rate_state, $rate_config)) {
+        if (Exec::RateLimit::check($peer, \%rate_state, $rate_config)) {
             $conn->close(SSL_no_shutdown => 1);
             next;
         }
-        Exec::Agent::RateLimit::record_connection($peer, \%rate_state, $rate_config);
+        Exec::RateLimit::record_connection($peer, \%rate_state, $rate_config);
 
         # Read peer cert serial before forking - after the parent closes its
         # copy of $conn the SSL object becomes invalid in the child.

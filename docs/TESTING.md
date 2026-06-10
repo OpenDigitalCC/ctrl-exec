@@ -45,7 +45,7 @@ Each test file corresponds to one module:
 | `t/output.t` | `Exec::Output` |
 | `t/pairing-csr.t` | `Exec::Agent::AgentPairing` (key/CSR/nonce) |
 | `t/pairing-ctrl-exec.t` | `Exec::Pairing` (queue/stale expiry) |
-| `t/rate-limit.t` | `Exec::Agent::RateLimit` |
+| `t/rate-limit.t` | `Exec::RateLimit` |
 | `t/registry.t` | `Exec::Registry` |
 | `t/registry-serial.t` | `Exec::Registry` (serial tracking fields) |
 | `t/renewal.t` | `Exec::Engine` (cert renewal logic) |

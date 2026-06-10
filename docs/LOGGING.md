@@ -623,7 +623,7 @@ ACTION=run-store-fail REQID=a1b2c3d4e5f60001 ERROR="No space left on device"
 
 These actions are emitted by `bin/ctrl-exec-agent` and the modules it
 calls: `Exec::Auth`, `Exec::Agent::Config`,
-`Exec::Agent::RateLimit`, and `Exec::Agent::Runner`.
+`Exec::RateLimit`, and `Exec::Agent::Runner`.
 
 ### start
 
