@@ -1,0 +1,44 @@
+#!/usr/bin/make -f
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+DEB_VERSION := $(shell dpkg-parsechangelog -S Version)
+
+%:
+	dh $@
+
+# There is no build system; files are staged from the source tree with the
+# install-time substitutions (version stamp, packaged paths) applied here -
+# the same substitutions install.sh makes at install time, so the in-tree
+# sources stay unchanged and the tarball/install.sh flow is unaffected.
+override_dh_auto_install:
+	# Shared Perl library -> /usr/share/perl5/Exec (a default @INC path).
+	install -d debian/tmp/usr/share/perl5/Exec
+	cp -a lib/Exec/. debian/tmp/usr/share/perl5/Exec/
+	# VERSION file alongside the modules; Exec::API reports it at runtime.
+	printf '%s\n' '$(DEB_VERSION)' > debian/tmp/usr/share/perl5/Exec/VERSION
+	# Point Exec::API at the packaged locations (no /usr/local in a .deb).
+	sed -i \
+	  -e 's|/usr/local/lib/ctrl-exec/Exec/openapi.json|/usr/share/perl5/Exec/openapi.json|' \
+	  -e 's|/usr/local/lib/ctrl-exec/VERSION|/usr/share/perl5/Exec/VERSION|' \
+	  debian/tmp/usr/share/perl5/Exec/API.pm
+	# Executables -> /usr/bin, with the release version stamped in place of
+	# the UNINSTALLED placeholder. The bins' "use lib $Bin/../lib" resolves
+	# to /usr/lib (harmless); the modules load from /usr/share/perl5.
+	install -d debian/tmp/usr/bin
+	for b in ctrl-exec-agent ctrl-exec-dispatcher ctrl-exec-api; do \
+	  sed "s|'UNINSTALLED'|'$(DEB_VERSION)'|" bin/$$b > debian/tmp/usr/bin/$$b; \
+	  chmod 755 debian/tmp/usr/bin/$$b; \
+	done
+	# Example configs -> /usr/share/ctrl-exec/examples (postinst seeds /etc).
+	install -d debian/tmp/usr/share/ctrl-exec/examples
+	install -m644 etc/agent.conf.example        debian/tmp/usr/share/ctrl-exec/examples/
+	install -m644 etc/scripts.conf.example      debian/tmp/usr/share/ctrl-exec/examples/
+	install -m644 etc/ctrl-exec.conf.example    debian/tmp/usr/share/ctrl-exec/examples/
+	install -m755 etc/auth-hook.example         debian/tmp/usr/share/ctrl-exec/examples/
+	install -m755 etc/ctrl-exec-demonstrator.sh debian/tmp/usr/share/ctrl-exec/examples/
+
+# The services need a configured CA/cert and a paired identity before they can
+# run, so do not enable or start them automatically - the operator does so
+# after setup (see INSTALL.md / the post-install notes).
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start

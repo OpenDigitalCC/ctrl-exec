@@ -1,0 +1,49 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # System group and user for the agent service.
+        if ! getent group ctrl-exec-agent >/dev/null; then
+            addgroup --system ctrl-exec-agent
+        fi
+        if ! getent passwd ctrl-exec-agent >/dev/null; then
+            adduser --system --no-create-home --home /nonexistent \
+                --ingroup ctrl-exec-agent --shell /usr/sbin/nologin \
+                --gecos "ctrl-exec agent service user" ctrl-exec-agent
+        fi
+
+        # Config directory - readable by the agent group, not world.
+        mkdir -p /etc/ctrl-exec-agent
+        chmod 750 /etc/ctrl-exec-agent
+        chown root:ctrl-exec-agent /etc/ctrl-exec-agent
+
+        # Seed configs on first install only; never overwrite operator edits.
+        if [ ! -f /etc/ctrl-exec-agent/agent.conf ]; then
+            cp /usr/share/ctrl-exec/examples/agent.conf.example \
+               /etc/ctrl-exec-agent/agent.conf
+            chmod 640 /etc/ctrl-exec-agent/agent.conf
+            chown root:ctrl-exec-agent /etc/ctrl-exec-agent/agent.conf
+        fi
+        if [ ! -f /etc/ctrl-exec-agent/scripts.conf ]; then
+            cp /usr/share/ctrl-exec/examples/scripts.conf.example \
+               /etc/ctrl-exec-agent/scripts.conf
+            chmod 640 /etc/ctrl-exec-agent/scripts.conf
+            chown root:ctrl-exec-agent /etc/ctrl-exec-agent/scripts.conf
+        fi
+
+        # Scripts directory - root owns, agent group can read/execute.
+        mkdir -p /opt/ctrl-exec-scripts
+        chmod 750 /opt/ctrl-exec-scripts
+        chown root:ctrl-exec-agent /opt/ctrl-exec-scripts
+        # Demonstrator script (disabled in scripts.conf by default).
+        cp /usr/share/ctrl-exec/examples/ctrl-exec-demonstrator.sh \
+           /opt/ctrl-exec-scripts/ctrl-exec-demonstrator.sh
+        chmod 750 /opt/ctrl-exec-scripts/ctrl-exec-demonstrator.sh
+        chown root:ctrl-exec-agent /opt/ctrl-exec-scripts/ctrl-exec-demonstrator.sh
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

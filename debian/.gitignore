@@ -1,0 +1,12 @@
+# debhelper / dpkg-buildpackage byproducts (not source)
+/.debhelper/
+/files
+/debhelper-build-stamp
+/tmp/
+/*.substvars
+/*.debhelper
+/*.debhelper.log
+# per-binary staging directories (named as the binary packages)
+/ctrl-exec/
+/ctrl-exec-agent/
+/ctrl-exec-common/

@@ -1,0 +1,47 @@
+[Unit]
+Description=ctrl-exec Agent - remote script execution service
+Documentation=https://github.com/OpenDigitalCC/ctrl-exec
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=ctrl-exec-agent
+Group=ctrl-exec-agent
+
+ExecStart=/usr/bin/ctrl-exec-agent serve
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+# Give the process time to shut down cleanly
+TimeoutStopSec=10
+
+# Operational logging goes via Sys::Syslog to journald.
+# StandardError=journal captures Perl die/warn output that bypasses syslog.
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+# Allow reading config and certs
+ReadOnlyPaths=/etc/ctrl-exec-agent
+
+# Allow executing scripts in the managed scripts directory
+ReadOnlyPaths=/opt/ctrl-exec-scripts
+
+[Install]
+WantedBy=multi-user.target

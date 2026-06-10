@@ -1,0 +1,40 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # System group for control-host access to certs and runtime dirs.
+        if ! getent group ctrl-exec >/dev/null; then
+            addgroup --system ctrl-exec
+        fi
+
+        # Config directory.
+        mkdir -p /etc/ctrl-exec
+        chmod 750 /etc/ctrl-exec
+        chown root:ctrl-exec /etc/ctrl-exec
+
+        # Runtime state: pairing queue, agent registry, locks, run results.
+        for d in pairing agents locks runs; do
+            mkdir -p "/var/lib/ctrl-exec/$d"
+            chmod 770 "/var/lib/ctrl-exec/$d"
+            chown root:ctrl-exec "/var/lib/ctrl-exec/$d"
+        done
+
+        # Seed config and example auth hook on first install only.
+        if [ ! -f /etc/ctrl-exec/ctrl-exec.conf ]; then
+            cp /usr/share/ctrl-exec/examples/ctrl-exec.conf.example \
+               /etc/ctrl-exec/ctrl-exec.conf
+            chmod 640 /etc/ctrl-exec/ctrl-exec.conf
+            chown root:ctrl-exec /etc/ctrl-exec/ctrl-exec.conf
+        fi
+        if [ ! -f /etc/ctrl-exec/auth-hook ]; then
+            cp /usr/share/ctrl-exec/examples/auth-hook.example \
+               /etc/ctrl-exec/auth-hook
+            chmod 755 /etc/ctrl-exec/auth-hook
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

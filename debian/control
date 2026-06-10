@@ -1,0 +1,64 @@
+Source: ctrl-exec
+Section: admin
+Priority: optional
+Maintainer: OpenDigital CC <sjm@opendigital.cc>
+Build-Depends:
+ debhelper-compat (= 13),
+ perl,
+Standards-Version: 4.7.2
+Homepage: https://github.com/OpenDigitalCC/ctrl-exec
+Rules-Requires-Root: no
+
+Package: ctrl-exec-common
+Architecture: all
+Depends:
+ ${misc:Depends},
+ ${perl:Depends},
+ libjson-perl,
+Description: mTLS remote script execution - shared library
+ ctrl-exec runs scripts on remote agent hosts over HTTPS with mutual
+ certificate authentication. Agents expose only an explicit allowlist of
+ permitted scripts; there is no shell access.
+ .
+ This package contains the shared Exec:: Perl library used by both the
+ ctrl-exec control host and the ctrl-exec-agent. It is not useful on its
+ own - install ctrl-exec or ctrl-exec-agent.
+
+Package: ctrl-exec-agent
+Architecture: all
+Depends:
+ ${misc:Depends},
+ ${perl:Depends},
+ ctrl-exec-common (= ${source:Version}),
+ libio-socket-ssl-perl,
+ openssl,
+ adduser,
+Description: mTLS remote script execution - agent
+ ctrl-exec runs scripts on remote agent hosts over HTTPS with mutual
+ certificate authentication. Agents expose only an explicit allowlist of
+ permitted scripts; there is no shell access.
+ .
+ This package provides the agent (ctrl-exec-agent): an mTLS HTTPS server
+ that executes only the scripts named in a per-host allowlist. Install it
+ on each managed host, then pair it with a control host.
+
+Package: ctrl-exec
+Architecture: all
+Depends:
+ ${misc:Depends},
+ ${perl:Depends},
+ ctrl-exec-common (= ${source:Version}),
+ libwww-perl,
+ liblwp-protocol-https-perl,
+ libio-socket-ssl-perl,
+ openssl,
+ adduser,
+Description: mTLS remote script execution - control host
+ ctrl-exec runs scripts on remote agent hosts over HTTPS with mutual
+ certificate authentication. Agents expose only an explicit allowlist of
+ permitted scripts; there is no shell access.
+ .
+ This package provides the control host: the ctrl-exec-dispatcher CLI
+ (manages the private CA, agent registry, pairing, and dispatch) and the
+ ctrl-exec-api HTTP API server. Install it on the control host and install
+ ctrl-exec-agent on each managed host.

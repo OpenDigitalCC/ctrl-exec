@@ -1,0 +1,12 @@
+ctrl-exec (0.8.5) unstable; urgency=medium
+
+  * Initial Debian packaging. Three binary packages from one source:
+    - ctrl-exec-common: the shared Exec:: Perl library.
+    - ctrl-exec-agent: the agent service.
+    - ctrl-exec: the dispatcher CLI and HTTP API server.
+  * Files are laid out under FHS paths (/usr/bin, /usr/share/perl5/Exec,
+    /etc/ctrl-exec*) rather than the /usr/local layout used by install.sh;
+    the install.sh tarball flow is unchanged and remains the path for
+    Alpine and OpenWrt.
+
+ -- OpenDigital CC <sjm@opendigital.cc>  Wed, 10 Jun 2026 17:42:29 +0100

@@ -1,0 +1,4 @@
+usr/bin/ctrl-exec-dispatcher
+usr/bin/ctrl-exec-api
+usr/share/ctrl-exec/examples/ctrl-exec.conf.example
+usr/share/ctrl-exec/examples/auth-hook.example

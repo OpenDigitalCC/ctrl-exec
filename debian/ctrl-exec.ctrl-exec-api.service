@@ -1,0 +1,31 @@
+[Unit]
+Description=ctrl-exec-dispatcher API - HTTP API server for remote script execution
+Documentation=https://github.com/OpenDigitalCC/ctrl-exec
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+# The API server bind address and port are configured in ctrl-exec.conf via
+# api_bind (default: 127.0.0.1) and api_port (default: 7445).
+# The server is not reachable from the network without explicitly setting
+# api_bind = 0.0.0.0 or a specific interface address in ctrl-exec.conf.
+ExecStart=/usr/bin/ctrl-exec-api
+Restart=on-failure
+RestartSec=5
+
+# Run as ctrl-exec group so it can read certs and write to runtime dirs
+User=root
+Group=ctrl-exec
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/ctrl-exec
+
+[Install]
+WantedBy=multi-user.target
