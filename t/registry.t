@@ -263,4 +263,56 @@ my $dir = tempdir(CLEANUP => 1);
     like $@, qr/hostname required/, 'resolve_host: dies without hostname';
 }
 
+# --- port storage + resolve_target ---
+
+{
+    my $rdir = tempdir(CLEANUP => 1);
+
+    Exec::Registry::register_agent(
+        hostname => 'p-default', ip => '10.2.0.1', registry_dir => $rdir,
+    );
+    is Exec::Registry::get_agent(hostname => 'p-default', registry_dir => $rdir)->{port},
+       7443, 'register_agent: port defaults to 7443';
+
+    Exec::Registry::register_agent(
+        hostname => 'p-custom', ip => '10.2.0.2', port => 7450, registry_dir => $rdir,
+    );
+    is Exec::Registry::get_agent(hostname => 'p-custom', registry_dir => $rdir)->{port},
+       7450, 'register_agent: stores explicit port';
+
+    Exec::Registry::register_agent(
+        hostname => 'p-bad', ip => '10.2.0.3', port => 'nope', registry_dir => $rdir,
+    );
+    is Exec::Registry::get_agent(hostname => 'p-bad', registry_dir => $rdir)->{port},
+       7443, 'register_agent: invalid port normalises to 7443';
+
+    Exec::Registry::register_agent(
+        hostname => 'p-range', ip => '10.2.0.4', port => 99999, registry_dir => $rdir,
+    );
+    is Exec::Registry::get_agent(hostname => 'p-range', registry_dir => $rdir)->{port},
+       7443, 'register_agent: out-of-range port normalises to 7443';
+
+    # resolve_target: default port -> bare address
+    is Exec::Registry::resolve_target(hostname => 'p-default', registry_dir => $rdir),
+       'p-default', 'resolve_target: default port yields bare hostname';
+
+    # non-default port -> address:port
+    is Exec::Registry::resolve_target(hostname => 'p-custom', registry_dir => $rdir),
+       'p-custom:7450', 'resolve_target: non-default port appended';
+
+    # lookup_by=ip + non-default port -> ip:port
+    Exec::Registry::register_agent(
+        hostname => 'p-ip', ip => '10.2.0.9', port => 7460,
+        lookup_by => 'ip', registry_dir => $rdir,
+    );
+    is Exec::Registry::resolve_target(hostname => 'p-ip', registry_dir => $rdir),
+       '10.2.0.9:7460', 'resolve_target: lookup_by=ip with non-default port -> ip:port';
+
+    is Exec::Registry::resolve_target(hostname => 'not-registered', registry_dir => $rdir),
+       'not-registered', 'resolve_target: unregistered name passes through';
+
+    eval { Exec::Registry::resolve_target(registry_dir => $rdir) };
+    like $@, qr/hostname required/, 'resolve_target: dies without hostname';
+}
+
 done_testing;

@@ -135,7 +135,8 @@ sub submit_pairing_request {
     my $csr_pem         = $opts{csr_pem}    or croak "csr_pem required";
     my $hostname        = $opts{hostname}   or croak "hostname required";
     my $ca_cert         = $opts{ca_cert};
-    my $lookup_by       = $opts{lookup_by};   # optional dispatch-resolution hint
+    my $lookup_by       = $opts{lookup_by};    # optional dispatch-resolution hint
+    my $agent_port      = $opts{agent_port};   # agent's operational serve port
 
     require IO::Socket::SSL;
     require JSON;
@@ -160,7 +161,8 @@ sub submit_pairing_request {
         csr      => $csr_pem,
         nonce    => $nonce,
     );
-    $request{lookup_by} = $lookup_by if defined $lookup_by;
+    $request{lookup_by} = $lookup_by  if defined $lookup_by;
+    $request{port}      = $agent_port if defined $agent_port;
     my $payload = JSON::encode_json(\%request);
 
     print $sock "POST /pair HTTP/1.0\r\n",

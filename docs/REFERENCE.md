@@ -113,17 +113,24 @@ a non-zero exit.
 
 #### Dispatch host resolution
 
-When a host argument matches a registered agent name, the connect address is
-resolved from the registry according to that agent's `lookup_by` field
-(set at pairing — see `approve --lookup-by`):
+When a host argument matches a registered agent name, both the connect
+address and the port are resolved from the registry (set at pairing).
+
+Address, from the agent's `lookup_by` field (see `approve --lookup-by`):
 
 - `hostname` (default): connect to the agent's registered hostname.
 - `ip`: connect to the IP recorded at pairing. Use this when the
   agent-reported hostname does not resolve from the dispatcher.
 
+Port, from the agent's `port` field (see `approve --agent-port`): the stored
+operational port is used automatically, so an agent on a non-default port is
+reachable without passing `--port` each time.
+
 A host argument that is not a registered agent, or one given with an explicit
-`:port`, is used verbatim (DNS resolution as before) — so ad-hoc and
-non-default-port targets still work. mTLS is unaffected: the agent
+`host:port`, is used verbatim (DNS resolution and the explicit port as
+before) — so ad-hoc and one-off-port targets still work. An explicit
+`host:port` overrides the stored port; the global `--port` applies only to
+hosts whose port is not otherwise determined. mTLS is unaffected: the agent
 certificate is validated against the CA, not matched to the connect address.
 `list-agents` always shows the registered hostname; with `lookup_by = ip`,
 `run`/`ping` output and logs show the IP actually connected to.
@@ -198,6 +205,7 @@ delivers the certificate on the agent's next poll.
 ```bash
 ctrl-exec approve <reqid>
 ctrl-exec approve <reqid> --lookup-by ip
+ctrl-exec approve <reqid> --agent-port 7450
 ```
 
 The request ID is shown by `list-requests` and `pairing-mode`.
@@ -209,6 +217,13 @@ The request ID is shown by `list-requests` and `pairing-mode`.
   agent-reported hostname does not resolve from the dispatcher. This overrides
   any value the agent suggested with `request-pairing --lookup-by`. See
   *Dispatch host resolution* under `run`.
+
+`--agent-port <n>`
+: The agent's operational port, stored in the registry as `port` and used by
+  dispatch so the agent is reachable without a per-command `--port`. Overrides
+  the port the agent reported at pairing (its configured serve port). Useful
+  when the dispatcher reaches the agent on a different port than the agent
+  binds — for example a port-mapped container. Default 7443.
 
 ---
 
@@ -232,8 +247,8 @@ ctrl-exec list-agents
 ctrl-exec list-agents --json
 ```
 
-Output columns: hostname, IP address, lookup mode, paired timestamp, cert
-expiry.
+Output columns: hostname, IP address, operational port, lookup mode, paired
+timestamp, cert expiry.
 
 With `--json`, returns an array of objects with fields:
 
@@ -242,6 +257,9 @@ With `--json`, returns an array of objects with fields:
 
 `ip`
 : IP address of the agent at last contact.
+
+`port`
+: The agent's operational port (default 7443). Used by dispatch.
 
 `lookup_by`
 : How dispatch resolves this agent: `hostname` (default) or `ip`. See
@@ -651,7 +669,10 @@ kill -HUP $(pidof ctrl-exec-agent)
 
 Submit a pairing request to a ctrl-exec host. Generates a key and CSR
 for this agent, connects to the ctrl-exec's pairing port (7444), and
-waits for the operator to approve the request.
+waits for the operator to approve the request. The agent's configured
+operational port (`port` in `agent.conf`, default 7443) is reported in the
+request and stored in the registry so dispatch can reach it without a
+per-command `--port`; the operator can override it with `approve --agent-port`.
 
 ```bash
 ctrl-exec-agent request-pairing --dispatcher <host>

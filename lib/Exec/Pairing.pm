@@ -256,9 +256,10 @@ sub approve_request {
 
     my $req = decode_json(_slurp($req_file));
 
-    # Dispatch-resolution preference: operator override (approve --lookup-by)
-    # wins over the agent-suggested value in the request; default 'hostname'.
+    # Dispatch-resolution preferences: operator override (approve flags) wins
+    # over the agent-suggested/reported value in the request; then the default.
     my $lookup_by = _effective_lookup_by($opts{lookup_by}, $req->{lookup_by});
+    my $port      = _effective_port($opts{port}, $req->{port});
 
     require Exec::CA;
 
@@ -312,6 +313,7 @@ sub approve_request {
         expiry            => $expiry // '',
         reqid             => $reqid,
         lookup_by         => $lookup_by,
+        port              => $port,
         dispatcher_serial => $disp_serial,
         serial_status     => (length $disp_serial ? 'current' : 'unknown'),
         serial_confirmed  => (length $disp_serial
@@ -365,6 +367,24 @@ sub _effective_lookup_by {
         return $v if defined $v && ($v eq 'ip' || $v eq 'hostname');
     }
     return 'hostname';
+}
+
+# Return $v as an integer if it is a valid TCP port (1..65535), else undef.
+sub _valid_port {
+    my ($v) = @_;
+    return (defined $v && $v =~ /^\d+$/ && $v >= 1 && $v <= 65535)
+        ? int($v) : undef;
+}
+
+# Effective operational port for an approval: operator override
+# (approve --agent-port) wins over the agent-reported port; default 7443.
+sub _effective_port {
+    my ($override, $reported) = @_;
+    for my $v ($override, $reported) {
+        my $p = _valid_port($v);
+        return $p if defined $p;
+    }
+    return 7443;
 }
 
 # --- interactive pairing helpers ---
@@ -497,13 +517,14 @@ sub _handle_pair_request {
         return;
     }
 
-    my $reqid     = _gen_reqid();
-    my $hostname  = $data->{hostname};
-    my $csr       = $data->{csr};
-    my $nonce     = $data->{nonce} // '';
-    my $lookup_by = _valid_lookup_by($data->{lookup_by});  # agent-suggested hint
-    my $received  = strftime('%Y-%m-%dT%H:%M:%SZ', gmtime);
-    my $code      = _pairing_code($csr);
+    my $reqid      = _gen_reqid();
+    my $hostname   = $data->{hostname};
+    my $csr        = $data->{csr};
+    my $nonce      = $data->{nonce} // '';
+    my $lookup_by  = _valid_lookup_by($data->{lookup_by});  # agent-suggested hint
+    my $agent_port = _valid_port($data->{port});            # agent-reported serve port
+    my $received   = strftime('%Y-%m-%dT%H:%M:%SZ', gmtime);
+    my $code       = _pairing_code($csr);
 
     # Queue depth check - expire stale entries first, then count remaining
     _expire_stale_requests($pairing_dir);
@@ -526,6 +547,7 @@ sub _handle_pair_request {
         csr       => $csr,
         nonce     => $nonce,
         lookup_by => $lookup_by,
+        port      => $agent_port,
         received  => $received,
         code      => $code,
     }));

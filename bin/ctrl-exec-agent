@@ -221,6 +221,14 @@ sub mode_request_pairing {
 
     my $host = hostname();
 
+    # Report the agent's configured operational port so the dispatcher can
+    # store it and reach this agent without a per-command --port. Read the
+    # config leniently: a missing or incomplete config must not block pairing.
+    my $agent_port = do {
+        my $cfg = eval { Exec::Agent::Config::load_config($CONFIG_PATH) };
+        ($cfg && $cfg->{port}) ? $cfg->{port} : 7443;
+    };
+
     print "Generating key and CSR for '$host'...\n" unless $background;
     my $pair = Exec::Agent::AgentPairing::generate_key_and_csr(
         hostname => $host,
@@ -240,6 +248,7 @@ sub mode_request_pairing {
         csr_pem    => $pair->{csr_pem},
         hostname   => $host,
         lookup_by  => $lookup_by,
+        agent_port => $agent_port,
     );
 
     unless ($submitted->{ok}) {

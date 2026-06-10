@@ -143,4 +143,21 @@ subtest '_effective_lookup_by: override beats suggested beats default' => sub {
         'invalid suggested ignored, falls to default';
 };
 
+subtest '_valid_port: accepts 1..65535, rejects others' => sub {
+    is Exec::Pairing::_valid_port(7450), 7450, 'valid port accepted';
+    is Exec::Pairing::_valid_port('7450'), 7450, 'numeric string coerced to int';
+    is Exec::Pairing::_valid_port(0),     undef, 'port 0 rejected';
+    is Exec::Pairing::_valid_port(99999), undef, 'out-of-range rejected';
+    is Exec::Pairing::_valid_port('abc'), undef, 'non-numeric rejected';
+    is Exec::Pairing::_valid_port(undef), undef, 'undef rejected';
+};
+
+subtest '_effective_port: override beats reported beats default' => sub {
+    is Exec::Pairing::_effective_port(7450, 7443), 7450, 'operator override wins';
+    is Exec::Pairing::_effective_port(undef, 7460), 7460, 'agent-reported used when no override';
+    is Exec::Pairing::_effective_port(undef, undef), 7443, 'defaults to 7443';
+    is Exec::Pairing::_effective_port(99999, 7460), 7460, 'invalid override ignored, reported used';
+    is Exec::Pairing::_effective_port(undef, 'bad'), 7443, 'invalid reported ignored, default used';
+};
+
 done_testing;
