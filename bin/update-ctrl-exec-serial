@@ -31,11 +31,10 @@
 
 set -euo pipefail
 
-SERIAL_FILE="/etc/ctrl-exec-agent/ctrl-exec-serial"
-AGENT_PID_FILE="/run/ctrl-exec-agent.pid"
-
-# Allow override via environment for non-standard installations
-SERIAL_FILE="${DISPATCHER_SERIAL_FILE:-$SERIAL_FILE}"
+# Paths default to the standard install locations; both can be overridden via
+# the environment for non-standard installations and for testing.
+SERIAL_FILE="${ENVEXEC_SERIAL_FILE:-/etc/ctrl-exec-agent/ctrl-exec-serial}"
+AGENT_PID_FILE="${ENVEXEC_AGENT_PIDFILE:-/run/ctrl-exec-agent.pid}"
 
 # --- argument validation ---
 
@@ -70,11 +69,19 @@ if [ ! -d "$SERIAL_DIR" ]; then
     exit 2
 fi
 
-# Write atomically via temp file in same directory
-TMP_FILE=$(mktemp "$SERIAL_DIR/.ctrl-exec-serial.XXXXXX")
-echo "$NEW_SERIAL" > "$TMP_FILE"
-chmod 0644 "$TMP_FILE"
-mv "$TMP_FILE" "$SERIAL_FILE"
+# Write atomically via temp file in the same directory. Any failure here is a
+# write failure (exit 2, per the documented codes) - wrap the sequence so that
+# 'set -e' does not surface mktemp's own exit status (1) instead.
+if ! {
+    TMP_FILE=$(mktemp "$SERIAL_DIR/.ctrl-exec-serial.XXXXXX") &&
+    echo "$NEW_SERIAL" > "$TMP_FILE" &&
+    chmod 0644 "$TMP_FILE" &&
+    mv "$TMP_FILE" "$SERIAL_FILE"
+}; then
+    echo "Failed to write serial file '$SERIAL_FILE'" >&2
+    [ -n "${TMP_FILE:-}" ] && rm -f "$TMP_FILE" 2>/dev/null
+    exit 2
+fi
 
 # --- reload agent ---
 # Send SIGHUP to reload the serial file without restarting.

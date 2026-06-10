@@ -32,6 +32,12 @@ unless (system('bash --version >/dev/null 2>&1') == 0) {
     plan skip_all => 'bash not available';
 }
 
+# Several subtests point the script's pid file at this test process so the
+# reload SIGHUP is delivered to a live process. Ignore SIGHUP process-wide so
+# that delivery cannot terminate the test (the default disposition). The
+# dedicated reload subtest installs a local handler to observe receipt.
+$SIG{HUP} = 'IGNORE';
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -273,14 +279,14 @@ subtest 'overwrites existing serial file' => sub {
     close $fh;
 
     run_script(
-        serial      => 'newserial1234ab',
+        serial      => 'feedface12345678',
         serial_file => $sfile,
         pid_file    => $pfile,
     );
 
     my $content = do { local $/; open my $rfh, '<', $sfile or die $!; <$rfh> };
-    like $content, qr/newserial1234ab/i, 'old serial overwritten with new';
-    unlike $content, qr/oldserial/,      'old serial not present';
+    like $content, qr/feedface12345678/i, 'old serial overwritten with new';
+    unlike $content, qr/oldserial/,        'old serial not present';
 };
 
 subtest 'uses default serial file path when env var not set' => sub {
