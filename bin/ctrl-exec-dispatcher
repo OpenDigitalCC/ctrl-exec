@@ -37,6 +37,7 @@ sub main {
         'agent-port=i' => \$opts{agent_port},
         'ip=s'        => \$opts{ip},
         'rename=s'    => \$opts{rename},
+        'tags=s'      => \$opts{tags},
     ) or die usage();
 
     my $mode = shift @ARGV // die usage();
@@ -186,6 +187,21 @@ sub mode_list_agents {
     if (!@$agents) {
         print "No registered agents.\n";
         return;
+    }
+
+    # Optional tag filter (Option C): match against registry-cached tags,
+    # refreshed on discovery. AND semantics across comma-separated key=value.
+    if (defined $opts->{tags}) {
+        my $want = eval { Exec::Registry::parse_tag_filter($opts->{tags}) };
+        if ($@) {
+            chomp(my $err = $@);
+            die "Invalid --tags filter: $err\n";
+        }
+        $agents = [ grep { Exec::Registry::tags_match($_->{tags}, $want) } @$agents ];
+        if (!@$agents) {
+            print "No agents match the tag filter.\n";
+            return;
+        }
     }
 
     if ($opts->{json}) {

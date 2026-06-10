@@ -374,4 +374,65 @@ my $dir = tempdir(CLEANUP => 1);
     like $@, qr/invalid agent name/, 'edit_agent: refuses invalid rename target';
 }
 
+# --- tags: storage, update_agent_tags, filter helpers ---
+
+{
+    my $rdir = tempdir(CLEANUP => 1);
+
+    Exec::Registry::register_agent(
+        hostname => 'tag-default', ip => '10.4.0.1', registry_dir => $rdir,
+    );
+    is_deeply Exec::Registry::get_agent(hostname => 'tag-default', registry_dir => $rdir)->{tags},
+        {}, 'register_agent: tags default to empty hash';
+
+    Exec::Registry::register_agent(
+        hostname => 'tag-set', ip => '10.4.0.2',
+        tags => { env => 'production', role => 'db' }, registry_dir => $rdir,
+    );
+    is_deeply Exec::Registry::get_agent(hostname => 'tag-set', registry_dir => $rdir)->{tags},
+        { env => 'production', role => 'db' }, 'register_agent: stores provided tags';
+
+    is Exec::Registry::update_agent_tags(
+        hostname => 'tag-default', tags => { env => 'staging' }, registry_dir => $rdir), 1,
+        'update_agent_tags: returns 1 when updated';
+    is_deeply Exec::Registry::get_agent(hostname => 'tag-default', registry_dir => $rdir)->{tags},
+        { env => 'staging' }, 'update_agent_tags: caches new tags';
+
+    is Exec::Registry::update_agent_tags(
+        hostname => 'not-registered', tags => { a => 'b' }, registry_dir => $rdir), 0,
+        'update_agent_tags: no-op (0) for unregistered agent';
+}
+
+# --- parse_tag_filter ---
+
+{
+    is_deeply Exec::Registry::parse_tag_filter('env=production'),
+        { env => 'production' }, 'parse_tag_filter: single pair';
+    is_deeply Exec::Registry::parse_tag_filter('env=production,role=db'),
+        { env => 'production', role => 'db' }, 'parse_tag_filter: multiple ANDed';
+    is_deeply Exec::Registry::parse_tag_filter('env='),
+        { env => '' }, 'parse_tag_filter: empty value allowed';
+
+    eval { Exec::Registry::parse_tag_filter('noequals') };
+    like $@, qr/invalid tag filter/, 'parse_tag_filter: rejects entry without =';
+    eval { Exec::Registry::parse_tag_filter('') };
+    like $@, qr/empty tag filter/, 'parse_tag_filter: rejects empty filter';
+}
+
+# --- tags_match ---
+
+{
+    my $tags = { env => 'production', role => 'db' };
+    ok  Exec::Registry::tags_match($tags, { env => 'production' }),
+        'tags_match: single key matches';
+    ok  Exec::Registry::tags_match($tags, { env => 'production', role => 'db' }),
+        'tags_match: all keys match (AND)';
+    ok !Exec::Registry::tags_match($tags, { env => 'staging' }),
+        'tags_match: wrong value does not match';
+    ok !Exec::Registry::tags_match($tags, { zone => 'eu' }),
+        'tags_match: missing key does not match';
+    ok !Exec::Registry::tags_match({}, { env => 'production' }),
+        'tags_match: empty tags never match a non-empty filter';
+}
+
 done_testing;

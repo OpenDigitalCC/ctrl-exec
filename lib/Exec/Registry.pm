@@ -50,6 +50,7 @@ sub register_agent {
         reqid             => $opts{reqid}             // '',
         lookup_by         => _norm_lookup_by($opts{lookup_by}),
         port              => _norm_port($opts{port}),
+        tags              => (ref $opts{tags} eq 'HASH' ? $opts{tags} : {}),
         dispatcher_serial => $opts{dispatcher_serial} // '',
         serial_status     => $opts{serial_status}     // 'unknown',
         serial_broadcast  => $opts{serial_broadcast}  // '',
@@ -114,6 +115,28 @@ sub update_expiry {
     $record->{expiry}   = $opts{expiry};
 
     _write_atomic($path, encode_json($record));
+}
+
+# Refresh the cached tags for an existing agent. Tags are reported live by the
+# agent in /capabilities; discovery calls this to cache them in the registry so
+# list-agents --tags can filter offline (Option C). Replaces the tags field.
+# No-op (returns 0) if the agent is not registered; returns 1 when updated.
+#
+# Required opts:
+#   hostname => $str
+#   tags     => \%hash   (non-hash normalises to {})
+sub update_agent_tags {
+    my (%opts) = @_;
+    my $hostname = $opts{hostname} or croak "hostname required";
+    my $dir      = $opts{registry_dir} // $REGISTRY_DIR;
+    my $path     = "$dir/$hostname.json";
+
+    return 0 unless -f $path;
+    my $record = eval { decode_json(_slurp($path)) } or return 0;
+
+    $record->{tags} = (ref $opts{tags} eq 'HASH' ? $opts{tags} : {});
+    _write_atomic($path, encode_json($record));
+    return 1;
 }
 
 # Return a list of all registered agents as an arrayref of hashrefs,
@@ -264,6 +287,34 @@ sub edit_agent {
 
     _write_atomic($path, encode_json($record));
     return $record;
+}
+
+# Parse a --tags filter string into a hashref of wanted tag key => value.
+# Accepts "key=value" or comma-separated "k1=v1,k2=v2"; all pairs must match
+# (AND). Dies on a malformed entry (no '=' or empty key) or an empty filter.
+sub parse_tag_filter {
+    my ($spec) = @_;
+    my %want;
+    for my $pair (split /,/, ($spec // '')) {
+        next unless length $pair;
+        my ($k, $v) = split /=/, $pair, 2;
+        croak "invalid tag filter '$pair' (expected key=value)"
+            unless defined $k && length $k && defined $v;
+        $want{$k} = $v;
+    }
+    croak "empty tag filter (expected key=value[,key=value...])" unless %want;
+    return \%want;
+}
+
+# True if an agent's cached tags satisfy the filter: every wanted key is
+# present with the exact value.
+sub tags_match {
+    my ($tags, $want) = @_;
+    $tags //= {};
+    for my $k (keys %$want) {
+        return 0 unless defined $tags->{$k} && $tags->{$k} eq $want->{$k};
+    }
+    return 1;
 }
 
 # Return list of hostnames only - convenience for building host lists

@@ -418,6 +418,11 @@ sub _handle_discovery {
     for my $r (@$results) {
         my $h = $r->{host} or next;
         $by_host{$h} = $r;
+        # Cache the live tags in the registry so list-agents --tags can filter
+        # offline (Option C). No-op for hosts that are not registered.
+        if (($r->{status} // '') eq 'ok' && ref $r->{tags} eq 'HASH') {
+            eval { Exec::Registry::update_agent_tags(hostname => $h, tags => $r->{tags}) };
+        }
     }
 
     _send_json($conn, 200, { ok => JSON::true, hosts => \%by_host });

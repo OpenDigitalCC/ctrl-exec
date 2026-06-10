@@ -244,6 +244,9 @@ lookup, and each agent is queried at its registry-resolved address and port
 itself, that value appears as a `reported_hostname` field on the entry; it is
 omitted when it matches the registry name.
 
+Discovery also refreshes each registered agent's cached `tags` in the registry
+from this live response, so `ctrl-exec list-agents --tags` can filter offline.
+
 ---
 
 ## HTTP status codes

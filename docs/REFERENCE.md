@@ -250,10 +250,21 @@ List all registered (paired) agents.
 ```bash
 ctrl-exec list-agents
 ctrl-exec list-agents --json
+ctrl-exec list-agents --tags env=production
+ctrl-exec list-agents --tags env=production,role=database
 ```
 
 Output columns: hostname, IP address, operational port, lookup mode, paired
 timestamp, cert expiry.
+
+`--tags <key=value[,key=value...]>`
+: Filter to agents whose cached tags match every given `key=value` pair (AND).
+  Tags are read from the registry cache, not by querying agents live, so the
+  filter is fast and works offline. The cache is populated and refreshed by
+  `discovery` (which reads each agent's live tags from `/capabilities`); a
+  newly paired agent shows no tags until the first discovery against it. Tag
+  values are matched exactly; this filter syntax cannot express commas within
+  a value. Tags appear in the `--json` output under the `tags` field.
 
 With `--json`, returns an array of objects with fields:
 
@@ -269,6 +280,11 @@ With `--json`, returns an array of objects with fields:
 `lookup_by`
 : How dispatch resolves this agent: `hostname` (default) or `ip`. See
   *Dispatch host resolution* under `run`.
+
+`tags`
+: Object of the agent's key/value tags, cached from `/capabilities` on the
+  last `discovery`. Empty `{}` until the first discovery against the agent.
+  Used by `--tags`.
 
 `paired_at`
 : ISO 8601 timestamp of when the agent was paired.
