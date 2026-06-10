@@ -3,6 +3,7 @@ package Exec::Agent::Config;
 use strict;
 use warnings;
 use Carp qw(croak);
+use Cwd  qw(abs_path);
 use Exec::Log qw();
 
 
@@ -199,12 +200,22 @@ sub validate_script {
 }
 
 # Return true if $path is under any directory in @$dirs.
-# Uses string prefix matching after normalising trailing slashes.
+#
+# When the script exists - the case that matters at execution time - the path
+# and each directory are resolved with abs_path so symlinks and '..' are
+# collapsed: an allowlist entry pointing at a symlink that escapes an approved
+# directory, or one using '..' to climb out, is then correctly rejected (a
+# plain string prefix would miss both). When the path does not exist (e.g. a
+# not-yet-installed script being filtered at config load time) it falls back
+# to the literal path; such an entry cannot be executed anyway, and once the
+# file exists the execution-time check resolves it.
 sub _path_in_dirs {
     my ($path, $dirs) = @_;
+    my $real = abs_path($path) // $path;
     for my $dir (@$dirs) {
-        $dir =~ s{/+$}{};   # strip trailing slash
-        return 1 if index($path, "$dir/") == 0;
+        my $rdir = abs_path($dir) // $dir;
+        $rdir =~ s{/+$}{};   # strip trailing slash
+        return 1 if $real eq $rdir || index($real, "$rdir/") == 0;
     }
     return 0;
 }

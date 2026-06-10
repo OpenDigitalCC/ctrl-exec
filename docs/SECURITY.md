@@ -131,7 +131,10 @@ Script directory restriction
 : With `script_dirs` set in `agent.conf`, any allowlist entry pointing outside
   an approved directory is rejected at load time. The check is repeated at
   execution time, guarding against allowlist modifications between agent startup
-  and a run request. When not set, any absolute path is accepted.
+  and a run request. At execution time the path is resolved with `abs_path`
+  before the comparison, so an entry that uses `..` or a symlink to escape an
+  approved directory is rejected on the real, canonical path. When `script_dirs`
+  is not set, any absolute path is accepted.
 
 Allowlist is server-enforced
 : The allowlist is validated on the agent, not trusted from the ctrl-exec

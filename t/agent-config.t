@@ -289,6 +289,32 @@ subtest 'validate_script: rejects path outside script_dirs at execution time' =>
     like $warn, qr/not in script_dirs/, 'warning issued at execution time';
 };
 
+subtest '_path_in_dirs: resolves symlinks and .. for existing paths' => sub {
+    my $base     = tempdir(CLEANUP => 1);
+    my $approved = "$base/approved";
+    my $outside  = "$base/outside";
+    mkdir $approved or die $!;
+    mkdir $outside  or die $!;
+
+    open my $fh, '>', "$approved/ok.sh" or die $!;
+    print $fh "#!/bin/sh\n"; close $fh;
+    ok Exec::Agent::Config::_path_in_dirs("$approved/ok.sh", [$approved]),
+        'real script under approved dir is accepted';
+
+    open $fh, '>', "$outside/evil.sh" or die $!;
+    print $fh "#!/bin/sh\n"; close $fh;
+
+  SKIP: {
+        symlink("$outside/evil.sh", "$approved/link.sh")
+            or skip 'symlinks not supported here', 1;
+        ok !Exec::Agent::Config::_path_in_dirs("$approved/link.sh", [$approved]),
+            'symlink escaping the approved dir is rejected (resolved by abs_path)';
+    }
+
+    ok !Exec::Agent::Config::_path_in_dirs("$approved/../outside/evil.sh", [$approved]),
+        '.. escaping the approved dir is rejected';
+};
+
 subtest 'validate_script: no script_dirs means no restriction at execution time' => sub {
     my $al = { 'any' => '/anywhere/script.sh' };
     my $r  = Exec::Agent::Config::validate_script('any', $al, undef);
