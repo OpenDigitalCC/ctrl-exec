@@ -403,13 +403,21 @@ sub _handle_discovery {
     # Engine forks grandchildren and collects them with waitpid. Without this
     # guard the reaper steals grandchildren before waitpid can collect them,
     # returning a partial results array. local restores the handler on scope exit.
+    # Resolve each registry name to its connect target (lookup_by + stored
+    # port) while keying results by the canonical registry name.
+    my @entries = map {
+        m/:\d+$/
+            ? $_
+            : { name => $_, target => Exec::Registry::resolve_target(hostname => $_) }
+    } @$hosts;
+
     local $SIG{CHLD} = 'DEFAULT';
     my $results = Exec::Engine::capabilities_all(
-        hosts  => $hosts,
+        hosts  => \@entries,
         config => $config,
     );
 
-    # Reshape from array to hash keyed by hostname for easy lookup
+    # Reshape from array to hash keyed by the canonical (registry) hostname.
     my %by_host;
     for my $r (@$results) {
         my $h = $r->{host} or next;
@@ -484,8 +492,11 @@ sub _handle_openapi_live {
         # guard the reaper steals grandchildren before waitpid can collect them,
         # returning a partial results array. local restores the handler on scope exit.
         local $SIG{CHLD} = 'DEFAULT';
+        my @entries = map {
+            { name => $_, target => Exec::Registry::resolve_target(hostname => $_) }
+        } @$hostnames;
         my $results = Exec::Engine::capabilities_all(
-            hosts  => $hostnames,
+            hosts  => \@entries,
             config => $config,
         );
         my %seen;

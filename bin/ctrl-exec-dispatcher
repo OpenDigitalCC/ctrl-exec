@@ -71,7 +71,9 @@ sub main {
 sub _resolve_dispatch_hosts {
     my ($hosts) = @_;
     return [ map {
-        /:\d+$/ ? $_ : Exec::Registry::resolve_target(hostname => $_)
+        /:\d+$/
+            ? $_   # explicit host:port - name and connect target are the same
+            : { name => $_, target => Exec::Registry::resolve_target(hostname => $_) }
     } @$hosts ];
 }
 
@@ -432,6 +434,7 @@ sub _format_run_results {
     my ($results) = @_;
     for my $r (@$results) {
         my $host   = $r->{host}  // '?';
+        $host .= " ($r->{reported_hostname})" if defined $r->{reported_hostname};
         my $exit   = $r->{exit}  // -1;
         my $rtt    = $r->{rtt}   // '';
         my $reqid  = $r->{reqid} // '';
@@ -458,8 +461,10 @@ sub _format_ping_results {
         'HOST', 'STATUS', 'RTT', 'CERT EXPIRY', 'VERSION';
     printf "%s\n", '-' x 85;
     for my $r (@$results) {
+        my $host = $r->{host} // '?';
+        $host .= " ($r->{reported_hostname})" if defined $r->{reported_hostname};
         printf "%-30s  %-8s  %-8s  %-28s  %s\n",
-            $r->{host}    // '?',
+            $host,
             $r->{status}  // 'error',
             $r->{rtt}     // '?',
             $r->{expiry}  // '?',

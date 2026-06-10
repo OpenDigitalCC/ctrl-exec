@@ -238,7 +238,11 @@ Response:
 `tags` is an object of key/value strings defined in the `[tags]` section of
 the agent's `agent.conf`. An agent with no tags configured returns `"tags": {}`.
 
-Results are keyed by hostname for direct lookup.
+Results are keyed by the agent's **registry name** (canonical) for direct
+lookup, and each agent is queried at its registry-resolved address and port
+(see `lookup_by` / `port`). When the agent reports a different hostname for
+itself, that value appears as a `reported_hostname` field on the entry; it is
+omitted when it matches the registry name.
 
 ---
 

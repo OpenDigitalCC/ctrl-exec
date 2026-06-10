@@ -132,8 +132,13 @@ before) — so ad-hoc and one-off-port targets still work. An explicit
 `host:port` overrides the stored port; the global `--port` applies only to
 hosts whose port is not otherwise determined. mTLS is unaffected: the agent
 certificate is validated against the CA, not matched to the connect address.
-`list-agents` always shows the registered hostname; with `lookup_by = ip`,
-`run`/`ping` output and logs show the IP actually connected to.
+
+The registry name is canonical: `run`, `ping`, and `discovery` display and key
+results by the name the agent was addressed by (its registry name), regardless
+of the address actually connected to. When the agent reports a different
+hostname for itself, that reported name is shown in brackets — for example
+`web-01 (vm-7a3f)` — or carried as `reported_hostname` in JSON / discovery
+output.
 
 ---
 

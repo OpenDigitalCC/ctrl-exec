@@ -46,18 +46,21 @@ sub dispatch_all {
     my $max_hosts = $opts{max_hosts} // 500;
     croak "too many hosts (max $max_hosts)" if @$hosts > $max_hosts;
 
+    my @entries = map { [ _host_entry($_) ] } @$hosts;
+
     Exec::Log::log_action('INFO', {
         ACTION => 'dispatch',
         SCRIPT => $script,
-        HOSTS  => join(',', @$hosts),
+        HOSTS  => join(',', map { $_->[0] } @entries),
         REQID  => $reqid,
     });
 
     my @results;
     my %pipes;
 
-    for my $host_str (@$hosts) {
-        my ($host, $hport) = parse_host($host_str, $port);
+    for my $entry (@entries) {
+        my ($name, $target) = @$entry;
+        my ($host, $hport)  = parse_host($target, $port);
         pipe my $r, my $w or die "pipe: $!";
 
         my $pid = fork();
@@ -81,7 +84,7 @@ sub dispatch_all {
         }
 
         close $w;
-        $pipes{$pid} = { fh => $r, host => $host_str };
+        $pipes{$pid} = { fh => $r, name => $name, target => $target };
     }
 
     while (%pipes) {
@@ -90,13 +93,14 @@ sub dispatch_all {
         next unless exists $pipes{$pid};
 
         my $fh   = $pipes{$pid}{fh};
-        my $host = $pipes{$pid}{host};
+        my $name = $pipes{$pid}{name};
         my $raw  = do { local $/; <$fh> };
         close $fh;
 
         my $result = eval { decode_json($raw) }
-            // { host => $host, script => $script, exit => -1,
+            // { script => $script, exit => -1,
                  error => 'no response from child', reqid => $reqid };
+        _canonicalise($result, $name);
         push @results, $result;
         delete $pipes{$pid};
     }
@@ -129,11 +133,14 @@ sub ping_all {
     my $max_hosts = $opts{max_hosts} // 500;
     croak "too many hosts (max $max_hosts)" if @$hosts > $max_hosts;
 
+    my @entries = map { [ _host_entry($_) ] } @$hosts;
+
     my @results;
     my %pipes;
 
-    for my $host_str (@$hosts) {
-        my ($host, $hport) = parse_host($host_str, $port);
+    for my $entry (@entries) {
+        my ($name, $target) = @$entry;
+        my ($host, $hport)  = parse_host($target, $port);
         pipe my $r, my $w or die "pipe: $!";
 
         my $pid = fork();
@@ -153,7 +160,7 @@ sub ping_all {
         }
 
         close $w;
-        $pipes{$pid} = { fh => $r, host => $host_str };
+        $pipes{$pid} = { fh => $r, name => $name, target => $target };
     }
 
     while (%pipes) {
@@ -166,14 +173,14 @@ sub ping_all {
         close $fh;
 
         my $result = eval { decode_json($raw) }
-            // { host => $pipes{$pid}{host}, status => 'error',
-                 error => 'no response from child' };
+            // { status => 'error', error => 'no response from child' };
 
-        # Trigger cert renewal if cert is past half-life
+        # Trigger cert renewal if cert is past half-life. Renewal connects to
+        # the resolved target, not the canonical name.
         if (($result->{status} // '') eq 'ok' && $result->{expiry}) {
             my $cert_days = $config->{cert_days} // 365;
             if (_renewal_due($result->{expiry}, $cert_days)) {
-                my ($rhost, $rport) = parse_host($pipes{$pid}{host}, $port);
+                my ($rhost, $rport) = parse_host($pipes{$pid}{target}, $port);
                 eval {
                     _renew_one(
                         host   => $rhost,
@@ -192,6 +199,7 @@ sub ping_all {
             }
         }
 
+        _canonicalise($result, $pipes{$pid}{name});
         push @results, $result;
         delete $pipes{$pid};
     }
@@ -222,11 +230,14 @@ sub capabilities_all {
     my $max_hosts = $opts{max_hosts} // 500;
     croak "too many hosts (max $max_hosts)" if @$hosts > $max_hosts;
 
+    my @entries = map { [ _host_entry($_) ] } @$hosts;
+
     my @results;
     my %pipes;
 
-    for my $host_str (@$hosts) {
-        my ($host, $hport) = parse_host($host_str, $port);
+    for my $entry (@entries) {
+        my ($name, $target) = @$entry;
+        my ($host, $hport)  = parse_host($target, $port);
         pipe my $r, my $w or die "pipe: $!";
 
         my $pid = fork();
@@ -245,7 +256,7 @@ sub capabilities_all {
         }
 
         close $w;
-        $pipes{$pid} = { fh => $r, host => $host_str };
+        $pipes{$pid} = { fh => $r, name => $name, target => $target };
     }
 
     while (%pipes) {
@@ -258,13 +269,44 @@ sub capabilities_all {
         close $fh;
 
         my $result = eval { decode_json($raw) }
-            // { host => $pipes{$pid}{host}, status => 'error',
-                 error => 'no response from child' };
+            // { status => 'error', error => 'no response from child' };
+        _canonicalise($result, $pipes{$pid}{name});
         push @results, $result;
         delete $pipes{$pid};
     }
 
     return \@results;
+}
+
+# Normalise a host entry into (canonical_name, connect_target). An entry may
+# be a plain string (the name is also the connect target) or a hashref
+# { name => $canonical, target => $connect_target }. The canonical name is
+# what results are keyed/displayed by; the target is what we connect to. This
+# lets callers address an agent by its registry name while connecting to a
+# resolved IP/port (see Exec::Registry::resolve_target).
+sub _host_entry {
+    my ($entry) = @_;
+    if (ref $entry eq 'HASH') {
+        my $name   = $entry->{name}   // $entry->{target};
+        my $target = $entry->{target} // $entry->{name};
+        return ($name, $target);
+    }
+    return ($entry, $entry);
+}
+
+# Set a result's canonical host to the name it was addressed by (the registry
+# name), and keep the agent-reported hostname only when it differs. Callers
+# display $result->{host} as canonical and may show reported_hostname in
+# brackets when present.
+sub _canonicalise {
+    my ($result, $name) = @_;
+    $result->{host} = $name;
+    if (defined $result->{reported_hostname}
+        && (!length $result->{reported_hostname}
+            || $result->{reported_hostname} eq $name)) {
+        delete $result->{reported_hostname};
+    }
+    return $result;
 }
 
 # Parse a host string into (host, port).
@@ -352,10 +394,13 @@ sub _dispatch_one {
         };
     }
 
-    my $result = eval { decode_json($resp->content) }
-        // { host => $host, exit => -1, error => 'invalid JSON response' };
+    my $decoded = eval { decode_json($resp->content) };
+    my $result  = $decoded // { exit => -1, error => 'invalid JSON response' };
 
-    $result->{host}  //= $host;
+    # Keep the agent's self-reported hostname; the caller sets the canonical
+    # host from the name the agent was addressed by.
+    $result->{reported_hostname} = $decoded->{host}
+        if $decoded && defined $decoded->{host} && length $decoded->{host};
     $result->{rtt}     = $rtt;
     $result->{reqid} //= $reqid;
 
@@ -414,11 +459,12 @@ sub _ping_one {
         return { host => $host, status => 'error', error => $err, rtt => $rtt };
     }
 
-    my $result = eval { decode_json($resp->content) }
-        // { host => $host, status => 'error', error => 'invalid JSON' };
+    my $decoded = eval { decode_json($resp->content) };
+    my $result  = $decoded // { status => 'error', error => 'invalid JSON' };
 
+    $result->{reported_hostname} = $decoded->{host}
+        if $decoded && defined $decoded->{host} && length $decoded->{host};
     $result->{rtt}  = $rtt;
-    $result->{host} //= $host;
 
     Exec::Log::log_action('INFO', {
         ACTION => 'ping',
@@ -458,11 +504,12 @@ sub _capabilities_one {
         return { host => $host, status => 'error', error => $err, rtt => $rtt };
     }
 
-    my $result = eval { decode_json($resp->content) }
-        // { host => $host, status => 'error', error => 'invalid JSON' };
+    my $decoded = eval { decode_json($resp->content) };
+    my $result  = $decoded // { status => 'error', error => 'invalid JSON' };
 
+    $result->{reported_hostname} = $decoded->{host}
+        if $decoded && defined $decoded->{host} && length $decoded->{host};
     $result->{rtt}  = $rtt;
-    $result->{host} //= $host;
 
     Exec::Log::log_action('INFO', {
         ACTION  => 'capabilities',

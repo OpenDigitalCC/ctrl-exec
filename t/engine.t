@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
-use Test::More tests => 21;
+use Test::More;
 use FindBin qw($Bin);
 use lib "$Bin/../lib";
 
@@ -175,6 +175,45 @@ use Exec::Engine qw();
     is $results->[0]{exit},   0,     'dispatch_all: exit code from agent';
     is $results->[0]{stdout}, "hi\n",'dispatch_all: stdout from agent';
     is $results->[0]{script}, 'hello','dispatch_all: script echoed in result';
+}
+
+# --- _host_entry: canonical name vs connect target ---
+
+{
+    my ($name, $target) = Exec::Engine::_host_entry('web-01');
+    is $name,   'web-01', '_host_entry: plain string is the name';
+    is $target, 'web-01', '_host_entry: plain string is also the target';
+
+    ($name, $target) = Exec::Engine::_host_entry({ name => 'web-01', target => '10.0.0.7:7450' });
+    is $name,   'web-01',       '_host_entry: hashref name';
+    is $target, '10.0.0.7:7450','_host_entry: hashref target';
+
+    ($name, $target) = Exec::Engine::_host_entry({ name => 'only-name' });
+    is $name,   'only-name', '_host_entry: name-only hashref name';
+    is $target, 'only-name', '_host_entry: name-only hashref falls back to name for target';
+}
+
+# --- _canonicalise: host = canonical name, reported_hostname only when differs ---
+
+{
+    my $r = { status => 'ok', reported_hostname => 'web-01' };
+    Exec::Engine::_canonicalise($r, 'web-01');
+    is $r->{host}, 'web-01', '_canonicalise: sets canonical host';
+    ok !exists $r->{reported_hostname}, '_canonicalise: drops reported equal to name';
+
+    $r = { status => 'ok', reported_hostname => 'vm-7a3f' };
+    Exec::Engine::_canonicalise($r, 'web-01');
+    is $r->{host}, 'web-01', '_canonicalise: canonical host when reported differs';
+    is $r->{reported_hostname}, 'vm-7a3f', '_canonicalise: keeps differing reported hostname';
+
+    $r = { status => 'error', error => 'no response from child' };
+    Exec::Engine::_canonicalise($r, 'web-01');
+    is $r->{host}, 'web-01', '_canonicalise: sets host on error results too';
+    ok !exists $r->{reported_hostname}, '_canonicalise: no reported when absent';
+
+    $r = { status => 'ok', reported_hostname => '' };
+    Exec::Engine::_canonicalise($r, 'web-01');
+    ok !exists $r->{reported_hostname}, '_canonicalise: drops empty reported hostname';
 }
 
 done_testing;
