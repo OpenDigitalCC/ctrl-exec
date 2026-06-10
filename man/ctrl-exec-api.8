@@ -1,0 +1,51 @@
+.TH CTRL-EXEC-API 8 "2026-06-10" "ctrl-exec" "ctrl-exec Manual"
+.SH NAME
+ctrl-exec-api \- HTTP API server for ctrl-exec
+.SH SYNOPSIS
+.B ctrl-exec-api
+.RI [ options ]
+.SH DESCRIPTION
+.B ctrl-exec-api
+exposes the ctrl-exec run, ping, discovery, and status operations over HTTP
+on the control host. It reads its configuration from
+.B ctrl-exec.conf
+and uses the same auth hook as the CLI. By default it binds to
+.I 127.0.0.1
+on port 7445; set
+.B api_bind
+and
+.B api_port
+in the configuration to change this. The hook is read at startup, so
+restart the service after changing it.
+.SH OPTIONS
+.TP
+.BI \-\-config " path"
+Path to
+.BR ctrl-exec.conf .
+Default:
+.IR /etc/ctrl-exec/ctrl-exec.conf .
+.SH CONFIGURATION
+Relevant keys in
+.BR ctrl-exec.conf :
+.TP
+.B api_port
+Port to listen on (default 7445).
+.TP
+.B api_bind
+Bind address (default 127.0.0.1).
+.TP
+.B api_cert ", " api_key
+TLS certificate and key (plain HTTP if absent).
+.TP
+.B auth_hook
+Auth hook executable.
+.TP
+.B auth_deny_generic
+When set, denied requests return a generic 403 without the specific reason.
+.SH SEE ALSO
+.BR ctrl-exec-dispatcher (8),
+.BR ctrl-exec-agent (8).
+.PP
+Full HTTP API reference: the API document shipped with ctrl-exec and
+.UR https://github.com/OpenDigitalCC/ctrl-exec
+.UE .

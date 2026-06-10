@@ -1,0 +1,99 @@
+.TH CTRL-EXEC-AGENT 8 "2026-06-10" "ctrl-exec" "ctrl-exec Manual"
+.SH NAME
+ctrl-exec-agent \- mTLS remote script execution agent
+.SH SYNOPSIS
+.B ctrl-exec-agent
+.RI [ mode ]
+.RI [ options ]
+.br
+.B cea
+.RI [ mode ]
+.RI [ options ]
+.SH DESCRIPTION
+.B ctrl-exec-agent
+runs on a managed host and executes only the scripts named in a per-host
+allowlist, on request from a paired control host over HTTPS with mutual
+certificate authentication. There is no shell: arguments are passed directly
+to the named program. The agent listens on port 7443 by default and reloads
+its allowlist, revocation list, and dispatcher serial on
+.BR SIGHUP .
+.PP
+.B cea
+is a shortcut for
+.BR ctrl-exec-agent .
+.SH MODES
+The first non-option argument selects a mode; the default is
+.BR serve .
+.TP
+.B serve
+Start the agent server in the foreground.
+.TP
+.B request-pairing
+Generate a key and CSR and submit a pairing request to a control host (see
+.B \-\-dispatcher
+below). After the operator approves, the signed certificate is stored.
+.TP
+.B pairing-status
+Show pairing and certificate status.
+.TP
+.B self-check
+Validate the local configuration, allowlist, and certificate files. No
+network connection is made.
+.TP
+.B self-ping
+Connect to the running agent on the loopback address over mTLS and send a
+ping. A 403 serial-mismatch response is expected and reported as success: it
+confirms the port is listening, the TLS stack works, and the agent is
+enforcing serial policy. Requires the agent to be running and paired.
+.SH OPTIONS
+.TP
+.BI \-\-config " path"
+Path to
+.BR agent.conf .
+Default:
+.IR /etc/ctrl-exec-agent/agent.conf .
+.TP
+.BI \-\-allowlist " path"
+Path to
+.BR scripts.conf .
+Default:
+.IR /etc/ctrl-exec-agent/scripts.conf .
+.TP
+.BI \-\-port " n"
+Override the pairing port for
+.BR request-pairing .
+Default: 7444.
+.TP
+.BI \-\-lookup-by " ip|hostname"
+Suggest how the control host should resolve this agent for dispatch
+(default: hostname). The control host's
+.B "approve \-\-lookup-by"
+overrides it.
+.TP
+.B \-\-background
+Non-interactive pairing: print the request ID and wait for approval in the
+background. For orchestrated installations.
+.TP
+.BI \-\-timeout " n"
+Seconds to wait for approval in background mode (default 30, max 600).
+.SH FILES
+.TP
+.I /etc/ctrl-exec-agent/agent.conf
+Agent configuration: listen port, certificate paths, optional
+.BR allowed_ips ,
+rate limiting, and a
+.B [tags]
+section.
+.TP
+.I /etc/ctrl-exec-agent/scripts.conf
+Allowlist mapping script names to executable paths.
+.TP
+.I /opt/ctrl-exec-scripts
+Default directory for agent scripts.
+.SH SEE ALSO
+.BR ctrl-exec-dispatcher (8),
+.BR ctrl-exec-api (8).
+.PP
+Full reference: the REFERENCE document shipped with ctrl-exec and
+.UR https://github.com/OpenDigitalCC/ctrl-exec
+.UE .

@@ -1,0 +1,119 @@
+.TH CTRL-EXEC-DISPATCHER 8 "2026-06-10" "ctrl-exec" "ctrl-exec Manual"
+.SH NAME
+ctrl-exec-dispatcher \- mTLS remote script execution control host
+.SH SYNOPSIS
+.B ctrl-exec-dispatcher
+.I mode
+.RI [ options ]
+.RI [ args ]
+.br
+.B ced
+.I mode
+.RI [ options ]
+.RI [ args ]
+.SH DESCRIPTION
+.B ctrl-exec-dispatcher
+runs on the control host. It manages the private certificate authority,
+the agent registry, pairing, certificate rotation, and dispatch of commands
+to paired agents over HTTPS with mutual certificate authentication.
+.PP
+.B ced
+is a shortcut for
+.BR ctrl-exec-dispatcher .
+.SH MODES
+.TP
+.BI "run " "host[:port] [host...] script " [ "\-\- arg..." ]
+Run an allowlisted script on one or more agents in parallel. A host argument
+matching a registered agent is resolved from the registry (address and port);
+others are used verbatim. Everything after
+.B \-\-
+is passed to the script.
+.TP
+.BI "ping " "host[:port] [host...]"
+Test mTLS connectivity and report certificate expiry and agent version.
+.TP
+.B pairing-mode
+Accept agent pairing requests interactively on port 7444.
+.TP
+.B list-requests
+Show pending pairing requests.
+.TP
+.BI "approve " reqid
+Approve a pending request. Accepts
+.BI \-\-lookup-by " ip|hostname"
+and
+.BI \-\-agent-port " n"
+to set how dispatch reaches the agent.
+.TP
+.BI "deny " reqid
+Deny a pending request.
+.TP
+.B list-agents
+List registered agents. Accepts
+.BI \-\-tags " key=value[,key=value...]"
+to filter on registry-cached tags (AND), and
+.B \-\-json
+for machine output.
+.TP
+.BI "edit-agent " name
+Edit a registered agent without re-pairing:
+.BI \-\-rename " new"
+.RB "/ " \-\-ip
+.RB "/ " \-\-agent-port
+.RB "/ " \-\-lookup-by .
+.TP
+.BI "unpair " hostname
+Remove a paired agent from the registry.
+.TP
+.B setup-ca
+One-time certificate authority initialisation.
+.TP
+.B setup-ctrl-exec
+Generate the control-host key and certificate.
+.TP
+.B rotate-cert
+Rotate the control-host certificate and broadcast the new serial.
+.TP
+.B serial-status
+Show the control-host serial and per-agent serial state.
+.SH OPTIONS
+.TP
+.BI \-\-config " path"
+Path to
+.BR ctrl-exec.conf .
+Default:
+.IR /etc/ctrl-exec/ctrl-exec.conf .
+.TP
+.BI \-\-port " n"
+Override the agent port (7443) for all hosts in this invocation.
+.TP
+.BI \-\-username " name"
+Advisory username in the request context, forwarded to auth hooks.
+.TP
+.BI \-\-token " token"
+Auth token in the request context (default:
+.BR $ENVEXEC_TOKEN ).
+.TP
+.B \-\-json
+Output results as JSON.
+.SH FILES
+.TP
+.I /etc/ctrl-exec/ctrl-exec.conf
+Control-host configuration.
+.TP
+.I /etc/ctrl-exec/auth-hook
+Optional executable authorising
+.B run
+and
+.B ping
+requests.
+.TP
+.I /var/lib/ctrl-exec
+CA, agent registry, pairing queue, locks, and run results.
+.SH SEE ALSO
+.BR ctrl-exec-agent (8),
+.BR ctrl-exec-api (8).
+.PP
+Full reference: the REFERENCE document shipped with ctrl-exec and
+.UR https://github.com/OpenDigitalCC/ctrl-exec
+.UE .
