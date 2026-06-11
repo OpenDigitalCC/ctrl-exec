@@ -28,6 +28,7 @@ PAIRING_DIR="/var/lib/ctrl-exec/pairing"
 AGENTS_DIR="/var/lib/ctrl-exec/agents"
 LOCKS_DIR="/var/lib/ctrl-exec/locks"
 RUNS_DIR="/var/lib/ctrl-exec/runs"
+AGENT_RUNS_DIR="/var/lib/ctrl-exec-agent/runs"
 SYSTEMD_DIR="/etc/systemd/system"
 AGENT_SERVICE="ctrl-exec-agent.service"
 API_SERVICE="ctrl-exec-api.service"
@@ -519,6 +520,20 @@ install_agent() {
         info "Script directory already exists: $SCRIPTS_DIR"
     fi
 
+    # Async result store - the agent writes detached-job results here, keyed by
+    # reqid, plus a .locks subdir for agent-side concurrency. The agent runs as
+    # $AGENT_USER and must write it, so it is owned by the agent user (0750).
+    # Under systemd the unit's StateDirectory also creates/owns it; this covers
+    # non-systemd hosts (openrc/openwrt) and first start before the unit runs.
+    if [[ ! -d "$AGENT_RUNS_DIR" ]]; then
+        mkdir -p "$AGENT_RUNS_DIR"
+        chmod 750 "$AGENT_RUNS_DIR"
+        chown "$AGENT_USER":"$AGENT_GROUP" "$AGENT_RUNS_DIR"
+        info "Async result store created: $AGENT_RUNS_DIR"
+    else
+        info "Async result store already exists: $AGENT_RUNS_DIR"
+    fi
+
     # Install demonstrator script - disabled in scripts.conf by default,
     # uncomment the entry to enable it for evaluating ctrl-exec capabilities
     safe_install 750 "$SOURCE_DIR/etc/ctrl-exec-demonstrator.sh" "$SCRIPTS_DIR/ctrl-exec-demonstrator.sh"
@@ -664,6 +679,12 @@ uninstall() {
     if [[ -d "$RUNS_DIR" ]]; then
         rm -rf "$RUNS_DIR"
         info "Removed $RUNS_DIR"
+    fi
+
+    # Remove the agent async result store (transient, not config)
+    if [[ -d "$AGENT_RUNS_DIR" ]]; then
+        rm -rf "$AGENT_RUNS_DIR"
+        info "Removed $AGENT_RUNS_DIR"
     fi
 
     for f in "${files[@]}"; do

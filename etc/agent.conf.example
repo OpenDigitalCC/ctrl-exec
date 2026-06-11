@@ -38,6 +38,14 @@ ca   = /etc/ctrl-exec-agent/ca.crt
 #
 # script_dirs = /opt/ctrl-exec-scripts:/usr/local/lib/ctrl-exec-scripts
 
+# Async result store (optional).
+# Directory where results of detached (--async) jobs are persisted, keyed by
+# request id, until fetched or TTL-purged (24h). Defaults to the path below.
+# The agent must be able to write it; the systemd unit's StateDirectory and the
+# installer create it owned by the agent user (0750).
+#
+# async_runs_dir = /var/lib/ctrl-exec-agent/runs
+
 # Agent-side auth hook (optional).
 # Called before every run request, after allowlist validation.
 # Receives full request context including username and token, enabling

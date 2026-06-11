@@ -17,6 +17,18 @@ RestartSec=5
 # Give the process time to shut down cleanly
 TimeoutStopSec=10
 
+# Async (long-running) jobs run detached via setsid + double-fork. KillMode=process
+# makes a stop/restart signal only the main process, leaving already-detached jobs
+# to run to completion; the restarted agent serves their results from the store.
+# The default control-group kill would otherwise terminate them on every restart.
+KillMode=process
+
+# Async result store: the agent writes /var/lib/ctrl-exec-agent/runs (and a
+# .locks subdir). StateDirectory creates it owned by the service user and, under
+# ProtectSystem=strict, makes it writable without a separate ReadWritePaths.
+StateDirectory=ctrl-exec-agent
+StateDirectoryMode=0750
+
 # Operational logging goes via Sys::Syslog to journald.
 # StandardError=journal captures Perl die/warn output that bypasses syslog.
 StandardOutput=journal
