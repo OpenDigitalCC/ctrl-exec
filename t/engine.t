@@ -177,6 +177,189 @@ use Exec::Engine qw();
     is $results->[0]{script}, 'hello','dispatch_all: script echoed in result';
 }
 
+# --- async dispatch + result fetch ---
+# A tiny mock UA lets us drive the real _dispatch_one / _result_one response
+# handling (202/409/403/404/200) without networking or TLS.
+
+{
+    package MockUA;
+    sub new { my ($c, %a) = @_; bless { %a }, $c }
+    sub post { my ($s, @a) = @_; $s->{on_post}->(@a) }
+    sub get  { my ($s, @a) = @_; $s->{on_get}->(@a) }
+}
+
+use HTTP::Response;
+
+sub _resp {
+    my ($code, $msg, $body) = @_;
+    return HTTP::Response->new(
+        $code, $msg, [ 'Content-Type' => 'application/json' ], $body,
+    );
+}
+
+# _dispatch_one async: 202 Accepted -> status 'accepted', no exit/stdout
+{
+    no warnings 'redefine';
+    my $sent_body;
+    local *Exec::Engine::_build_ua = sub {
+        MockUA->new(on_post => sub {
+            my ($url, %h) = @_;
+            $sent_body = $h{Content};
+            return _resp(202, 'Accepted',
+                '{"status":"accepted","reqid":"abc123def4567890","script":"backup"}');
+        });
+    };
+    my $r = Exec::Engine::_dispatch_one(
+        host => 'h', port => 7443, script => 'backup',
+        reqid => 'abc123def4567890', config => {}, async => 1,
+    );
+    is   $r->{status}, 'accepted',          'async dispatch: 202 -> accepted';
+    is   $r->{reqid},  'abc123def4567890',  'async dispatch: reqid echoed';
+    ok   !exists $r->{exit},                'async dispatch: no exit on acceptance';
+    like $sent_body, qr/"async"\s*:\s*true/, 'async dispatch: async flag sent in body';
+}
+
+# _dispatch_one async: 409 Conflict -> status 'busy' with error, not a transport failure
+{
+    no warnings 'redefine';
+    local *Exec::Engine::_build_ua = sub {
+        MockUA->new(on_post => sub {
+            return _resp(409, 'Conflict',
+                '{"status":"busy","error":"script already running"}');
+        });
+    };
+    my $r = Exec::Engine::_dispatch_one(
+        host => 'h', port => 7443, script => 'backup',
+        reqid => 'r1', config => {}, async => 1,
+    );
+    is   $r->{status}, 'busy',                   'async dispatch: 409 -> busy';
+    like $r->{error},  qr/already running/,       'async dispatch: busy carries agent message';
+    ok   !exists $r->{exit},                      'async dispatch: busy has no exit';
+}
+
+# _dispatch_one async: 403 -> status 'error' (forbidden), distinct from busy
+{
+    no warnings 'redefine';
+    local *Exec::Engine::_build_ua = sub {
+        MockUA->new(on_post => sub {
+            return _resp(403, 'Forbidden', '{"error":"serial mismatch"}');
+        });
+    };
+    my $r = Exec::Engine::_dispatch_one(
+        host => 'h', port => 7443, script => 'backup',
+        reqid => 'r1', config => {}, async => 1,
+    );
+    is   $r->{status}, 'error',          'async dispatch: 403 -> error status';
+    like $r->{error},  qr/forbidden/,     'async dispatch: 403 carries forbidden';
+}
+
+# _result_one: 200 done -> full result
+{
+    no warnings 'redefine';
+    my $got_url;
+    local *Exec::Engine::_build_ua = sub {
+        MockUA->new(on_get => sub {
+            ($got_url) = @_;
+            return _resp(200, 'OK',
+                '{"reqid":"r1","status":"done","script":"backup","exit":0,"stdout":"ok\n","stderr":""}');
+        });
+    };
+    my $r = Exec::Engine::_result_one(host => 'h', port => 7443, reqid => 'r1', config => {});
+    is   $r->{status}, 'done',  'result fetch: done status';
+    is   $r->{exit},   0,       'result fetch: exit captured';
+    is   $r->{stdout}, "ok\n",  'result fetch: stdout captured';
+    like $got_url, qr{/result/r1\z}, 'result fetch: GET /result/<reqid>';
+}
+
+# _result_one: 200 running -> status running, no exit yet
+{
+    no warnings 'redefine';
+    local *Exec::Engine::_build_ua = sub {
+        MockUA->new(on_get => sub {
+            return _resp(200, 'OK', '{"reqid":"r1","status":"running","script":"backup"}');
+        });
+    };
+    my $r = Exec::Engine::_result_one(host => 'h', port => 7443, reqid => 'r1', config => {});
+    is $r->{status}, 'running', 'result fetch: running status';
+    ok !exists $r->{exit},      'result fetch: running has no exit yet';
+}
+
+# _result_one: 404 -> status 'unknown' (purged or never ran here), not an error
+{
+    no warnings 'redefine';
+    local *Exec::Engine::_build_ua = sub {
+        MockUA->new(on_get => sub {
+            return _resp(404, 'Not Found', '{"status":"unknown","reqid":"r1"}');
+        });
+    };
+    my $r = Exec::Engine::_result_one(host => 'h', port => 7443, reqid => 'r1', config => {});
+    is $r->{status}, 'unknown', 'result fetch: 404 -> unknown';
+    ok !exists $r->{error},     'result fetch: unknown is not an error';
+}
+
+# _result_one: 403 -> status 'error' (forbidden)
+{
+    no warnings 'redefine';
+    local *Exec::Engine::_build_ua = sub {
+        MockUA->new(on_get => sub {
+            return _resp(403, 'Forbidden', '{"error":"serial mismatch"}');
+        });
+    };
+    my $r = Exec::Engine::_result_one(host => 'h', port => 7443, reqid => 'r1', config => {});
+    is   $r->{status}, 'error',      'result fetch: 403 -> error';
+    like $r->{error},  qr/forbidden/, 'result fetch: 403 carries forbidden';
+}
+
+# dispatch_all threads async through to _dispatch_one
+{
+    no warnings 'redefine';
+    local *Exec::Engine::_dispatch_one = sub {
+        my (%o) = @_;
+        return {
+            host => $o{host}, script => $o{script},
+            status => 'accepted', reqid => $o{reqid},
+            got_async => ($o{async} ? 1 : 0),
+        };
+    };
+    my $res = Exec::Engine::dispatch_all(
+        hosts => ['h1'], script => 'x', config => {}, reqid => 'r9', async => 1,
+    );
+    is $res->[0]{status},    'accepted', 'dispatch_all async: acceptance returned';
+    is $res->[0]{got_async}, 1,          'dispatch_all async: flag threaded to _dispatch_one';
+}
+
+# result_all argument validation
+{
+    eval { Exec::Engine::result_all(config => {}, reqid => 'r') };
+    like $@, qr/hosts required/, 'result_all: dies without hosts';
+
+    eval { Exec::Engine::result_all(hosts => ['h'], reqid => 'r') };
+    like $@, qr/config required/, 'result_all: dies without config';
+
+    eval { Exec::Engine::result_all(hosts => ['h'], config => {}) };
+    like $@, qr/reqid required/, 'result_all: dies without reqid';
+
+    eval { Exec::Engine::result_all(hosts => 'bad', config => {}, reqid => 'r') };
+    like $@, qr/hosts must be an arrayref/, 'result_all: dies if hosts not arrayref';
+}
+
+# result_all aggregates per-host across the fork/collect plumbing
+{
+    no warnings 'redefine';
+    local *Exec::Engine::_result_one = sub {
+        my (%o) = @_;
+        return $o{host} eq 'h1'
+            ? { host => $o{host}, status => 'done', exit => 0, stdout => "ok\n", reqid => $o{reqid} }
+            : { host => $o{host}, status => 'running', reqid => $o{reqid} };
+    };
+    my $res = Exec::Engine::result_all(hosts => ['h1', 'h2'], config => {}, reqid => 'r1');
+    is scalar @$res, 2, 'result_all: one result per host';
+    my %by = map { $_->{host} => $_ } @$res;
+    is $by{h1}{status}, 'done',    'result_all: h1 done';
+    is $by{h1}{exit},   0,         'result_all: h1 exit aggregated';
+    is $by{h2}{status}, 'running', 'result_all: h2 still running';
+}
+
 # --- _host_entry: canonical name vs connect target ---
 
 {

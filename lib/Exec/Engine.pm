@@ -25,10 +25,16 @@ my $DEFAULT_PORT = 7443;
 #   port     => $default_port   (default 7443)
 #   username => $str            (forwarded to agent for downstream use)
 #   token    => $str            (forwarded to agent for downstream use)
+#   async    => $bool           (submit detached; collect acceptance, not result)
 #
-# Returns arrayref of result hashrefs:
+# Returns arrayref of result hashrefs. Synchronous (default):
 #   { host, script, exit, stdout, stderr, reqid, rtt }
 #   { host, script, exit => -1, error, reqid, rtt }
+# Asynchronous (async => 1) - the agent runs the script detached and the
+# result is fetched later via result_all():
+#   { host, script, status => 'accepted', reqid, rtt }
+#   { host, script, status => 'busy',  error, reqid, rtt }
+#   { host, script, status => 'error', error, reqid, rtt }
 sub dispatch_all {
     my (%opts) = @_;
     my $hosts    = $opts{hosts}    or croak "hosts required";
@@ -39,6 +45,7 @@ sub dispatch_all {
     my $port     = $opts{port}     // $DEFAULT_PORT;
     my $username = $opts{username} // '';
     my $token    = $opts{token}    // '';
+    my $async    = $opts{async}    // 0;
 
     croak "hosts must be an arrayref" unless ref $hosts eq 'ARRAY';
     croak "args must be an arrayref"  unless ref $args  eq 'ARRAY';
@@ -53,6 +60,7 @@ sub dispatch_all {
         SCRIPT => $script,
         HOSTS  => join(',', map { $_->[0] } @entries),
         REQID  => $reqid,
+        MODE   => $async ? 'async' : 'sync',
     });
 
     my @results;
@@ -77,6 +85,7 @@ sub dispatch_all {
                 config   => $config,
                 username => $username,
                 token    => $token,
+                async    => $async,
             );
             print $w encode_json($result);
             close $w;
@@ -101,6 +110,85 @@ sub dispatch_all {
             // { script => $script, exit => -1,
                  error => 'no response from child', reqid => $reqid };
         _canonicalise($result, $name);
+        push @results, $result;
+        delete $pipes{$pid};
+    }
+
+    return \@results;
+}
+
+# Fetch the result of an async dispatch from one or more hosts in parallel.
+# Each host is queried with GET /result/<reqid>; the reqid is the one returned
+# by an async dispatch_all(). Used by the dispatcher to poll a still-pending
+# async run and aggregate per-host state.
+#
+# Required opts:
+#   hosts   => \@host_strings   (the hosts the reqid was dispatched to)
+#   config  => \%config
+#   reqid   => $id              (the async request id; the agent store key)
+#
+# Optional opts:
+#   port    => $default_port
+#
+# Returns arrayref of result hashrefs:
+#   { host, status => 'running', reqid, rtt }
+#   { host, status => 'done', exit, stdout, stderr, script, reqid, rtt }
+#   { host, status => 'unknown', reqid, rtt }   (agent has no such record)
+#   { host, status => 'error', error, reqid, rtt }
+sub result_all {
+    my (%opts) = @_;
+    my $hosts  = $opts{hosts}  or croak "hosts required";
+    my $config = $opts{config} or croak "config required";
+    my $reqid  = $opts{reqid}  or croak "reqid required";
+    my $port   = $opts{port}   // $DEFAULT_PORT;
+
+    croak "hosts must be an arrayref" unless ref $hosts eq 'ARRAY';
+
+    my $max_hosts = $opts{max_hosts} // 500;
+    croak "too many hosts (max $max_hosts)" if @$hosts > $max_hosts;
+
+    my @entries = map { [ _host_entry($_) ] } @$hosts;
+
+    my @results;
+    my %pipes;
+
+    for my $entry (@entries) {
+        my ($name, $target) = @$entry;
+        my ($host, $hport)  = parse_host($target, $port);
+        pipe my $r, my $w or die "pipe: $!";
+
+        my $pid = fork();
+        die "fork: $!" unless defined $pid;
+
+        if ($pid == 0) {
+            close $r;
+            my $result = _result_one(
+                host   => $host,
+                port   => $hport,
+                reqid  => $reqid,
+                config => $config,
+            );
+            print $w encode_json($result);
+            close $w;
+            exit 0;
+        }
+
+        close $w;
+        $pipes{$pid} = { fh => $r, name => $name, target => $target };
+    }
+
+    while (%pipes) {
+        my $pid = waitpid -1, 0;
+        last if $pid <= 0;
+        next unless exists $pipes{$pid};
+
+        my $fh  = $pipes{$pid}{fh};
+        my $raw = do { local $/; <$fh> };
+        close $fh;
+
+        my $result = eval { decode_json($raw) }
+            // { status => 'error', error => 'no response from child', reqid => $reqid };
+        _canonicalise($result, $pipes{$pid}{name});
         push @results, $result;
         delete $pipes{$pid};
     }
@@ -337,18 +425,21 @@ sub _dispatch_one {
     my $port   = $opts{port};
     my $config = $opts{config};
     my $reqid  = $opts{reqid};
+    my $async  = $opts{async} // 0;
 
     require Time::HiRes;
     my $t0 = Time::HiRes::time();
     my $ua = _build_ua($config);
 
-    my $payload = encode_json({
+    my %body = (
         script   => $opts{script},
         args     => $opts{args} // [],
         reqid    => $reqid,
         username => $opts{username} // '',
         token    => $opts{token}    // '',
-    });
+    );
+    $body{async} = JSON::true if $async;
+    my $payload = encode_json(\%body);
 
     my $resp = eval {
         $ua->post(
@@ -361,6 +452,29 @@ sub _dispatch_one {
     my $rtt = sprintf '%.0fms', (Time::HiRes::time() - $t0) * 1000;
 
     if ($@ || !$resp || !$resp->is_success) {
+        # In async mode a 409 is not a transport failure: the agent is up and
+        # refusing because the same script is already running. Surface it as a
+        # distinct 'busy' status rather than a generic error.
+        if ($async && $resp && $resp->code == 409) {
+            my $body = eval { decode_json($resp->content) } // {};
+            Exec::Log::log_action('WARNING', {
+                ACTION => 'run-async',
+                SCRIPT => $opts{script},
+                TARGET => "$host:$port",
+                STATUS => 'busy',
+                RTT    => $rtt,
+                REQID  => $reqid,
+            });
+            return {
+                host   => $host,
+                script => $opts{script},
+                status => 'busy',
+                error  => $body->{error} // 'script already running',
+                rtt    => $rtt,
+                reqid  => $reqid,
+            };
+        }
+
         my $err;
         if ($resp && $resp->code == 403) {
             my $body = eval { decode_json($resp->content) } // {};
@@ -377,7 +491,7 @@ sub _dispatch_one {
                 : $raw_err;
         }
         Exec::Log::log_action('ERR', {
-            ACTION => 'run',
+            ACTION => $async ? 'run-async' : 'run',
             SCRIPT => $opts{script},
             TARGET => "$host:$port",
             ERROR  => $err,
@@ -387,7 +501,7 @@ sub _dispatch_one {
         return {
             host   => $host,
             script => $opts{script},
-            exit   => -1,
+            ($async ? (status => 'error') : (exit => -1)),
             error  => $err,
             rtt    => $rtt,
             reqid  => $reqid,
@@ -395,6 +509,24 @@ sub _dispatch_one {
     }
 
     my $decoded = eval { decode_json($resp->content) };
+
+    if ($async) {
+        # The agent returns 202 { status => 'accepted', reqid } - the job is
+        # detached. No exit/stdout/stderr yet; those come from result_all().
+        my $result = $decoded // { status => 'error', error => 'invalid JSON response' };
+        $result->{rtt}    = $rtt;
+        $result->{reqid} //= $reqid;
+        Exec::Log::log_action('INFO', {
+            ACTION => 'run-async',
+            SCRIPT => $opts{script},
+            TARGET => "$host:$port",
+            STATUS => $result->{status} // 'accepted',
+            RTT    => $rtt,
+            REQID  => $reqid,
+        });
+        return $result;
+    }
+
     my $result  = $decoded // { exit => -1, error => 'invalid JSON response' };
 
     # Keep the agent's self-reported hostname; the caller sets the canonical
@@ -409,6 +541,77 @@ sub _dispatch_one {
         SCRIPT => $opts{script},
         TARGET => "$host:$port",
         EXIT   => $result->{exit},
+        RTT    => $rtt,
+        REQID  => $reqid,
+    });
+
+    return $result;
+}
+
+sub _result_one {
+    my (%opts) = @_;
+    my $host   = $opts{host};
+    my $port   = $opts{port};
+    my $config = $opts{config};
+    my $reqid  = $opts{reqid};
+
+    require Time::HiRes;
+    my $t0 = Time::HiRes::time();
+    my $ua = _build_ua($config);
+
+    my $resp = eval {
+        $ua->get("https://$host:$port/result/$reqid");
+    };
+
+    my $rtt = sprintf '%.0fms', (Time::HiRes::time() - $t0) * 1000;
+
+    if ($@ || !$resp || !$resp->is_success) {
+        # 404 is an expected outcome, not a transport error: the agent has no
+        # record for this reqid - it was never run there, or it has been
+        # TTL-purged. The dispatcher distinguishes purged-vs-never from its own
+        # registry; here it is reported uniformly as 'unknown'.
+        if ($resp && $resp->code == 404) {
+            return {
+                host   => $host,
+                status => 'unknown',
+                reqid  => $reqid,
+                rtt    => $rtt,
+            };
+        }
+
+        my $err;
+        if ($resp && $resp->code == 403) {
+            my $body = eval { decode_json($resp->content) } // {};
+            $err = 'forbidden: ' . ($body->{error} // $resp->status_line);
+        }
+        else {
+            $err = $@ || ($resp ? $resp->status_line : 'no response');
+        }
+        Exec::Log::log_action('ERR', {
+            ACTION => 'result',
+            TARGET => "$host:$port",
+            ERROR  => $err,
+            RTT    => $rtt,
+            REQID  => $reqid,
+        });
+        return {
+            host   => $host,
+            status => 'error',
+            error  => $err,
+            reqid  => $reqid,
+            rtt    => $rtt,
+        };
+    }
+
+    my $decoded = eval { decode_json($resp->content) };
+    my $result  = $decoded // { status => 'error', error => 'invalid JSON' };
+    $result->{rtt}    = $rtt;
+    $result->{reqid} //= $reqid;
+
+    Exec::Log::log_action('INFO', {
+        ACTION => 'result',
+        TARGET => "$host:$port",
+        STATUS => $result->{status} // 'unknown',
         RTT    => $rtt,
         REQID  => $reqid,
     });
