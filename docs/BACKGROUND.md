@@ -165,3 +165,74 @@ ctrl-exec API can be containerised and run as a thin control-plane service,
 with agents running either on bare metal or in their own containers. The
 separation of the CA and registry onto a persistent volume keeps the container
 itself stateless - an image rebuild does not affect any paired agents.
+
+
+## Future Directions
+
+### Asynchronous (long-running) execution
+
+A job that runs longer than `read_timeout` currently fails on the dispatcher
+side while the script keeps running on the agent, and its result is lost (the
+agent finishes the script and then writes to a closed connection). The agreed
+direction is **true async**: decouple job duration from connection lifetime by
+persisting results on the agent and fetching them later. The synchronous path
+remains the default; async is opt-in.
+
+**Caller contract (front-end, stable):**
+
+- `ced run --async <hosts> <script>` / `POST /run {"async":true}` returns a
+  `reqid` immediately (`202 Accepted`), does not block.
+- `ced status <reqid>` / `GET /status/<reqid>` returns `pending` while running,
+  then the per-host result (exit/stdout/stderr).
+- `ced wait <reqid> [--timeout N]` is client-side polling of `status`.
+
+**Protocol (back-end):**
+
+- *Submit.* The dispatcher auths + locks + mints the reqid as today, then posts
+  `/run` to each agent with an `async` flag. The agent validates (serial,
+  allowlist, agent hook), starts the script **detached** (it must survive the
+  connection close and the agent reloading), returns `{status:"accepted",
+  reqid}`, and closes the connection. The dispatcher records its own
+  `runs/<reqid>.json` with the host list and per-host `pending`, and returns
+  the reqid to the caller.
+- *Run + persist.* A detached reaper on the agent waits for the script and
+  writes the result to an agent-side store `/var/lib/ctrl-exec-agent/runs/
+  <reqid>.json` (`running` then `done` with exit/stdout/stderr). Root-owned
+  0750, TTL-purged, same at-rest sensitivity as the dispatcher store.
+- *Fetch.* New agent endpoint `GET /result/<reqid>` (mTLS + serial-checked,
+  same gate as `/run`) returns the stored result, `pending`, or 404. On
+  `status`, the dispatcher fetches from each still-pending host, updates its
+  store, and aggregates. reqid is 64-bit urandom, so an agent only returns a
+  result for a reqid it actually ran.
+
+**Resolved decisions:**
+
+1. *Surviving agent restart* - each async job runs in its own systemd
+   transient scope (`systemd-run --scope --unit ce-job-<reqid> -- ...`), so it
+   is independent of the agent unit and survives `systemctl restart
+   ctrl-exec-agent`. On hosts without systemd (procd/Alpine, containers) the
+   agent falls back to `setsid` + double-fork, where restart-survival is
+   best-effort and documented as such.
+2. *Concurrency* - enforced agent-side: the agent refuses a second concurrent
+   run of the same script while one is detached (the dispatcher lock releases
+   when the async submit returns, so it cannot cover the job's lifetime).
+3. *status re-auth* - `GET /status/<reqid>` re-runs the auth hook, mirroring
+   `/run`; it is not just a store read.
+4. *Multi-host* - one reqid spans several agents; `status` fetches from each
+   still-pending host and aggregates per-host pending/done.
+5. *Retention/TTL* - the agent result store mirrors the dispatcher's 24h purge;
+   once a result is purged, `status` reports it as expired rather than 404.
+
+**Build order (incremental, reviewable):**
+
+1. Agent: result store + detached exec + `running`/`done` persistence (no
+   endpoint yet) - exercised by a local unit test.
+2. Agent: `GET /result/<reqid>` (serial-checked) + `async` flag on `/run`.
+3. Engine: `dispatch_all` async mode (collect `accepted`) + `result_all`
+   (fetch by reqid).
+4. Dispatcher reqid->host registry in `runs/<reqid>.json`; `status`
+   aggregation + fetch.
+5. API `POST /run {async}` + `GET /status` async semantics; CLI `run --async`,
+   `status`, `wait`.
+6. Install/packaging (new agent runs dir, systemd `ReadWritePaths`/`KillMode`),
+   docs (REFERENCE/API/SECURITY/website), tests across the lifecycle.
