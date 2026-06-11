@@ -244,3 +244,138 @@ branch `claude/async`:**
 6. Install/packaging (agent runs dir, systemd `KillMode=process` +
    `StateDirectory`), docs (REFERENCE/API/SECURITY/openapi/website), and a
    lifecycle integration test.
+
+
+### Model Context Protocol (MCP) bridge
+
+Make ctrl-exec callable by LLM agents through MCP, so an operator's fleet of
+allowlisted scripts becomes a set of tools an AI client (Claude Desktop, an
+agent runtime) can discover and invoke. The headline is a security property,
+not a feature: the **allowlist and the per-script argument schema constrain the
+callable surface**, so an LLM can only select operator-approved scripts with
+operator-defined argument shapes - it cannot invent operations. The auth hook
+gates *who* may call; the allowlist gates *what* exists; the schema gates *how*
+each is shaped. This is novel relative to the typical MCP server, which exposes
+hand-written tools with no equivalent operator-owned execution boundary.
+
+**Architecture - the core invariant: core transports the schema, the bridge
+interprets it.** Core gains one small, MCP-agnostic capability ("self-describing
+scripts"); everything that knows the word "MCP" - JSON-RPC, tools, transports,
+versioned tool synthesis - lives in the bridge, a *management-interface plugin*
+in the `ctrl-exec-plugins` ecosystem that consumes `ctrl-exec-api` over HTTP and
+never links `Exec::Engine`. Keeping the (fast-moving) MCP spec out of core lets
+the bridge iterate on its own cadence.
+
+**Self-describing scripts (the only part in core):**
+
+- Optional sidecar `<script>.schema.json` beside each allowlisted script.
+  *Neutral name, neutral content*: a JSON Schema (2020-12) for the script's
+  arguments plus protocol-agnostic metadata - `description` and the behavioural
+  flags `read_only` / `destructive` / `idempotent`. No MCP vocabulary in the
+  file, so the same schema is reusable by `/openapi-live.json` arg typing, a
+  web-form renderer, or auth-hook validation - which is why this earns its place
+  in core on its own merit, independent of MCP. (MCP has no filesystem discovery
+  of its own - a client only learns tools via the `tools/list` RPC - so the
+  filename is a private agent<->bridge detail; any "MCP-ready" signal, if wanted,
+  is a `/capabilities` wire field, never a filename.)
+- The agent reads the sidecar **only for allowlisted scripts** (no directory
+  scanning), parses it as untrusted, size-capped data (parse failure -> advertise
+  the script with no schema and log a warning), derives a schema version, and
+  includes `schema` + `schema_version` in the `/capabilities` response. Reloaded
+  on SIGHUP with the allowlist.
+- *Schema version identity*: an explicit `version`/`$id` in the sidecar if
+  present, else a short sha256 over the canonical-JSON schema. Two hosts
+  declaring the same version with different content is an operator error the
+  bridge surfaces loudly - it is never silently reconciled.
+- `/discovery` carries the schema fields through unchanged.
+- The schema is **advertised data, never executed**. The allowlist still governs
+  what runs; surfacing a schema changes nothing about execution.
+
+**Tool model - versioned Model A.** One MCP tool per *(script name, schema
+version)* group - not one per script (which would silently reconcile divergent
+schemas across a drifted fleet), and not one per host x script (which explodes
+with fleet size and discards parallel dispatch). The bridge pulls `/discovery`,
+collects `(host, script, schema, version)` tuples, groups by `(script,
+version)`, and emits one tool per group with that group's faithful schema and a
+`hosts` argument enum-scoped to the hosts running that version. A homogeneous
+fleet yields one tool per script (identical to plain Model A); a tool splits
+into `name@v1` / `name@v2` only while the fleet genuinely runs two versions,
+making drift *visible to the LLM* rather than reconciled away. List size is
+`O(scripts)` steady-state, `O(scripts x versions-in-flight)` mid-rollout. This
+keeps the LLM-facing tool list small and stable while preserving parallel
+multi-host dispatch (one `tools/call` -> many hosts) - the system's defining
+strength.
+
+**Bridge behaviour (caller contract):**
+
+- *tools/list*: the synthesised versioned tools above; the behavioural flags map
+  to MCP annotations (`read_only`->`readOnlyHint`, `destructive`->
+  `destructiveHint`, `idempotent`->`idempotentHint`). `notifications/
+  tools/list_changed` fires when discovery changes.
+- *tools/call*: validate the LLM's arguments against the group schema (fail
+  fast), then `POST /run` with the chosen hosts + script + args using the
+  **async path** (`run {async}` + poll `/status`) so a long job is not bound by
+  the dispatcher `read_timeout`; optionally emit MCP progress notifications while
+  polling. This reuses the long-running-jobs machinery directly.
+- *Result mapping*: stdout -> MCP text content; JSON stdout -> structured content
+  (a script convention, not a protocol change). A multi-host run returns one
+  result carrying per-host blocks with each host's exit/status. `isError` is true
+  only for total failure (no host succeeded, dispatch error, or auth denial); a
+  partial success returns `isError:false` with the per-host breakdown so the
+  model sees which hosts failed.
+- *Transports*: stdio and Streamable HTTP. The translation core is shared; the
+  transports differ mainly in identity.
+- *Identity*: the bridge adds **no** auth policy - it transports identity to
+  ctrl-exec's existing auth hook, the single policy point. stdio inherits the
+  operator on the control host and their configured ctrl-exec credentials; HTTP
+  authenticates the MCP client and maps it to a ctrl-exec `username` + `token`
+  forwarded to `/run`. Scope is MCP **tools only** - no resources, prompts, or
+  sampling in v1.
+
+**Resolved decisions:**
+
+1. The bridge is wholly a management-interface plugin consuming `ctrl-exec-api`
+   over HTTP; it does not link `Exec::Engine`. The only core change is generic
+   schema advertisement.
+2. The sidecar is neutral-named (`<script>.schema.json`) and neutral-content
+   (args JSON Schema + `description` + `read_only`/`destructive`/`idempotent`).
+   The filename is a private agent<->bridge detail.
+3. Versioned Model A: one tool per `(script, schema-version)`; fleet drift is
+   surfaced, never silently reconciled.
+4. Schema is transported by core, interpreted and validated by the bridge, and
+   never executed.
+5. Both transports (stdio + Streamable HTTP) from the start; identity is mapped
+   onto the existing auth hook, the bridge adds no policy.
+6. `tools/call` dispatches via the async path and polls, reusing the
+   long-running-jobs machinery so MCP calls are not bound by `read_timeout`.
+
+**Build order (incremental, reviewable):**
+
+Core (`ce`) - a small point release, useful independent of MCP:
+
+1. Sidecar contract + version-identity rule (spec/docs). This `/capabilities`
+   schema field is the **seam** between the two halves - ratify its field names,
+   version rule, collision behaviour, and empty-sidecar fallback first, then core
+   and bridge can proceed in parallel.
+2. Agent: read sidecars for allowlisted scripts, derive the version, advertise
+   `schema`/`schema_version` in `/capabilities`; SIGHUP reload; graceful on
+   missing/invalid; unit tests.
+3. `/discovery` passthrough of the schema fields (and optional
+   `/openapi-live.json` arg typing); tests.
+4. Docs: REFERENCE / PLUGINS / SECURITY (the convention, the version rule, the
+   advertised-not-executed property).
+
+Bridge (`ctrl-exec-plugins` repo):
+
+5. JSON-RPC 2.0 core + `initialize` / `tools/list` / `tools/call`.
+6. Discovery client + versioned tool synthesis + `list_changed`.
+7. `tools/call` -> async `/run` + poll `/status`; result/error mapping; optional
+   progress notifications.
+8. Transports: stdio first, then Streamable HTTP with client-identity ->
+   ctrl-exec token mapping.
+9. Argument validation against the schema; packaging + example client configs
+   (Claude Desktop stdio, HTTP endpoint).
+
+**Deferred / out of scope (v1):** MCP resources, prompts, and sampling;
+`outputSchema`; HTTP-transport rate limiting and multi-tenant identity beyond
+token forwarding.
