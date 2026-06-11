@@ -8,6 +8,7 @@ use lib "$Bin/../lib";
 use Exec::Agent::Config    qw();
 use Exec::Agent::Runner    qw();
 use Exec::Agent::AsyncRunner    qw();
+use Exec::Agent::Schema    qw();
 use Exec::Agent::AgentPairing   qw();
 use Exec::RateLimit qw();
 use Exec::Auth           qw();
@@ -64,6 +65,7 @@ sub mode_serve {
 
     my $config    = Exec::Agent::Config::load_config($CONFIG_PATH);
     my $allowlist = Exec::Agent::Config::load_allowlist($ALLOWLIST_PATH);
+    my $schemas   = Exec::Agent::Schema::load_for_allowlist($allowlist);
 
     my $revoked_path = $config->{revoked_serials}
                     // '/etc/ctrl-exec-agent/revoked-serials';
@@ -81,9 +83,13 @@ sub mode_serve {
     my $rate_config = $config->{rate_limit} // {};
 
     $SIG{HUP} = sub {
-        warn "Reloading allowlist, revocation list, and ctrl-exec serial...\n";
+        warn "Reloading allowlist, schemas, revocation list, and ctrl-exec serial...\n";
         $allowlist = eval { Exec::Agent::Config::load_allowlist($ALLOWLIST_PATH) };
         warn "Allowlist reload failed: $@\n" if $@;
+        $schemas = $allowlist
+            ? (eval { Exec::Agent::Schema::load_for_allowlist($allowlist) } // {})
+            : {};
+        warn "Schema reload failed: $@\n" if $@;
         $revoked = eval {
             Exec::Agent::AgentPairing::load_revoked_serials(path => $revoked_path)
         };
@@ -176,7 +182,7 @@ sub mode_serve {
         if ($pid == 0) {
             # Child: close server socket, handle connection, exit
             $server->close(SSL_no_shutdown => 1);
-            handle_connection($conn, $peer, $allowlist, $config, $revoked, $disp_serial, $peer_serial);
+            handle_connection($conn, $peer, $allowlist, $config, $revoked, $disp_serial, $peer_serial, $schemas);
             $conn->close;
             exit 0;
         }
@@ -459,7 +465,7 @@ sub mode_self_ping {
 # Reads raw HTTP/1.0 request from IO::Socket::SSL, dispatches, sends response.
 
 sub handle_connection {
-    my ($conn, $peer, $allowlist, $config, $revoked, $disp_serial, $peer_serial) = @_;
+    my ($conn, $peer, $allowlist, $config, $revoked, $disp_serial, $peer_serial, $schemas) = @_;
 
     # $peer_serial is extracted before fork() in the accept loop - after the
     # parent closes its copy of $conn the SSL object is invalid in the child.
@@ -519,7 +525,7 @@ sub handle_connection {
         handle_ping($conn, $body, $peer, $disp_serial, $peer_serial);
     }
     elsif ($method eq 'GET' && $path eq '/capabilities') {
-        handle_capabilities($conn, $peer, $allowlist, $config, $disp_serial, $peer_serial);
+        handle_capabilities($conn, $peer, $allowlist, $config, $disp_serial, $peer_serial, $schemas);
     }
     elsif ($method eq 'GET' && $path =~ m{^/result/([A-Za-z0-9_-]+)\z}) {
         handle_result($conn, $1, $peer, $config, $disp_serial, $peer_serial);
@@ -730,9 +736,10 @@ sub handle_ping {
 }
 
 sub handle_capabilities {
-    my ($conn, $peer, $allowlist, $config, $disp_serial, $peer_serial) = @_;
+    my ($conn, $peer, $allowlist, $config, $disp_serial, $peer_serial, $schemas) = @_;
 
     $peer_serial //= '';
+    $schemas     //= {};
 
     # Restrict /capabilities to the genuine ctrl-exec cert.
     # The stored serial was recorded at pairing time from the ctrl-exec's
@@ -787,12 +794,19 @@ sub handle_capabilities {
 
     my @scripts;
     for my $name (sort keys %$allowlist) {
-        my $path = $allowlist->{$name};
-        push @scripts, {
+        my $path  = $allowlist->{$name};
+        my $entry = {
             name       => $name,
             path       => $path,
             executable => (-x $path ? JSON::true : JSON::false),
         };
+        # Advertise the script's schema sidecar when present (the agent only
+        # transports it; the consumer interprets it). See docs/SCHEMA-SIDECAR.md.
+        if (my $sc = $schemas->{$name}) {
+            $entry->{schema}         = $sc->{schema};
+            $entry->{schema_version} = $sc->{schema_version};
+        }
+        push @scripts, $entry;
     }
 
     Exec::Log::log_action('INFO', {
