@@ -206,6 +206,7 @@ likely cause and the fix.
 | `11-api-status.sh` | API `/run`, `/ping`, `/status/{reqid}`, 404 on unknown reqid, multi-host result storage |
 | `12-serial-check.sh` | Serial check on `/ping` and `/run`; 403 when serial file absent (requires SSH) |
 | `15-agent-auth-context.sh` | Agent-side auth hook receives correct context fields (action, script, username, token, source IP); requires `--install-auth-test` setup — skips cleanly if not configured |
+| `16-async-lifecycle.sh` | Async lifecycle: `run --async` returns a reqid, `wait`/`status` retrieve results, agent-side concurrency refuses a second same-script run (busy), unknown reqid exits 1, `wait --timeout` exits 2 while pending |
 
 Files that require SSH to the agent host skip gracefully when SSH is not
 available, reporting `SKIP` rather than `FAIL`. File 15 does not require SSH;

@@ -36,6 +36,7 @@ TESTS=(
     11-api-status.sh
     12-serial-check.sh
     15-agent-auth-context.sh
+    16-async-lifecycle.sh
 )
 
 if [ "$#" -gt 0 ]; then
