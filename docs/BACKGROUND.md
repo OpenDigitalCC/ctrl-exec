@@ -207,12 +207,15 @@ remains the default; async is opt-in.
 
 **Resolved decisions:**
 
-1. *Surviving agent restart* - each async job runs in its own systemd
-   transient scope (`systemd-run --scope --unit ce-job-<reqid> -- ...`), so it
-   is independent of the agent unit and survives `systemctl restart
-   ctrl-exec-agent`. On hosts without systemd (procd/Alpine, containers) the
-   agent falls back to `setsid` + double-fork, where restart-survival is
-   best-effort and documented as such.
+1. *Surviving agent restart* - jobs run detached via `setsid` + double-fork,
+   and the agent systemd unit sets `KillMode=process` so a restart/stop kills
+   only the main process and leaves detached jobs running to completion. This
+   needs no privilege. (A systemd transient scope per job - `systemd-run
+   --scope` - was considered for its own cgroup, but a *system* scope cannot be
+   created by the non-root agent user without polkit/linger setup, so it was
+   rejected in favour of the simpler KillMode=process.) On non-systemd hosts
+   (procd/Alpine, containers) setsid still survives connection loss; full
+   restart-survival there is best-effort and documented as such.
 2. *Concurrency* - enforced agent-side: the agent refuses a second concurrent
    run of the same script while one is detached (the dispatcher lock releases
    when the async submit returns, so it cannot cover the job's lifetime).
