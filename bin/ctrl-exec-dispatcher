@@ -9,6 +9,7 @@ use Exec::Log     qw();
 use Exec::Engine  qw();
 use Exec::Auth    qw();
 use Exec::Lock    qw();
+use Exec::RunStore qw();
 use Exec::Pairing qw();
 use Exec::CA        qw();
 use Exec::Registry  qw();
@@ -38,6 +39,8 @@ sub main {
         'ip=s'        => \$opts{ip},
         'rename=s'    => \$opts{rename},
         'tags=s'      => \$opts{tags},
+        'async'       => \$opts{async},
+        'timeout=i'   => \$opts{timeout},
     ) or die usage();
 
     my $mode = shift @ARGV // die usage();
@@ -46,6 +49,8 @@ sub main {
 
     my %dispatch = (
         'run'               => \&mode_run,
+        'status'            => \&mode_status,
+        'wait'              => \&mode_wait,
         'ping'              => \&mode_ping,
         'pairing-mode'      => \&mode_pairing,
         'list-requests'     => \&mode_list_requests,
@@ -116,6 +121,36 @@ sub mode_run {
         exit 1;
     }
 
+    # Asynchronous: submit detached jobs, record the reqid -> host map, and
+    # return immediately. Results are collected later with `status` / `wait`.
+    if ($opts->{async}) {
+        my $reqid = Exec::Engine::gen_reqid();
+        my $results = Exec::Engine::dispatch_all(
+            hosts    => _resolve_dispatch_hosts($hosts),
+            script   => $script,
+            args     => $script_args,
+            config   => $config,
+            port     => $opts->{port},
+            username => $username,
+            token    => $token,
+            reqid    => $reqid,
+            async    => 1,
+        );
+        Exec::RunStore::record_async(
+            reqid => $reqid, script => $script, dispatch_results => $results,
+        );
+
+        if ($opts->{json}) {
+            print encode_json({ ok => 1, reqid => $reqid, results => $results }), "\n";
+        }
+        else {
+            _format_async_submit($reqid, $results);
+        }
+
+        my $any_accepted = grep { ($_->{status} // '') eq 'accepted' } @$results;
+        exit($any_accepted ? 0 : 1);
+    }
+
     my $results = Exec::Engine::dispatch_all(
         hosts    => _resolve_dispatch_hosts($hosts),
         script   => $script,
@@ -134,6 +169,78 @@ sub mode_run {
     }
 
     my $any_fail = grep { ($_->{exit} // -1) != 0 } @$results;
+    exit($any_fail ? 1 : 0);
+}
+
+sub mode_status {
+    my ($opts, $reqid) = @_;
+    die "Usage: ctrl-exec status <reqid>\n" unless $reqid;
+
+    my $config = _load_config();
+    my $record = eval {
+        Exec::RunStore::aggregate(
+            reqid => $reqid, config => $config, port => $opts->{port},
+        );
+    };
+    unless ($record) {
+        if ($opts->{json}) {
+            print encode_json({ ok => 0, error => 'not found', reqid => $reqid }), "\n";
+        }
+        else {
+            print STDERR "No such request: $reqid\n";
+        }
+        exit 1;
+    }
+
+    if ($opts->{json}) {
+        print encode_json({ ok => 1, %$record }), "\n";
+    }
+    else {
+        _format_status($record);
+    }
+    exit 0;
+}
+
+sub mode_wait {
+    my ($opts, $reqid) = @_;
+    die "Usage: ctrl-exec wait <reqid> [--timeout <seconds>]\n" unless $reqid;
+
+    my $config   = _load_config();
+    my $timeout  = $opts->{timeout} // 300;
+    my $deadline = time + $timeout;
+
+    my $record;
+    while (1) {
+        $record = eval {
+            Exec::RunStore::aggregate(
+                reqid => $reqid, config => $config, port => $opts->{port},
+            );
+        };
+        unless ($record) {
+            if ($opts->{json}) {
+                print encode_json({ ok => 0, error => 'not found', reqid => $reqid }), "\n";
+            }
+            else {
+                print STDERR "No such request: $reqid\n";
+            }
+            exit 1;
+        }
+        last if $record->{complete};
+        last if time >= $deadline;
+        sleep 2;
+    }
+
+    if ($opts->{json}) {
+        print encode_json({ ok => 1, %$record }), "\n";
+    }
+    else {
+        _format_status($record);
+    }
+
+    # Timed out while still pending: exit 2 so scripts can distinguish a
+    # not-yet-finished run from a completed one with failures (exit 1).
+    exit 2 unless $record->{complete};
+    my $any_fail = grep { _host_failed($_) } values %{ $record->{hosts} };
     exit($any_fail ? 1 : 0);
 }
 
@@ -474,6 +581,79 @@ sub _format_run_results {
     }
 }
 
+# Print the per-host acceptance summary of an async submission.
+sub _format_async_submit {
+    my ($reqid, $results) = @_;
+    print "Submitted async run  req:$reqid\n";
+    for my $r (@$results) {
+        my $host   = $r->{host} // '?';
+        $host .= " ($r->{reported_hostname})" if defined $r->{reported_hostname};
+        my $status = $r->{status} // 'error';
+        if ($status eq 'accepted') {
+            printf "==> %s  [accepted  %s]\n", $host, $r->{rtt} // '';
+        }
+        elsif ($status eq 'busy') {
+            printf "==> %s  [BUSY: %s]\n", $host, $r->{error} // 'already running';
+        }
+        else {
+            printf "==> %s  [ERROR: %s]\n", $host, $r->{error} // 'submit failed';
+        }
+    }
+    print "Check progress with: ctrl-exec status $reqid\n";
+}
+
+# Print an aggregated async run record (from RunStore::aggregate).
+sub _format_status {
+    my ($record) = @_;
+    my $state = $record->{complete} ? 'COMPLETE' : 'PENDING';
+    printf "Request %s  (script: %s)  [%s]\n",
+        $record->{reqid} // '?', $record->{script} // '?', $state;
+
+    # Sync records carry a results array; render them like a normal run.
+    if (($record->{mode} // '') eq 'sync' && ref $record->{results} eq 'ARRAY') {
+        _format_run_results($record->{results});
+        return;
+    }
+
+    my $hosts = $record->{hosts} // {};
+    for my $host (sort keys %$hosts) {
+        my $h      = $hosts->{$host};
+        my $status = $h->{status} // 'unknown';
+
+        if ($status eq 'done') {
+            my $exit = $h->{exit} // -1;
+            printf "==> %s  [done  exit:%d]\n", $host, $exit;
+            if (defined $h->{stdout} && $h->{stdout} =~ /\S/) {
+                print $h->{stdout};
+                print "\n" unless $h->{stdout} =~ /\n$/;
+            }
+            if (defined $h->{stderr} && $h->{stderr} =~ /\S/) {
+                print "    STDERR: $h->{stderr}\n";
+            }
+        }
+        elsif ($status eq 'accepted' || $status eq 'running') {
+            printf "==> %s  [%s]\n", $host, $status;
+            printf "    (fetch pending: %s)\n", $h->{fetch_error}
+                if defined $h->{fetch_error};
+        }
+        else {
+            # busy, error, expired
+            printf "==> %s  [%s]\n", $host, uc $status;
+            print "    $h->{error}\n" if defined $h->{error};
+        }
+    }
+}
+
+# A host counts as failed for the `wait` exit code if it did not finish with
+# exit 0: refused (busy), submit/fetch error, expired, or non-zero exit.
+sub _host_failed {
+    my ($h) = @_;
+    my $s = $h->{status} // '';
+    return 1 if $s eq 'busy' || $s eq 'error' || $s eq 'expired';
+    return 1 if $s eq 'done' && ($h->{exit} // -1) != 0;
+    return 0;
+}
+
 sub _format_ping_results {
     my ($results) = @_;
     printf "%-30s  %-8s  %-8s  %-28s  %s\n",
@@ -663,6 +843,12 @@ Usage: ctrl-exec <mode> [options] [args]
 Modes:
   run <host>[:<port>] [<host>...] <script> [-- <arg>...]
                              Run a script on one or more hosts
+                             [--async] submit detached; returns a reqid to
+                             poll with status/wait (for long-running jobs)
+  status <reqid>             Show the current state of an async run
+  wait <reqid> [--timeout <n>]
+                             Poll an async run until complete (default 300s);
+                             exit 0 all-ok, 1 some failed, 2 timed out
   ping <host>[:<port>] [<host>...]
                              Test mTLS connectivity to hosts
   pairing-mode               Accept agent pairing requests

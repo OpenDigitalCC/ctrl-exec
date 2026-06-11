@@ -3,7 +3,6 @@ package Exec::API;
 use strict;
 use warnings;
 use JSON       qw(encode_json decode_json);
-use File::Path qw(make_path);
 use POSIX      qw(WNOHANG);
 use Carp       qw(croak);
 
@@ -12,9 +11,8 @@ use Exec::Engine   qw();
 use Exec::Auth     qw();
 use Exec::Lock     qw();
 use Exec::Registry qw();
+use Exec::RunStore qw();
 
-my $RUNS_DIR     = '/var/lib/ctrl-exec/runs';
-my $RUNS_TTL     = 86400;    # seconds; results older than this are purged
 my $OPENAPI_PATH = '/usr/local/lib/ctrl-exec/Exec/openapi.json';
 my $VERSION_FILE = '/usr/local/lib/ctrl-exec/VERSION';
 
@@ -224,7 +222,7 @@ sub _handle_connection {
         _handle_discovery($conn, $peer, $body, $config);
     }
     elsif ($path =~ m{^/status/([a-f0-9]+)$} && $method eq 'GET') {
-        _handle_status($conn, $1);
+        _handle_status($conn, $1, $config);
     }
     else {
         _send_error($conn, 404, 'not found', "no route for $method $path");
@@ -303,6 +301,7 @@ sub _handle_run {
 
     my $username = $req->{username} // '';
     my $token    = $req->{token}    // '';
+    my $async    = $req->{async} ? 1 : 0;
 
     my $auth = Exec::Auth::check(
         action    => 'run',
@@ -350,9 +349,24 @@ sub _handle_run {
         username => $username,
         token    => $token,
         config   => $config,
+        async    => $async,
     );
 
-    _store_run_result($reqid, $script, $hosts, $results);
+    if ($async) {
+        # Each agent has accepted (or refused) a detached job. Record the
+        # reqid -> host map; the caller polls GET /status/<reqid> for results.
+        Exec::RunStore::record_async(
+            reqid => $reqid, script => $script, dispatch_results => $results,
+        );
+        _send_json($conn, 202, {
+            ok => JSON::true, reqid => $reqid, async => JSON::true, results => $results,
+        });
+        return;
+    }
+
+    Exec::RunStore::record_sync(
+        reqid => $reqid, script => $script, hosts => $hosts, results => $results,
+    );
 
     _send_json($conn, 200, { ok => JSON::true, reqid => $reqid, results => $results });
 }
@@ -558,80 +572,28 @@ sub _handle_openapi_live {
 }
 
 sub _handle_status {
-    my ($conn, $reqid) = @_;
+    my ($conn, $reqid, $config) = @_;
 
-    _purge_old_runs();
+    Exec::RunStore::purge();
 
-    my $file = "$RUNS_DIR/$reqid.json";
-    unless (-f $file) {
+    # For an async record this fetches any still-pending host results, merges
+    # them, and persists; for a sync record it returns the stored result as-is.
+    # The Engine forks grandchildren during the fetch and reaps them with
+    # waitpid - guard the inherited SIGCHLD reaper so it does not steal them.
+    local $SIG{CHLD} = 'DEFAULT';
+    my $record = eval {
+        Exec::RunStore::aggregate(reqid => $reqid, config => $config);
+    };
+    if ($@) {
+        _send_error($conn, 500, 'server error', 'cannot read result');
+        return;
+    }
+    unless ($record) {
         _send_error($conn, 404, 'not found', "no result for reqid $reqid");
         return;
     }
 
-    open my $fh, '<', $file
-        or do { _send_error($conn, 500, 'server error', "cannot read result: $!"); return; };
-    local $/;
-    my $raw = <$fh>;
-    close $fh;
-
-    my $record = eval { decode_json($raw) };
-    if ($@ || !$record) {
-        _send_error($conn, 500, 'server error', 'corrupt result record');
-        return;
-    }
-
     _send_json($conn, 200, { ok => JSON::true, %$record });
-}
-
-sub _store_run_result {
-    my ($reqid, $script, $hosts, $results) = @_;
-
-    unless (-d $RUNS_DIR) {
-        eval { File::Path::make_path($RUNS_DIR, { mode => 0750 }) };
-        if ($@) {
-            Exec::Log::log_action('WARNING', {
-                ACTION => 'run-store-fail',
-                REQID  => $reqid,
-                ERROR  => "cannot create $RUNS_DIR: $@",
-            });
-            return;
-        }
-    }
-
-    my $record = encode_json({
-        reqid     => $reqid,
-        script    => $script,
-        hosts     => $hosts,
-        results   => $results,
-        completed => time(),
-    });
-
-    my $file = "$RUNS_DIR/$reqid.json";
-    if (open my $fh, '>', $file) {
-        print $fh $record;
-        close $fh;
-        chmod 0640, $file;
-    }
-    else {
-        Exec::Log::log_action('WARNING', {
-            ACTION => 'run-store-fail',
-            REQID  => $reqid,
-            ERROR  => "cannot write $file: $!",
-        });
-    }
-}
-
-sub _purge_old_runs {
-    return unless -d $RUNS_DIR;
-    my $cutoff = time() - $RUNS_TTL;
-    opendir my $dh, $RUNS_DIR or return;
-    while (my $entry = readdir $dh) {
-        next unless $entry =~ /^[a-f0-9]+\.json$/;
-        my $file = "$RUNS_DIR/$entry";
-        my $mtime = (stat $file)[9] // 0;
-        unlink $file if $mtime < $cutoff;
-    }
-    closedir $dh;
 }
 
 sub _parse_body {
@@ -673,6 +635,7 @@ sub _status_phrase {
     my ($code) = @_;
     my %phrases = (
         200 => 'OK',
+        202 => 'Accepted',
         400 => 'Bad Request',
         403 => 'Forbidden',
         404 => 'Not Found',
