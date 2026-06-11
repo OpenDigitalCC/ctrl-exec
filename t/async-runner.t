@@ -50,7 +50,7 @@ sub write_script {
         args        => [],
         runs_dir    => $dir,
     );
-    is $ok, 1, 'submit returns 1 (job spawned)';
+    is $ok->{ok}, 1, 'submit returns ok=1 (job spawned)';
 
     my $rec = wait_for_status($reqid, $dir, 'done', 5);
     is   $rec->{status}, 'done',           'job reaches done';
@@ -79,6 +79,56 @@ sub write_script {
     my $done = wait_for_status($reqid, $dir, 'done', 5);
     is   $done->{status}, 'done',         'result becomes done after the script exits';
     like $done->{stdout}, qr/slow-done/,  'slow job stdout captured';
+}
+
+# --- agent-side concurrency: same script refused while one is detached ---
+{
+    my $dir    = tempdir(CLEANUP => 1);
+    my $script = "$dir/conc.sh";
+    write_script($script, "#!/bin/sh\nsleep 1\necho conc-done\n");
+
+    my $first = Exec::Agent::AsyncRunner::submit(
+        reqid => 'aabbccdd00220001', script => 'conc',
+        script_path => $script, runs_dir => $dir,
+    );
+    is $first->{ok}, 1, 'first run of a script is accepted';
+
+    # The first job is still sleeping, so a second run of the same script is
+    # refused with reason 'busy' (no record written for the second reqid).
+    my $second = Exec::Agent::AsyncRunner::submit(
+        reqid => 'aabbccdd00220002', script => 'conc',
+        script_path => $script, runs_dir => $dir,
+    );
+    is $second->{ok},     0,      'concurrent run of the same script refused';
+    is $second->{reason}, 'busy', 'refusal reason is busy';
+    is Exec::Agent::AsyncRunner::result('aabbccdd00220002', $dir), undef,
+        'no record written for the refused run';
+
+    # A different script is unaffected by the lock on 'conc'.
+    my $other_script = "$dir/other.sh";
+    write_script($other_script, "#!/bin/sh\necho other\n");
+    my $other = Exec::Agent::AsyncRunner::submit(
+        reqid => 'aabbccdd00220003', script => 'other',
+        script_path => $other_script, runs_dir => $dir,
+    );
+    is $other->{ok}, 1, 'a different script runs concurrently';
+
+    # Once the first job finishes the lock frees and the script can run again.
+    # The lock releases as the detached job exits, just after it writes 'done';
+    # poll so the test does not race that final microsecond.
+    wait_for_status('aabbccdd00220001', $dir, 'done', 5);
+    my $again;
+    my $deadline = time + 5;
+    while (time <= $deadline) {
+        $again = Exec::Agent::AsyncRunner::submit(
+            reqid => 'aabbccdd00220004', script => 'conc',
+            script_path => $script, runs_dir => $dir,
+        );
+        last if $again->{ok};
+        select undef, undef, undef, 0.02;
+    }
+    is $again->{ok}, 1, 'script can run again after the previous job completes';
+    wait_for_status('aabbccdd00220004', $dir, 'done', 5);
 }
 
 # --- result() for unknown reqid, and purge_expired ---

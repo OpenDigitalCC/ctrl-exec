@@ -6,6 +6,7 @@ use JSON       qw(encode_json decode_json);
 use File::Path qw(make_path);
 use File::Temp qw(tempfile);
 use File::Basename qw(dirname);
+use Fcntl      qw(LOCK_EX LOCK_NB);
 use POSIX      qw(setsid strftime);
 use Carp       qw(croak);
 
@@ -25,22 +26,33 @@ my $DEFAULT_TTL      = 86400;   # seconds; results older than this are purged
 #
 # NOTE: detachment here is setsid + double-fork, which survives the triggering
 # connection and this handler process. Surviving `systemctl restart
-# ctrl-exec-agent` additionally requires the job to run in its own cgroup (a
-# systemd transient scope) - that is layered on in a later step; this is the
-# store + detached-exec foundation.
+# ctrl-exec-agent` additionally requires `KillMode=process` on the agent unit so
+# the restart kills only the main process and leaves the detached grandchild
+# running - that is wired in at the packaging step; this is the store +
+# detached-exec foundation.
+#
+# Concurrency: a second async run of the SAME script is refused while one is
+# still detached. This is enforced agent-side with a per-script flock held by
+# the detached grandchild for the job's lifetime (the dispatcher lock releases
+# as soon as the async submit returns, so it cannot cover the job). The lock fd
+# is inherited across the double-fork and shared via the open file description,
+# so the lock stays held until the grandchild exits.
 #
 # Required opts:
 #   reqid       => $hex      (the dispatch request id; used as the store key)
 #   script_path => $path     (absolute path; caller has done the allowlist check)
 #
 # Optional opts:
-#   script      => $name     (allowlist name, for the record)
+#   script      => $name     (allowlist name; the concurrency key and record tag)
 #   args        => \@args     (default [])
 #   context     => \%context  (JSON piped to the script's stdin)
 #   runs_dir    => $path      (default /var/lib/ctrl-exec-agent/runs)
 #   stdin_timeout => $sec     (passed to Runner::run_script)
 #
-# Returns 1 once the job is spawned, 0 if it could not be spawned.
+# Returns a hashref:
+#   { ok => 1 }                       job spawned and recorded 'running'
+#   { ok => 0, reason => 'busy' }     same script already running (no record written)
+#   { ok => 0, reason => 'error' }    fork failed; could not spawn
 sub submit {
     my (%opts) = @_;
     my $reqid       = $opts{reqid}       or croak "reqid required";
@@ -54,6 +66,17 @@ sub submit {
     my $timeout  = $opts{stdin_timeout};
 
     make_path($runs_dir) unless -d $runs_dir;
+
+    # Acquire the per-script concurrency lock before writing any record. If a
+    # job for this script is already detached, refuse without clobbering the
+    # store. A blank script name carries no concurrency guarantee (callers
+    # always pass the allowlist name); skip the lock in that case.
+    my $lock_fh;
+    if (length $script) {
+        $lock_fh = _acquire_script_lock($runs_dir, $script);
+        return { ok => 0, reason => 'busy' } unless $lock_fh;
+    }
+
     my $started = _now();
 
     # Record 'running' before spawning so a fetch between spawn and completion
@@ -65,7 +88,7 @@ sub submit {
         started => $started,
     });
 
-    return _spawn_detached(sub {
+    my $spawned = _spawn_detached(sub {
         my $result = Exec::Agent::Runner::run_script(
             $script_path, $args, $context, $timeout,
         );
@@ -79,7 +102,12 @@ sub submit {
             stdout   => $result->{stdout},
             stderr   => $result->{stderr},
         });
+        # The lock is released when this grandchild exits and its inherited fd
+        # closes. Reference it here so it stays open for the job's lifetime.
+        undef $lock_fh;
     });
+
+    return $spawned ? { ok => 1 } : { ok => 0, reason => 'error' };
 }
 
 # Return the stored result record for a reqid, or undef if none.
@@ -112,6 +140,25 @@ sub purge_expired {
 }
 
 # --- private ---
+
+# Acquire the per-script concurrency lock non-blocking. Returns the open
+# filehandle (caller keeps it in scope to hold the lock) or undef if the lock
+# is already held by another running job. The lock files live in a sibling
+# `.locks` dir under the run store; the flock is released when the last fd
+# referring to it closes (i.e. when the detached grandchild exits).
+sub _acquire_script_lock {
+    my ($runs_dir, $script) = @_;
+    my $lock_dir = "$runs_dir/.locks";
+    make_path($lock_dir) unless -d $lock_dir;
+    (my $safe = $script) =~ s/[^\w.\-]/_/g;
+    my $path = "$lock_dir/$safe.lock";
+    open my $fh, '>>', $path or return undef;
+    unless (flock $fh, LOCK_EX | LOCK_NB) {
+        close $fh;
+        return undef;
+    }
+    return $fh;
+}
 
 # Run $worker in a detached grandchild (double-fork + setsid) so it survives
 # this process and the connection that triggered it. Returns 1 on spawn.

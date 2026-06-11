@@ -7,6 +7,7 @@ use lib "$Bin/../lib";
 
 use Exec::Agent::Config    qw();
 use Exec::Agent::Runner    qw();
+use Exec::Agent::AsyncRunner    qw();
 use Exec::Agent::AgentPairing   qw();
 use Exec::RateLimit qw();
 use Exec::Auth           qw();
@@ -520,6 +521,9 @@ sub handle_connection {
     elsif ($method eq 'GET' && $path eq '/capabilities') {
         handle_capabilities($conn, $peer, $allowlist, $config, $disp_serial, $peer_serial);
     }
+    elsif ($method eq 'GET' && $path =~ m{^/result/([A-Za-z0-9_-]+)\z}) {
+        handle_result($conn, $1, $peer, $config, $disp_serial, $peer_serial);
+    }
     else {
         _send_raw($conn, 404, encode_json({ error => 'not found' }));
     }
@@ -613,6 +617,62 @@ sub handle_run {
         token     => $token,
         timestamp => POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime),
     };
+
+    # Asynchronous path: start the script detached, persist its result to the
+    # agent's run store keyed by reqid, and return 202 immediately. The caller
+    # fetches the result later via GET /result/<reqid>. A valid reqid is
+    # required because it is the store key.
+    if ($data->{async}) {
+        unless (length $reqid && $reqid =~ /^[A-Za-z0-9_-]+\z/) {
+            _send_json($conn, {
+                script => $name, exit => -1, reqid => $reqid,
+                error  => 'async run requires a valid reqid',
+            });
+            return;
+        }
+
+        my $sub = Exec::Agent::AsyncRunner::submit(
+            reqid         => $reqid,
+            script        => $name,
+            script_path   => $script_path,
+            args          => $args,
+            context       => $context,
+            runs_dir      => _async_runs_dir($config),
+            stdin_timeout => $config->{stdin_timeout} // 10,
+        );
+
+        if (!$sub->{ok} && ($sub->{reason} // '') eq 'busy') {
+            Exec::Log::log_action('WARNING', {
+                ACTION => 'run-async-busy',
+                SCRIPT => $name,
+                PEER   => $peer,
+                REQID  => $reqid,
+            });
+            _send_raw($conn, 409, encode_json({
+                script => $name, status => 'busy', reqid => $reqid,
+                error  => 'script already running',
+            }));
+            return;
+        }
+        if (!$sub->{ok}) {
+            _send_json($conn, {
+                script => $name, exit => -1, reqid => $reqid,
+                error  => 'could not start async job',
+            });
+            return;
+        }
+
+        Exec::Log::log_action('INFO', {
+            ACTION => 'run-async',
+            SCRIPT => $name,
+            PEER   => $peer,
+            REQID  => $reqid,
+        });
+        _send_raw($conn, 202, encode_json({
+            script => $name, status => 'accepted', reqid => $reqid,
+        }));
+        return;
+    }
 
     my $result = Exec::Agent::Runner::run_script(
         $script_path, $args, $context,
@@ -750,6 +810,56 @@ sub handle_capabilities {
     });
 }
 
+# Return the stored result for an async run keyed by reqid.
+# Gated by the same dispatcher-serial check as /run: only the genuine
+# ctrl-exec cert may fetch results. The reqid is a 64-bit unguessable token,
+# so an agent only holds a result for a reqid it actually ran.
+#
+# Responses:
+#   200 { status => 'running', ... }   job still detached
+#   200 { status => 'done', exit, stdout, stderr, ... }
+#   404 { status => 'unknown' }        no record (never ran here, or TTL-purged)
+sub handle_result {
+    my ($conn, $reqid, $peer, $config, $disp_serial, $peer_serial) = @_;
+
+    unless (_check_dispatcher_serial($peer_serial, $disp_serial)) {
+        _send_raw($conn, 403, encode_json({ error => 'serial mismatch', status => 'forbidden' }));
+        Exec::Log::log_action('WARNING', {
+            ACTION => 'serial-reject',
+            PEER   => $peer,
+            REQID  => $reqid,
+        });
+        return;
+    }
+
+    my $record = Exec::Agent::AsyncRunner::result($reqid, _async_runs_dir($config));
+
+    unless ($record) {
+        Exec::Log::log_action('INFO', {
+            ACTION => 'result-miss',
+            PEER   => $peer,
+            REQID  => $reqid,
+        });
+        _send_raw($conn, 404, encode_json({ status => 'unknown', reqid => $reqid }));
+        return;
+    }
+
+    Exec::Log::log_action('INFO', {
+        ACTION => 'result',
+        PEER   => $peer,
+        REQID  => $reqid,
+        STATUS => $record->{status} // 'unknown',
+    });
+    _send_json($conn, $record);
+}
+
+# Resolve the agent-side async run store directory from config, with the
+# packaged default.
+sub _async_runs_dir {
+    my ($config) = @_;
+    return $config->{async_runs_dir} // '/var/lib/ctrl-exec-agent/runs';
+}
+
 # Verify that the peer cert serial matches the stored ctrl-exec serial.
 # Returns 1 if matched, 0 if not. Does not log - caller logs on failure.
 # Both arguments must be non-empty lowercase hex strings to return 1.
@@ -783,8 +893,11 @@ sub _send_raw {
     my ($conn, $code, $body) = @_;
     my %status_text = (
         200 => 'OK',
+        202 => 'Accepted',
         400 => 'Bad Request',
+        403 => 'Forbidden',
         404 => 'Not Found',
+        409 => 'Conflict',
         413 => 'Content Too Large',
         431 => 'Request Header Fields Too Large',
     );
