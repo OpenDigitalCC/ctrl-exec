@@ -134,6 +134,13 @@ Request body:
 `username`, `token`
 : Optional. Passed to auth hook and forwarded to the agent as request context.
 
+`async`
+: Optional boolean (default `false`). When `true`, each agent starts the
+  script detached and the API returns **202** with a `reqid` immediately
+  instead of blocking for results. Use for jobs that run longer than
+  `read_timeout`. Fetch results later from `GET /status/{reqid}`. See
+  *Asynchronous runs* below.
+
 Response (success):
 
 ```json
@@ -162,26 +169,42 @@ Response (lock conflict):
 { "ok": false, "error": "locked", "code": 4, "conflicts": ["db-01"] }
 ```
 
+Response (async submission, `"async": true`): **202 Accepted**
+
+```json
+{
+  "ok": true,
+  "async": true,
+  "reqid": "a1b2c3d4e5f60718",
+  "results": [
+    { "host": "db-01", "status": "accepted", "reqid": "a1b2c3d4e5f60718", "rtt": "12ms" },
+    { "host": "db-02", "status": "busy", "error": "script already running", "rtt": "9ms" }
+  ]
+}
+```
+
+Each host reports `accepted` (job started detached), `busy` (the agent
+refused because the same script is already running there), or `error` (the
+submission failed). Poll `GET /status/{reqid}` for results.
+
 ---
 
 ### `GET /status/{reqid}`
 
-Returns the stored result for a completed run. Results are persisted to
-`/var/lib/ctrl-exec/runs/<reqid>.json` for 24 hours after the run
-completes, then purged.
+Returns the stored record for a run. Records are persisted to
+`/var/lib/ctrl-exec/runs/<reqid>.json` and purged 24 hours after the run
+completes. The response shape depends on how the run was submitted.
 
-This endpoint supports an async polling pattern: submit a run with
-`POST /run`, record the top-level `reqid`, then poll
-`GET /status/{reqid}` at a suitable interval. The calling programme
-controls the polling logic; there is no push or callback mechanism.
-
-Response (found):
+**Synchronous run** (the default). The record carries the completed
+per-host `results` array:
 
 ```json
 {
   "ok": true,
   "reqid": "a1b2c3d4",
   "script": "pg-backup",
+  "mode": "sync",
+  "complete": true,
   "hosts": ["db-01", "db-02"],
   "completed": 1737123456,
   "results": [
@@ -190,14 +213,49 @@ Response (found):
 }
 ```
 
-`completed`
-: Unix timestamp of when the run completed and the result was stored.
+**Asynchronous run** (`"async": true` on `/run`). On each `GET /status`
+the API fetches results from every still-pending host, merges them, and
+returns a per-host `hosts` map plus a `complete` flag and `pending` list:
+
+```json
+{
+  "ok": true,
+  "reqid": "a1b2c3d4e5f60718",
+  "script": "pg-backup",
+  "mode": "async",
+  "complete": false,
+  "pending": ["db-02"],
+  "hosts": {
+    "db-01": { "status": "done", "exit": 0, "stdout": "Backup complete\n", "stderr": "" },
+    "db-02": { "status": "running" }
+  }
+}
+```
+
+Per-host `status` values: `accepted`/`running` (still in progress), `done`
+(finished, with `exit`/`stdout`/`stderr`), `expired` (the agent purged its
+result before it was fetched), `busy`/`error` (the job never ran on that
+host). A transient fetch failure leaves the host pending and adds a
+`fetch_error` field; the next poll retries it.
+
+`complete`
+: `true` once no host is still pending. `pending` lists the hosts still
+  running. Poll until `complete` is `true`.
 
 Response (not found): 404 with `{ ok: false, error: "not found", detail: "no result for reqid <id>" }`.
 
-A 404 means either the reqid never existed, the result has been purged
-after 24 hours, or the run was submitted before this version of the API
-was deployed (earlier versions did not persist results).
+A 404 means either the reqid never existed or the whole record was purged
+after 24 hours. (A single host whose agent-side result was purged shows as
+`expired` within an otherwise-present record, not a 404.)
+
+#### Asynchronous runs
+
+Submit with `"async": true`, record the top-level `reqid`, then poll
+`GET /status/{reqid}` until `complete` is `true`. The agent runs each job
+detached, so it survives the connection close and an agent restart
+(`KillMode=process`); results are held agent-side and fetched on demand.
+The calling programme controls the polling cadence; there is no push or
+callback. The CLI `ctrl-exec wait <reqid>` implements this poll loop.
 
 ---
 
@@ -253,6 +311,7 @@ from this live response, so `ctrl-exec list-agents --tags` can filter offline.
 
 ```
 200   Success
+202   Async run accepted (POST /run with "async": true)
 400   Bad request (missing body, invalid JSON, missing required field)
 403   Auth denied
 404   Unknown route or unknown/expired reqid (status endpoint)

@@ -197,8 +197,10 @@ remains the default; async is opt-in.
   the reqid to the caller.
 - *Run + persist.* A detached reaper on the agent waits for the script and
   writes the result to an agent-side store `/var/lib/ctrl-exec-agent/runs/
-  <reqid>.json` (`running` then `done` with exit/stdout/stderr). Root-owned
-  0750, TTL-purged, same at-rest sensitivity as the dispatcher store.
+  <reqid>.json` (`running` then `done` with exit/stdout/stderr). The store dir
+  is `0750` owned by the unprivileged agent user (the agent process writes it
+  directly), records `0640`, TTL-purged, same at-rest sensitivity as the
+  dispatcher store.
 - *Fetch.* New agent endpoint `GET /result/<reqid>` (mTLS + serial-checked,
   same gate as `/run`) returns the stored result, `pending`, or 404. On
   `status`, the dispatcher fetches from each still-pending host, updates its
@@ -226,16 +228,19 @@ remains the default; async is opt-in.
 5. *Retention/TTL* - the agent result store mirrors the dispatcher's 24h purge;
    once a result is purged, `status` reports it as expired rather than 404.
 
-**Build order (incremental, reviewable):**
+**Build order (incremental, reviewable) — all six steps implemented on
+branch `claude/async`:**
 
-1. Agent: result store + detached exec + `running`/`done` persistence (no
-   endpoint yet) - exercised by a local unit test.
-2. Agent: `GET /result/<reqid>` (serial-checked) + `async` flag on `/run`.
+1. Agent: result store + detached exec + `running`/`done` persistence
+   (`Exec::Agent::AsyncRunner`, `t/async-runner.t`).
+2. Agent: `GET /result/<reqid>` (serial-checked) + `async` flag on `/run`,
+   with agent-side per-script concurrency.
 3. Engine: `dispatch_all` async mode (collect `accepted`) + `result_all`
    (fetch by reqid).
-4. Dispatcher reqid->host registry in `runs/<reqid>.json`; `status`
-   aggregation + fetch.
-5. API `POST /run {async}` + `GET /status` async semantics; CLI `run --async`,
-   `status`, `wait`.
-6. Install/packaging (new agent runs dir, systemd `ReadWritePaths`/`KillMode`),
-   docs (REFERENCE/API/SECURITY/website), tests across the lifecycle.
+4. Dispatcher reqid->host registry in `runs/<reqid>.json` + `status`
+   aggregation/fetch (`Exec::RunStore`, `t/run-store.t`).
+5. API `POST /run {async}` (202) + `GET /status` async semantics; CLI
+   `run --async`, `status`, `wait`.
+6. Install/packaging (agent runs dir, systemd `KillMode=process` +
+   `StateDirectory`), docs (REFERENCE/API/SECURITY/openapi/website), and a
+   lifecycle integration test.

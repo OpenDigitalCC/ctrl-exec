@@ -109,7 +109,7 @@ Request:
 }
 ```
 
-`hosts` and `script` are required. `args`, `username`, and `token` are optional.
+`hosts` and `script` are required. `args`, `username`, and `token` are optional. Set `"async": true` to submit detached (for long-running jobs) — the API returns **202** with a `reqid` immediately; see [Asynchronous runs](#asynchronous-runs) below.
 
 Response (success):
 
@@ -158,22 +158,61 @@ Response (lock conflict):
 
 The top-level `reqid` is the correlation ID for this dispatch. It appears in both ctrl-exec and agent log entries. Results are stored for 24 hours and retrievable via `GET /status/{reqid}`.
 
+## Asynchronous runs
+
+With `"async": true`, each agent starts the script detached and the API responds **202 Accepted** with the per-host acceptance state:
+
+```json
+{
+  "ok":    true,
+  "async": true,
+  "reqid": "a1b2c3d4e5f60718",
+  "results": [
+    { "host": "db-01", "status": "accepted", "reqid": "a1b2c3d4e5f60718", "rtt": "12ms" },
+    { "host": "db-02", "status": "busy", "error": "script already running", "rtt": "9ms" }
+  ]
+}
+```
+
+A host reports `accepted` (job started), `busy` (the agent is already running that script), or `error` (submission failed). Poll `GET /status/{reqid}` until the run is complete. The detached job survives the connection close and an agent restart; its result is held agent-side and fetched on demand.
+
 # GET /status/{reqid}
 
-Returns the stored result for a completed run. Results are retained for 24 hours. Supports async polling: submit a run, record the top-level `reqid`, poll at a suitable interval.
+Returns the stored record for a run, retained for 24 hours. The shape depends on how the run was submitted.
 
-Response (found):
+A **synchronous** run carries the completed `results` array:
 
 ```json
 {
   "ok":        true,
   "reqid":     "a1b2c3d4",
   "script":    "pg-backup",
+  "mode":      "sync",
+  "complete":  true,
   "hosts":     ["db-01"],
   "completed": 1737123456,
   "results":   [...]
 }
 ```
+
+An **asynchronous** run carries a per-host `hosts` map; each `GET /status` fetches results from any host still running and merges them:
+
+```json
+{
+  "ok":       true,
+  "reqid":    "a1b2c3d4e5f60718",
+  "script":   "pg-backup",
+  "mode":     "async",
+  "complete": false,
+  "pending":  ["db-02"],
+  "hosts": {
+    "db-01": { "status": "done", "exit": 0, "stdout": "Backup complete\n", "stderr": "" },
+    "db-02": { "status": "running" }
+  }
+}
+```
+
+Per-host `status`: `accepted`/`running` (in progress), `done` (finished, with `exit`/`stdout`/`stderr`), `expired` (the agent purged its result before it was fetched), `busy`/`error` (never ran there). Poll until `complete` is `true`.
 
 Response (not found): HTTP 404 with `{ "ok": false, "error": "not found" }`.
 
@@ -229,6 +268,7 @@ Use this endpoint to generate accurate client code or to drive tooling that need
 | Code | Meaning |
 | --- | --- |
 | `200` | Success |
+| `202` | Async run accepted (`"async": true`) |
 | `400` | Bad request — missing field or invalid JSON |
 | `403` | Auth denied |
 | `404` | Unknown route or unknown/expired reqid |

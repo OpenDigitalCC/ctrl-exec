@@ -111,6 +111,33 @@ Output shows per-host status, exit code, round-trip time, stdout, and stderr.
 Exit code is 0 if all hosts succeeded, 1 if any host failed or returned
 a non-zero exit.
 
+#### Asynchronous runs (`--async`)
+
+For jobs that run longer than the dispatcher `read_timeout` (default 60s),
+submit with `--async`:
+
+```bash
+ctrl-exec run db-01 db-02 long-reindex --async
+```
+
+The agent starts the script detached and the command returns immediately
+with a request id instead of waiting for output:
+
+```
+Submitted async run  req:a1b2c3d4e5f60718
+==> db-01  [accepted  12ms]
+==> db-02  [accepted  10ms]
+Check progress with: ctrl-exec status a1b2c3d4e5f60718
+```
+
+Each host reports `accepted`, `BUSY` (the agent is already running that
+script), or `ERROR`. Exit code is 0 if any host accepted, 1 if none did.
+Retrieve results later with `status` or `wait` (below). Because the job is
+detached (`setsid` + the agent unit's `KillMode=process`), it survives the
+connection close and an agent restart; its result is held on the agent and
+fetched on demand. Agent-side concurrency still applies: a second async run
+of the same script on a host is refused while the first is in flight.
+
 #### Dispatch host resolution
 
 When a host argument matches a registered agent name, both the connect
@@ -139,6 +166,58 @@ of the address actually connected to. When the agent reports a different
 hostname for itself, that reported name is shown in brackets — for example
 `web-01 (vm-7a3f)` — or carried as `reported_hostname` in JSON / discovery
 output.
+
+---
+
+### status
+
+Show the current state of an asynchronous run submitted with `run --async`.
+
+```bash
+ctrl-exec status <reqid>
+```
+
+On each call the dispatcher fetches results from every host still running,
+merges them into the stored record, and prints the per-host state:
+
+```
+Request a1b2c3d4e5f60718  (script: long-reindex)  [PENDING]
+==> db-01  [done  exit:0]
+reindex complete
+==> db-02  [running]
+```
+
+Per-host states: `done` (with exit code, stdout, stderr), `running` /
+`accepted` (still in progress), `EXPIRED` (the agent purged its result
+before it was fetched — results live 24h), `BUSY` or `ERROR` (the job never
+ran there). The header shows `COMPLETE` once no host is still running.
+`--json` emits the full record. Exit code is 0 when the record is found,
+1 if the reqid is unknown.
+
+---
+
+### wait
+
+Poll an asynchronous run until it completes, then print the final result.
+
+```bash
+ctrl-exec wait <reqid> [--timeout <seconds>]
+```
+
+`wait` repeatedly aggregates `status` (every 2s) until every host has
+finished or the timeout elapses (default 300s). Output is the same as
+`status`. Exit code:
+
+- `0` — complete, all hosts succeeded (exit 0)
+- `1` — complete, but some host failed (non-zero exit, busy, error, or expired)
+- `2` — timed out while still pending
+
+This makes `wait` suitable for scripting a submit-then-block flow:
+
+```bash
+reqid=$(ctrl-exec run db-01 db-02 long-reindex --async --json | jq -r .reqid)
+ctrl-exec wait "$reqid" --timeout 600
+```
 
 ---
 

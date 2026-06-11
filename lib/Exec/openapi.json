@@ -152,9 +152,67 @@
               }
             }
           },
+          "202": {
+            "description": "Asynchronous submission accepted (async=true). Each agent has started the script detached; poll GET /status/{reqid} for results. Per-host acceptance is reported inline (accepted, busy, or error).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AsyncSubmitResponse" },
+                "example": {
+                  "ok": true,
+                  "async": true,
+                  "reqid": "a1b2c3d4e5f60718",
+                  "results": [
+                    { "host": "db-01", "status": "accepted", "reqid": "a1b2c3d4e5f60718", "rtt": "12ms" },
+                    { "host": "db-02", "status": "busy", "error": "script already running", "reqid": "a1b2c3d4e5f60718", "rtt": "9ms" }
+                  ]
+                }
+              }
+            }
+          },
           "400": { "$ref": "#/components/responses/BadRequest" },
           "403": { "$ref": "#/components/responses/Forbidden" },
           "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/status/{reqid}": {
+      "get": {
+        "summary": "Get the status/result of a run",
+        "description": "Returns the stored record for a request id. For a synchronous run this is the completed result. For an asynchronous run (async=true on /run) the API fetches any still-pending host results from the agents, merges them, and returns the per-host state: accepted/running (still going), done (with exit/stdout/stderr), expired (the agent purged its result), or error. Records are purged after 24 hours.",
+        "operationId": "getRunStatus",
+        "parameters": [
+          {
+            "name": "reqid",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^[a-f0-9]+$" },
+            "description": "The request id returned by POST /run.",
+            "example": "a1b2c3d4e5f60718"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run record. Shape differs by mode: a sync record carries a results array; an async record carries a per-host hosts map plus complete/pending.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/StatusResponse" },
+                "example": {
+                  "ok": true,
+                  "reqid": "a1b2c3d4e5f60718",
+                  "script": "pg-backup",
+                  "mode": "async",
+                  "complete": false,
+                  "pending": ["db-02"],
+                  "hosts": {
+                    "db-01": { "status": "done", "exit": 0, "stdout": "Backup complete\n", "stderr": "" },
+                    "db-02": { "status": "running" }
+                  }
+                }
+              }
+            }
+          },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
     },
@@ -271,7 +329,12 @@
             "example": ["--database", "myapp"]
           },
           "username": { "type": "string", "example": "alice" },
-          "token":    { "type": "string", "example": "mytoken" }
+          "token":    { "type": "string", "example": "mytoken" },
+          "async": {
+            "type": "boolean",
+            "description": "Submit detached (for long-running jobs). When true the agents start the script in the background and the API returns 202 with a reqid immediately; fetch results later from GET /status/{reqid}. Defaults to false (synchronous).",
+            "example": false
+          }
         }
       },
       "RunResult": {
@@ -297,6 +360,67 @@
         "properties": {
           "ok":      { "type": "boolean", "enum": [true] },
           "results": { "type": "array", "items": { "$ref": "#/components/schemas/RunResult" } }
+        }
+      },
+      "AsyncSubmitResult": {
+        "type": "object",
+        "required": ["host", "status"],
+        "properties": {
+          "host":   { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["accepted", "busy", "error"],
+            "description": "accepted: job started detached. busy: the agent refused because the same script is already running. error: the submission failed (e.g. serial mismatch, host unreachable)."
+          },
+          "reqid":  { "type": "string" },
+          "rtt":    { "type": "string", "example": "12ms" },
+          "error":  { "type": "string", "description": "Present for busy/error." }
+        }
+      },
+      "AsyncSubmitResponse": {
+        "type": "object",
+        "required": ["ok", "reqid", "results"],
+        "properties": {
+          "ok":      { "type": "boolean", "enum": [true] },
+          "async":   { "type": "boolean", "enum": [true] },
+          "reqid":   { "type": "string", "description": "Poll GET /status/{reqid} for results.", "example": "a1b2c3d4e5f60718" },
+          "results": { "type": "array", "items": { "$ref": "#/components/schemas/AsyncSubmitResult" } }
+        }
+      },
+      "HostStatus": {
+        "type": "object",
+        "required": ["status"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["accepted", "running", "done", "expired", "busy", "error"],
+            "description": "accepted/running: still in progress. done: finished (exit/stdout/stderr present). expired: the agent purged its result before it was fetched. busy/error: the job never ran on this host."
+          },
+          "exit":        { "type": "integer", "description": "Present when status is done." },
+          "stdout":      { "type": "string" },
+          "stderr":      { "type": "string" },
+          "error":       { "type": "string", "description": "Present for busy/error." },
+          "fetch_error": { "type": "string", "description": "Transient fetch failure on the last poll; the host stays pending and is retried." }
+        }
+      },
+      "StatusResponse": {
+        "type": "object",
+        "required": ["ok", "reqid"],
+        "description": "A run record. A sync record carries a results array; an async record carries a per-host hosts map plus complete/pending.",
+        "properties": {
+          "ok":        { "type": "boolean", "enum": [true] },
+          "reqid":     { "type": "string" },
+          "script":    { "type": "string" },
+          "mode":      { "type": "string", "enum": ["sync", "async"] },
+          "complete":  { "type": "boolean", "description": "True when no host is still pending." },
+          "pending":   { "type": "array", "items": { "type": "string" }, "description": "Hosts still running (async only)." },
+          "hosts": {
+            "type": "object",
+            "description": "Async only. Map of hostname to its current status.",
+            "additionalProperties": { "$ref": "#/components/schemas/HostStatus" }
+          },
+          "results":   { "type": "array", "items": { "$ref": "#/components/schemas/RunResult" }, "description": "Sync only. Per-host results as returned by /run." },
+          "completed": { "type": "integer", "description": "Sync only. Unix time the run completed." }
         }
       },
       "DiscoveryRequest": {
@@ -393,6 +517,15 @@
           "application/json": {
             "schema": { "$ref": "#/components/schemas/ErrorResponse" },
             "example": { "ok": false, "error": "locked", "code": 4, "conflicts": ["db-01"] }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "No record exists for the given request id (never issued, or purged after the 24h TTL).",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+            "example": { "ok": false, "error": "not found", "detail": "no result for reqid deadbeef" }
           }
         }
       },

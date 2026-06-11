@@ -48,6 +48,37 @@ ENVEXEC_TOKEN=mytoken ced run host-a backup-mysql
 
 A host argument that matches a registered agent is resolved from the registry — its stored address (by the agent's `lookup_by`: hostname, or the IP recorded at pairing) and its operational port. A `<host>:<port>` argument, or one that is not a registered agent, is used verbatim. Results are keyed by the registry name; if the agent reports a different hostname for itself it is shown in brackets, e.g. `web-01 (vm-7a3f)`. The same resolution applies to `ping`.
 
+## Asynchronous runs
+
+For jobs longer than the dispatcher read timeout, add `--async`. The agent runs the script detached and `run` returns immediately with a request id instead of blocking; retrieve results later with `status` or `wait`.
+
+```bash
+ced run db-01 db-02 long-reindex --async
+```
+
+Each host reports `accepted`, `BUSY` (the agent is already running that script), or `ERROR`. The detached job survives the connection close and an agent restart (the agent unit uses `KillMode=process`); its result is held on the agent for 24 hours and fetched on demand.
+
+# status
+
+```
+ced status <reqid>
+```
+
+Shows the current per-host state of an async run (`done` with output, `running`, `EXPIRED`, `BUSY`, or `ERROR`) and whether the run is `COMPLETE`. Each call fetches results from any host still running. Exit code 0 if the request is known, 1 if not.
+
+# wait
+
+```
+ced wait <reqid> [--timeout <seconds>]
+```
+
+Polls `status` (every 2s) until every host finishes or the timeout elapses (default 300s), then prints the final result. Exit code: `0` all hosts succeeded, `1` some host failed, `2` timed out still pending.
+
+```bash
+reqid=$(ced run db-01 long-reindex --async --json | jq -r .reqid)
+ced wait "$reqid" --timeout 600
+```
+
 # ping
 
 ```

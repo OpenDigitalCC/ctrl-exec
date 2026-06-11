@@ -258,10 +258,21 @@ Agent-side hook
 /var/lib/ctrl-exec/pairing/        0770  root:ctrl-exec
 /var/lib/ctrl-exec/agents/         0770  root:ctrl-exec
 /var/lib/ctrl-exec/locks/          0770  root:ctrl-exec
+/var/lib/ctrl-exec/runs/           0750  root:ctrl-exec          dispatcher run/status records
+/var/lib/ctrl-exec/runs/*.json     0640  root:ctrl-exec
+
+/var/lib/ctrl-exec-agent/runs/     0750  ctrl-exec-agent         async result store (agent side)
+/var/lib/ctrl-exec-agent/runs/*.json 0640 ctrl-exec-agent
 ```
 
 The `ctrl-exec-agent` system user has no login shell and no home directory.
 The `ctrl-exec` group grants CLI access to non-root operators.
+
+Both run stores hold script stdout/stderr at rest, the same sensitivity as a
+live run's output. They are not world-readable (records `0640`, directories
+`0750`) and are purged 24 hours after a run completes. The agent-side store is
+owned by the unprivileged `ctrl-exec-agent` user because the agent process
+writes it directly; the dispatcher store is owned by `root:ctrl-exec`.
 
 
 ## Systemd Hardening
@@ -278,6 +289,17 @@ PrivateDevices=yes
 
 The API unit additionally sets `ReadWritePaths=/var/lib/ctrl-exec` to
 restrict filesystem write access to the runtime directory only.
+
+The agent unit sets `StateDirectory=ctrl-exec-agent`, which creates and owns
+`/var/lib/ctrl-exec-agent` (mode `0750`) and is the only path the agent may
+write under `ProtectSystem=strict` — the async result store lives there. It
+also sets `KillMode=process` so that stopping or restarting the agent signals
+only the main process: detached async jobs keep running to completion rather
+than being killed with the control group, and the restarted agent serves their
+results from the store. This widens nothing — detached jobs were already
+children of the agent and run with the same unprivileged identity and the same
+allowlist constraints; `KillMode=process` only changes which processes receive
+the stop signal.
 
 The agent unit applies additional containment:
 
