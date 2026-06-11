@@ -17,6 +17,7 @@ TODO.md
 # Disposable diagnostic scripts and commit-message files (see
 # ~/.claude/CLAUDE.md command-composition conventions)
 tmp/
+.claude/
 
 # Local helper scripts from assistant sessions (prompt-reduction wrappers),
 # not part of the project tree
