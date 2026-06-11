@@ -141,6 +141,17 @@ Allowlist is server-enforced
   request. A ctrl-exec cannot request a script that is not in the agent's
   allowlist regardless of what it sends.
 
+Schema sidecars are advertised, never executed
+: A script's optional `<script>.schema.json` sidecar (see REFERENCE.md) is read
+  only for allowlisted scripts, capped at 64 KiB, and treated as opaque data:
+  the agent advertises it on `/capabilities` but never parses its `arguments` /
+  `argv`, never validates against it, and never lets it influence execution. The
+  allowlist remains the sole gate on what runs - a sidecar cannot widen the
+  callable surface, and a sidecar beside a non-allowlisted script is never read.
+  This is what lets the schema be safely consumed by an LLM via the MCP bridge:
+  the model can only select an operator-approved script and fill
+  operator-defined argument fields, never invent operations.
+
 JSON context on stdin
 : Scripts receive full request context as JSON on stdin (script name, args,
   reqid, peer IP, username, token, timestamp). The agent writes this context
@@ -253,6 +264,7 @@ Agent-side hook
 
 /opt/ctrl-exec-scripts/            0750  root:ctrl-exec-agent
 /opt/ctrl-exec-scripts/*.sh        0750  root:ctrl-exec-agent
+/opt/ctrl-exec-scripts/*.schema.json 0640 root:ctrl-exec-agent  schema sidecar (data, not executed)
 
 /var/lib/ctrl-exec/                0770  root:ctrl-exec
 /var/lib/ctrl-exec/pairing/        0770  root:ctrl-exec

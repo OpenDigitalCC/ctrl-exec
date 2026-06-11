@@ -88,9 +88,33 @@ Call it with a custom threshold:
 ced run host-a check-disk -- 85
 ```
 
+## Describing arguments (optional schema sidecar)
+
+A plugin can ship an optional schema sidecar so tools — notably the MCP bridge, but also a UI or the live OpenAPI spec — can present its arguments in a typed, self-describing way. Drop a JSON file beside the script with `.schema.json` appended:
+
+```
+/opt/ctrl-exec-scripts/check-disk.sh
+/opt/ctrl-exec-scripts/check-disk.sh.schema.json
+```
+
+```json
+{
+  "version": "2",
+  "description": "Check disk usage against a threshold",
+  "read_only": true,
+  "arguments": {
+    "type": "object",
+    "properties": { "threshold": { "type": "integer", "minimum": 1, "maximum": 100 } }
+  },
+  "argv": [ { "arg": "threshold" } ]
+}
+```
+
+The `arguments` block is a JSON Schema for the named inputs; `argv` maps those named inputs onto the script's positional arguments; the `read_only` / `destructive` / `idempotent` flags describe the operation. The sidecar is entirely optional — a script without one stays callable, just untyped. It is advertised in the agent's capabilities response and reloaded on SIGHUP. See the [schema sidecar contract](https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/SCHEMA-SIDECAR.md) for the full format and rules.
+
 # Capabilities Advertising
 
-When ctrl-exec calls `/discovery` on an agent, the agent returns its current allowlist as a capabilities response. This is how `ctrl-exec-api`'s `/openapi-live.json` endpoint knows which scripts are available on each agent at any given time.
+When ctrl-exec calls `/discovery` on an agent, the agent returns its current allowlist as a capabilities response. This is how `ctrl-exec-api`'s `/openapi-live.json` endpoint knows which scripts are available on each agent at any given time. When a script has a schema sidecar, its `schema` and `schema_version` are included in the response (and surfaced in `/openapi-live.json` under `x-ctrl-exec-scripts`).
 
 A script listed in `scripts.conf` that does not exist or is not executable is reported with `"executable": false`. It will fail at execution time. Run `cea self-check` to validate the allowlist before reloading.
 

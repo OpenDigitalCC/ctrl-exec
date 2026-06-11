@@ -755,6 +755,47 @@ Tags are returned as a JSON object in the `tags` field of the
 Tag keys and values are arbitrary strings. No reserved keys. An agent
 with no `[tags]` section returns `"tags": {}`.
 
+### Script schema sidecars
+
+Each allowlisted script may have an optional schema sidecar describing its
+arguments, so tools that consume the API can type each script. The agent
+looks for a file beside the script with `.schema.json` appended:
+
+```
+/opt/ctrl-exec-scripts/check-disk.sh
+/opt/ctrl-exec-scripts/check-disk.sh.schema.json   ← optional sidecar
+```
+
+The sidecar is a JSON object holding a JSON Schema for the script's arguments
+plus protocol-neutral metadata (`description`, and the behavioural flags
+`read_only` / `destructive` / `idempotent`):
+
+```json
+{
+  "version": "2",
+  "description": "Check disk usage against a threshold",
+  "read_only": true,
+  "arguments": {
+    "type": "object",
+    "properties": { "threshold": { "type": "integer", "minimum": 1, "maximum": 100 } }
+  },
+  "argv": [ { "arg": "threshold" } ]
+}
+```
+
+When present, the agent advertises it in the `/capabilities` response as
+`schema` plus a derived `schema_version` (the explicit `version`, or a
+content hash), and `/discovery` and `/openapi-live.json` carry it through.
+The MCP bridge consumes this to expose each script as a typed tool; it is also
+usable by a UI or for argument validation.
+
+The sidecar is read **only for allowlisted scripts**, capped at 64 KiB, and
+reloaded on SIGHUP with the allowlist. A missing, oversize, or invalid sidecar
+is skipped (logged as `ACTION=schema-skip`) — the script stays callable, just
+untyped. The agent never executes or interprets the sidecar; it only advertises
+it. See `docs/SCHEMA-SIDECAR.md` for the full format, the version-identity
+rule, and the cross-host version-collision behaviour.
+
 ---
 
 ## ctrl-exec-agent
