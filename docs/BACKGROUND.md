@@ -353,10 +353,11 @@ strength.
 
 Core (`ce`) - a small point release, useful independent of MCP:
 
-1. Sidecar contract + version-identity rule (spec/docs). This `/capabilities`
-   schema field is the **seam** between the two halves - ratify its field names,
-   version rule, collision behaviour, and empty-sidecar fallback first, then core
-   and bridge can proceed in parallel.
+1. Sidecar contract + version-identity rule (spec/docs) - drafted in
+   `docs/SCHEMA-SIDECAR.md`. This `/capabilities` schema field is the **seam**
+   between the two halves - ratify its field names, version rule, collision
+   behaviour, and empty-sidecar fallback first, then core and bridge can proceed
+   in parallel.
 2. Agent: read sidecars for allowlisted scripts, derive the version, advertise
    `schema`/`schema_version` in `/capabilities`; SIGHUP reload; graceful on
    missing/invalid; unit tests.
