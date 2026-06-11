@@ -502,7 +502,7 @@ sub _handle_openapi_live {
 
     my $hostnames = Exec::Registry::list_hostnames();
 
-    my @scripts;
+    my $results = [];
     if (@$hostnames) {
         # The API server's SIGCHLD reaper is inherited by request-handler children.
         # Engine forks grandchildren and collects them with waitpid. Without this
@@ -512,22 +512,64 @@ sub _handle_openapi_live {
         my @entries = map {
             { name => $_, target => Exec::Registry::resolve_target(hostname => $_) }
         } @$hostnames;
-        my $results = Exec::Engine::capabilities_all(
+        $results = Exec::Engine::capabilities_all(
             hosts  => \@entries,
             config => $config,
         );
-        my %seen;
-        for my $r (@$results) {
-            next unless ($r->{status} // '') eq 'ok';
-            next unless ref $r->{scripts} eq 'ARRAY';
-            for my $s (@{ $r->{scripts} }) {
-                my $name = $s->{name} or next;
-                $seen{$name} = 1;
-            }
-        }
-        @scripts = sort keys %seen;
     }
 
+    _build_live_spec($spec, $hostnames, $results);
+
+    my $base_version = $spec->{info}{version} // $VERSION;
+    $base_version =~ s/\+\d+$//;
+    $spec->{info}{version} = $base_version . '+' . time();
+
+    my $body = encode_json($spec);
+    print $conn
+        "HTTP/1.0 200 OK\r\n",
+        "Content-Type: application/json\r\n",
+        "Content-Length: ", length($body), "\r\n",
+        "\r\n",
+        $body;
+}
+
+# Augment a parsed OpenAPI spec in place with live discovery data: inject the
+# discovered host/script enums into the request schemas, and surface each
+# script's advertised schema sidecar as an `x-ctrl-exec-scripts` vendor
+# extension. Pure (no IO) so it is unit-testable.
+#
+# The extension carries the sidecar schema *verbatim*, grouped by schema
+# version so fleet drift is visible. Per the schema-sidecar contract, core only
+# surfaces the schema here - it does not interpret `arguments`/`argv` or fold
+# them into the `/run` request contract (whose `args` stays a positional array).
+# Standard tooling ignores `x-` fields; the data is informational.
+sub _build_live_spec {
+    my ($spec, $hostnames, $results) = @_;
+    $hostnames //= [];
+    $results   //= [];
+
+    # Collect script names and group hosts/schema by (name, schema_version).
+    my %seen;
+    my %by_script;   # name => { version_key => { hosts => {h=>1}, schema, schema_version } }
+    for my $r (@$results) {
+        next unless ($r->{status} // '') eq 'ok';
+        next unless ref $r->{scripts} eq 'ARRAY';
+        my $host = $r->{host} // next;
+        for my $s (@{ $r->{scripts} }) {
+            my $name = $s->{name} or next;
+            $seen{$name} = 1;
+            my $ver  = $s->{schema_version};
+            my $key  = defined $ver ? $ver : "\0none";
+            my $slot = $by_script{$name}{$key} ||= { hosts => {} };
+            $slot->{hosts}{$host}   = 1;
+            $slot->{schema_version} = $ver if defined $ver;
+            $slot->{schema}         = $s->{schema}
+                if defined $s->{schema} && !exists $slot->{schema};
+        }
+    }
+    my @scripts = sort keys %seen;
+
+    # Inject the host enum into every hosts-array request body.
     for my $path_key (qw(/ping /run /discovery)) {
         for my $method_key (qw(post get)) {
             my $op = $spec->{paths}{$path_key}{$method_key} or next;
@@ -545,30 +587,37 @@ sub _handle_openapi_live {
         }
     }
 
-    if (@scripts) {
-        my $run_schema_name = eval {
-            my $ref = $spec->{paths}{'/run'}{post}{requestBody}
-                          {content}{'application/json'}{schema}{'$ref'};
-            (split '/', $ref)[-1];
-        };
-        if ($run_schema_name &&
-            ref $spec->{components}{schemas}{$run_schema_name} eq 'HASH') {
-            $spec->{components}{schemas}{$run_schema_name}
-                  {properties}{script}{enum} = \@scripts;
-        }
+    return $spec unless @scripts;
+
+    # Inject the script enum into the /run body schema.
+    my $run_schema_name = eval {
+        my $ref = $spec->{paths}{'/run'}{post}{requestBody}
+                      {content}{'application/json'}{schema}{'$ref'};
+        (split '/', $ref)[-1];
+    };
+    if ($run_schema_name &&
+        ref $spec->{components}{schemas}{$run_schema_name} eq 'HASH') {
+        $spec->{components}{schemas}{$run_schema_name}
+              {properties}{script}{enum} = \@scripts;
     }
 
-    my $base_version = $spec->{info}{version} // $VERSION;
-    $base_version =~ s/\+\d+$//;
-    $spec->{info}{version} = $base_version . '+' . time();
+    # Surface advertised schema sidecars, grouped by version, verbatim.
+    my %ext;
+    for my $name (@scripts) {
+        my @variants;
+        for my $key (sort keys %{ $by_script{$name} }) {
+            my $slot = $by_script{$name}{$key};
+            my $v = { hosts => [ sort keys %{ $slot->{hosts} } ] };
+            $v->{schema_version} = $slot->{schema_version}
+                if defined $slot->{schema_version};
+            $v->{schema} = $slot->{schema} if exists $slot->{schema};
+            push @variants, $v;
+        }
+        $ext{$name} = \@variants;
+    }
+    $spec->{'x-ctrl-exec-scripts'} = \%ext;
 
-    my $body = encode_json($spec);
-    print $conn
-        "HTTP/1.0 200 OK\r\n",
-        "Content-Type: application/json\r\n",
-        "Content-Length: ", length($body), "\r\n",
-        "\r\n",
-        $body;
+    return $spec;
 }
 
 sub _handle_status {
