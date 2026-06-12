@@ -210,6 +210,36 @@ sub resolve_target {
     return $port == $DEFAULT_PORT ? $addr : "$addr:$port";
 }
 
+# The single addressing path for dispatch (ping / run / discovery / status).
+# Resolves a list of operator-supplied agent references to connect targets,
+# registry-only: every reference MUST be a registered agent. An unregistered
+# reference is reported back, never silently treated as a DNS name - so all
+# verbs address agents the same way and an unknown name fails loudly rather
+# than leaking out to whatever DNS resolves it to. An optional ":<port>" suffix
+# overrides the agent's stored operational port for that one call.
+#
+#   resolve_dispatch(\@refs)
+#     -> { ok => 1, hosts => [ { name => <registry name>, target => <addr[:port]> }, ... ] }
+#     -> { ok => 0, unknown => [ <ref>, ... ] }     one or more not registered
+sub resolve_dispatch {
+    my ($refs, %opts) = @_;
+    my $dir = $opts{registry_dir} // $REGISTRY_DIR;
+    my (@hosts, @unknown);
+    for my $ref (@$refs) {
+        my ($name, $oport) = $ref =~ /^(.+):(\d+)$/ ? ($1, $2) : ($ref, undef);
+        my $record = eval { get_agent(hostname => $name, registry_dir => $dir) };
+        unless ($record) { push @unknown, $ref; next; }
+        my $addr = _record_address($record, $name);
+        my $port = defined $oport ? _norm_port($oport) : _norm_port($record->{port});
+        push @hosts, {
+            name   => $name,
+            target => ($port == $DEFAULT_PORT ? $addr : "$addr:$port"),
+        };
+    }
+    return { ok => 0, unknown => \@unknown } if @unknown;
+    return { ok => 1, hosts => \@hosts };
+}
+
 # Return the registry record for a single agent, or undef if not found.
 #
 # Required opts:

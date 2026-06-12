@@ -273,6 +273,7 @@ sub ping_all {
                     _renew_one(
                         host   => $rhost,
                         port   => $rport,
+                        name   => $pipes{$pid}{name},   # registry key, not the resolved address
                         config => $config,
                         reqid  => gen_reqid(),
                     );
@@ -778,6 +779,7 @@ sub _renew_one {
     my (%opts) = @_;
     my $host   = $opts{host};
     my $port   = $opts{port};
+    my $name   = $opts{name} // $host;   # registry key for the expiry update
     my $config = $opts{config};
     my $reqid  = $opts{reqid};
 
@@ -827,9 +829,11 @@ sub _renew_one {
     );
     die "renew-complete failed: " . $resp2->status_line unless $resp2->is_success;
 
-    # Extract new expiry and update registry
+    # Extract new expiry and update registry by the canonical name (not the
+    # resolved connect address, which under lookup_by=ip would create a stray
+    # IP-keyed record).
     my $expiry = _extract_expiry($cert_pem) // 'unknown';
-    Exec::Registry::update_expiry(hostname => $host, expiry => $expiry);
+    Exec::Registry::update_expiry(hostname => $name, expiry => $expiry);
 
     Exec::Log::log_action('INFO', {
         ACTION => 'renew-complete',

@@ -268,9 +268,16 @@ sub _handle_ping {
     # Engine forks grandchildren and collects them with waitpid. Without this
     # guard the reaper steals grandchildren before waitpid can collect them,
     # returning a partial results array. local restores the handler on scope exit.
+    my $resolved = Exec::Registry::resolve_dispatch($hosts);
+    unless ($resolved->{ok}) {
+        _send_error($conn, 404, 'unknown agent',
+            'not a registered agent: ' . join(', ', @{ $resolved->{unknown} }));
+        return;
+    }
+
     local $SIG{CHLD} = 'DEFAULT';
     my $results = Exec::Engine::ping_all(
-        hosts  => $hosts,
+        hosts  => $resolved->{hosts},
         config => $config,
     );
 
@@ -335,6 +342,13 @@ sub _handle_run {
         return;
     }
 
+    my $resolved = Exec::Registry::resolve_dispatch($hosts);
+    unless ($resolved->{ok}) {
+        _send_error($conn, 404, 'unknown agent',
+            'not a registered agent: ' . join(', ', @{ $resolved->{unknown} }));
+        return;
+    }
+
     my $reqid = Exec::Engine::gen_reqid();
     # The API server's SIGCHLD reaper is inherited by request-handler children.
     # Engine forks grandchildren and collects them with waitpid. Without this
@@ -342,7 +356,7 @@ sub _handle_run {
     # returning a partial results array. local restores the handler on scope exit.
     local $SIG{CHLD} = 'DEFAULT';
     my $results = Exec::Engine::dispatch_all(
-        hosts    => $hosts,
+        hosts    => $resolved->{hosts},
         script   => $script,
         args     => $args,
         reqid    => $reqid,
@@ -415,17 +429,18 @@ sub _handle_discovery {
     # Engine forks grandchildren and collects them with waitpid. Without this
     # guard the reaper steals grandchildren before waitpid can collect them,
     # returning a partial results array. local restores the handler on scope exit.
-    # Resolve each registry name to its connect target (lookup_by + stored
-    # port) while keying results by the canonical registry name.
-    my @entries = map {
-        m/:\d+$/
-            ? $_
-            : { name => $_, target => Exec::Registry::resolve_target(hostname => $_) }
-    } @$hosts;
+    # Resolve registry names to connect targets through the same path as
+    # ping/run, keying results by the canonical registry name.
+    my $resolved = Exec::Registry::resolve_dispatch($hosts);
+    unless ($resolved->{ok}) {
+        _send_error($conn, 404, 'unknown agent',
+            'not a registered agent: ' . join(', ', @{ $resolved->{unknown} }));
+        return;
+    }
 
     local $SIG{CHLD} = 'DEFAULT';
     my $results = Exec::Engine::capabilities_all(
-        hosts  => \@entries,
+        hosts  => $resolved->{hosts},
         config => $config,
     );
 
@@ -509,11 +524,10 @@ sub _handle_openapi_live {
         # guard the reaper steals grandchildren before waitpid can collect them,
         # returning a partial results array. local restores the handler on scope exit.
         local $SIG{CHLD} = 'DEFAULT';
-        my @entries = map {
-            { name => $_, target => Exec::Registry::resolve_target(hostname => $_) }
-        } @$hostnames;
+        # All names come from the registry, so resolution never has unknowns.
+        my $resolved = Exec::Registry::resolve_dispatch($hostnames);
         $results = Exec::Engine::capabilities_all(
-            hosts  => \@entries,
+            hosts  => $resolved->{hosts} // [],
             config => $config,
         );
     }

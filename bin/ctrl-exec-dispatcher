@@ -80,11 +80,14 @@ sub main {
 # name the operator gave; only the connection target is rewritten.
 sub _resolve_dispatch_hosts {
     my ($hosts) = @_;
-    return [ map {
-        /:\d+$/
-            ? $_   # explicit host:port - name and connect target are the same
-            : { name => $_, target => Exec::Registry::resolve_target(hostname => $_) }
-    } @$hosts ];
+    my $r = Exec::Registry::resolve_dispatch($hosts);
+    unless ($r->{ok}) {
+        my @u = @{ $r->{unknown} };
+        die "Error: unknown agent" . (@u > 1 ? 's' : '') . ": " . join(', ', @u) . "\n"
+          . "Only registered agents can be addressed - run "
+          . "'ctrl-exec-dispatcher list-agents' to see them.\n";
+    }
+    return $r->{hosts};
 }
 
 sub mode_run {
