@@ -217,7 +217,7 @@ results via dispatch.
 ### Environment Variables
 
 `DISPATCHER`
-: dispatcher binary name or path. Default: `ctrl-exec`. Override if the
+: dispatcher binary name or path. Default: `ctrl-exec-dispatcher`. Override if the
   binary is not in PATH or you want to test a specific build.
 
 `AGENT_SSH_USER`

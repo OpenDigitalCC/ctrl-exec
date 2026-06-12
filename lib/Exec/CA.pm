@@ -54,7 +54,7 @@ sub generate_ca {
 }
 
 # Generate the ctrl-exec's own key and cert, signed by the CA.
-# Safe to call after setup-ca. Dies if ctrl-exec cert already exists
+# Safe to call after setup-ca. Dies if dispatcher cert already exists
 # unless force => 1.
 sub generate_dispatcher_cert {
     my (%opts) = @_;
@@ -69,14 +69,14 @@ sub generate_dispatcher_cert {
     my $ca_key   = "$ca_dir/ca.key";
     my $ca_cert  = "$ca_dir/ca.crt";
     my $serial   = "$ca_dir/ca.serial";
-    my $disp_key = "$ca_dir/ctrl-exec.key";
-    my $disp_csr = "$ca_dir/ctrl-exec.csr";
-    my $disp_crt = "$ca_dir/ctrl-exec.crt";
+    my $disp_key = "$ca_dir/dispatcher.key";
+    my $disp_csr = "$ca_dir/dispatcher.csr";
+    my $disp_crt = "$ca_dir/dispatcher.crt";
 
     croak "CA key not found at '$ca_key' - run setup-ca first" unless -f $ca_key;
 
     if (-f $disp_crt && !$force) {
-        croak "ctrl-exec cert already exists at '$disp_crt'. Use force => 1 to overwrite.";
+        croak "dispatcher cert already exists at '$disp_crt'. Use force => 1 to overwrite.";
     }
 
     _run_or_die('openssl', 'genrsa', '-out', $disp_key, $bits);

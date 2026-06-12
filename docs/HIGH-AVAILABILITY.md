@@ -41,10 +41,10 @@ persistent connections that must be preserved across restarts.
   dispatcher instances — concurrent signing operations against different
   copies would produce duplicate serials.
 
-`/etc/ctrl-exec/ctrl-exec.key`
+`/etc/ctrl-exec/dispatcher.key`
 : The dispatcher's own private key.
 
-`/etc/ctrl-exec/ctrl-exec.crt`
+`/etc/ctrl-exec/dispatcher.crt`
 : The dispatcher's TLS certificate, signed by the CA. Its serial number is
   the value agents store and compare on every `/run`, `/ping`, and
   `/capabilities` request. All dispatcher instances must present the same
@@ -255,8 +255,8 @@ have already updated their stored serial.
 Rotation procedure for HA:
 
 1. Run `ced rotate-cert` on one designated node. This generates the
-   new cert, writes it to `/etc/ctrl-exec/ctrl-exec.crt` and
-   `/etc/ctrl-exec/ctrl-exec.key`, and broadcasts the new serial to all
+   new cert, writes it to `/etc/ctrl-exec/dispatcher.crt` and
+   `/etc/ctrl-exec/dispatcher.key`, and broadcasts the new serial to all
    agents via `update-ctrl-exec-serial`.
 2. Sync the updated `/etc/ctrl-exec/` to all other dispatcher instances
    immediately. All instances must reload their cert before any agent

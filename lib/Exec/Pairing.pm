@@ -282,9 +282,9 @@ sub approve_request {
     close $serial_lock;
     my $ca_pem = Exec::CA::read_ca_cert(ca_dir => $ca_dir);
 
-    # Read the ctrl-exec cert serial so the agent can store it and use it
+    # Read the dispatcher cert serial so the agent can store it and use it
     # to restrict /capabilities to the genuine ctrl-exec only.
-    my $disp_cert = "$ca_dir/ctrl-exec.crt";
+    my $disp_cert = "$ca_dir/dispatcher.crt";
     my $disp_serial = '';
     if (-f $disp_cert) {
         my $out = `openssl x509 -noout -serial -in \Q$disp_cert\E 2>/dev/null`;

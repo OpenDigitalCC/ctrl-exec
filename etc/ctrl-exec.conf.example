@@ -1,8 +1,8 @@
 # ctrl-exec.conf - ctrl-exec control host configuration
 
 # mTLS certificate material (required)
-cert = /etc/ctrl-exec/ctrl-exec.crt
-key  = /etc/ctrl-exec/ctrl-exec.key
+cert = /etc/ctrl-exec/dispatcher.crt
+key  = /etc/ctrl-exec/dispatcher.key
 ca   = /etc/ctrl-exec/ca.crt
 
 # Auth hook - called before every run and ping request.
@@ -18,8 +18,8 @@ auth_hook = /etc/ctrl-exec/auth-hook
 # api_port = 7445
 
 # API server TLS (optional - plain HTTP if not set).
-# api_cert = /etc/ctrl-exec/ctrl-exec.crt
-# api_key  = /etc/ctrl-exec/ctrl-exec.key
+# api_cert = /etc/ctrl-exec/dispatcher.crt
+# api_key  = /etc/ctrl-exec/dispatcher.key
 
 # ctrl-exec certificate rotation
 #

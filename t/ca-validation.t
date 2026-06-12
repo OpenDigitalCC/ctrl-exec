@@ -230,7 +230,7 @@ SKIP: {
             );
         };
         is $@, '', 'generate_dispatcher_cert: days=1 does not croak';
-        ok -f "$d/ctrl-exec.crt", 'generate_dispatcher_cert: ctrl-exec.crt created';
+        ok -f "$d/dispatcher.crt", 'generate_dispatcher_cert: dispatcher.crt created';
     };
 
     # --- Finding 4: stderr captured in croak message ---

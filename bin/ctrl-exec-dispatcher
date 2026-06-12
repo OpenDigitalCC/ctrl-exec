@@ -435,7 +435,7 @@ sub mode_setup_ca {
 
 sub mode_setup_dispatcher {
     my $ca_dir   = '/etc/ctrl-exec';
-    my $disp_crt = "$ca_dir/ctrl-exec.crt";
+    my $disp_crt = "$ca_dir/dispatcher.crt";
 
     if (-f $disp_crt) {
         # Replacing the dispatcher cert changes its serial. Every paired agent
@@ -472,7 +472,7 @@ sub mode_setup_dispatcher {
     print "  Key:  $result->{key}\n";
     print "  Cert: $result->{cert}\n";
     print "Run 'ctrl-exec-dispatcher pairing-mode' to re-pair agents as needed.\n"
-        if -f "$ca_dir/ctrl-exec.crt";
+        if -f "$ca_dir/dispatcher.crt";
 }
 
 sub mode_rotate_cert {

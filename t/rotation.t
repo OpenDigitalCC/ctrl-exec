@@ -8,7 +8,7 @@
 # broadcast_serial) with filesystem I/O isolated via tempdir.
 #
 # Config key reference:
-#   ca_dir          => directory containing ctrl-exec.crt (default /etc/ctrl-exec)
+#   ca_dir          => directory containing dispatcher.crt (default /etc/ctrl-exec)
 #   rotation_file   => path to rotation.json state file (default /var/lib/ctrl-exec/rotation.json)
 #   registry_dir    => path to agent registry dir (default /var/lib/ctrl-exec/agents)
 #   cert_days       => new cert lifetime in days
@@ -383,7 +383,7 @@ subtest '_do_rotation: creates rotation state file with correct fields' => sub {
     my $rotFile  = "$dir/rotation.json";
     make_path($caDir, $regDir);
 
-    my $cert = "$caDir/ctrl-exec.crt";
+    my $cert = "$caDir/dispatcher.crt";
     plan skip_all => 'could not generate initial cert'
         unless make_cert(365, $cert);
 
@@ -428,7 +428,7 @@ subtest '_do_rotation: registered agents marked pending after rotation' => sub {
     my $rotFile = "$dir/rotation.json";
     make_path($caDir, $regDir);
 
-    my $cert = "$caDir/ctrl-exec.crt";
+    my $cert = "$caDir/dispatcher.crt";
     plan skip_all => 'could not generate initial cert'
         unless make_cert(365, $cert);
 

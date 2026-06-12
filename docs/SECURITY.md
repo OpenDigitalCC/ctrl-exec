@@ -250,8 +250,8 @@ Agent-side hook
 ```
 /etc/ctrl-exec/ca.key              0600  root         CA private key
 /etc/ctrl-exec/ca.crt              0644  root         CA certificate
-/etc/ctrl-exec/ctrl-exec.key      0600  root         dispatcher private key
-/etc/ctrl-exec/ctrl-exec.crt      0644  root         dispatcher certificate
+/etc/ctrl-exec/dispatcher.key      0600  root         dispatcher private key
+/etc/ctrl-exec/dispatcher.crt      0644  root         dispatcher certificate
 /etc/ctrl-exec/auth-hook           0755  root         Auth hook executable
 /etc/ctrl-exec/                    0750  root:ctrl-exec
 
@@ -440,7 +440,7 @@ systemctl reload ctrl-exec-agent
 
 To revoke a cert:
 
-1. Obtain the serial: `openssl x509 -noout -serial -in /etc/ctrl-exec/ctrl-exec.crt`
+1. Obtain the serial: `openssl x509 -noout -serial -in /etc/ctrl-exec/dispatcher.crt`
 2. Append the output directly to `/etc/ctrl-exec-agent/revoked-serials` on each
    affected agent - no format conversion needed, `serial=DEADBEEF` is accepted as-is
 3. Reload: `systemctl reload ctrl-exec-agent`

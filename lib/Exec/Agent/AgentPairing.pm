@@ -80,7 +80,7 @@ sub store_certs {
     _write_file("$cert_dir/agent.key", $key_pem,  0640);
     _write_file("$cert_dir/ca.crt",   $ca_pem,   0644);
 
-    # Store ctrl-exec cert serial for capabilities access control.
+    # Store dispatcher cert serial for capabilities access control.
     # The agent uses this to restrict /capabilities to the genuine ctrl-exec
     # only, preventing lateral reconnaissance from a compromised agent peer.
     if (length $dispatcher_serial) {
@@ -268,7 +268,7 @@ sub request_pairing {
     my $port            = $opts{port}       // 7444;
     my $csr_pem         = $opts{csr_pem}    or croak "csr_pem required";
     my $hostname        = $opts{hostname}   or croak "hostname required";
-    my $ca_cert         = $opts{ca_cert};   # optional: verify ctrl-exec cert
+    my $ca_cert         = $opts{ca_cert};   # optional: verify dispatcher cert
 
     require IO::Socket::SSL;
     require JSON;
@@ -344,7 +344,7 @@ sub request_pairing {
     return { ok => 0, error => $data->{reason} // 'denied' };
 }
 
-# Load the stored ctrl-exec cert serial from file.
+# Load the stored dispatcher cert serial from file.
 # Returns lowercase hex string, or empty string if file absent or unreadable.
 # File contains a single line written by store_certs at pairing time.
 sub load_dispatcher_serial {
@@ -354,7 +354,7 @@ sub load_dispatcher_serial {
     return '' unless -f $path;
 
     open my $fh, '<', $path
-        or do { warn "Cannot read ctrl-exec serial '$path': $!\n"; return ''; };
+        or do { warn "Cannot read dispatcher serial '$path': $!\n"; return ''; };
     my $line = <$fh>;
     close $fh;
 

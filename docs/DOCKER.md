@@ -107,8 +107,8 @@ if [ ! -f "$CONF_FILE" ]; then
 # To customise, edit this file on the dispatcher-data volume,
 # or mount a config file at $CONF_FILE before starting.
 
-cert = $CONF_DIR/ctrl-exec.crt
-key  = $CONF_DIR/ctrl-exec.key
+cert = $CONF_DIR/dispatcher.crt
+key  = $CONF_DIR/dispatcher.key
 ca   = $CONF_DIR/ca.crt
 
 api_bind         = ${API_BIND:-127.0.0.1}

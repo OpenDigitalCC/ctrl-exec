@@ -108,8 +108,8 @@ dispatcher host (`/etc/ctrl-exec/`)
 ca.key          CA private key (0600, root only, never leaves this host)
 ca.crt          CA certificate (distributed to agents during pairing)
 ca.serial       Serial counter for issued certs
-ctrl-exec.key  ctrl-exec's own private key (0600)
-ctrl-exec.crt  ctrl-exec's own cert, signed by CA
+dispatcher.key  the dispatcher's own private key (0600)
+dispatcher.crt  the dispatcher's own cert, signed by CA
 auth-hook       Auth hook executable (0755)
 ```
 
@@ -197,9 +197,9 @@ Functions:
   to send the CA cert to the agent alongside the signed agent cert.
 
 `generate_dispatcher_cert(%opts)`
-: Generates `ctrl-exec.key` (4096-bit RSA, 0600), `ctrl-exec.csr`, signs it
-  with the CA, writes `ctrl-exec.crt` (825 days), removes the CSR.
-  Guards: dies if CA does not exist, dies if `ctrl-exec.crt` already exists
+: Generates `dispatcher.key` (4096-bit RSA, 0600), `dispatcher.csr`, signs it
+  with the CA, writes `dispatcher.crt` (825 days), removes the CSR.
+  Guards: dies if CA does not exist, dies if `dispatcher.crt` already exists
   unless `force => 1`. Called by `bin/ced setup-ctrl-exec`.
   Options: `ca_dir`, `force`.
 

@@ -19,13 +19,13 @@ my $ROTATION_FILE  = '/var/lib/ctrl-exec/rotation.json';
 my $CA_DIR         = '/etc/ctrl-exec';
 
 # Default configuration values - overridden by ctrl-exec.conf
-my $DEFAULT_CERT_DAYS       = 825;   # ctrl-exec cert lifetime (matches CA.pm default)
+my $DEFAULT_CERT_DAYS       = 825;   # dispatcher cert lifetime (matches CA.pm default)
 my $DEFAULT_RENEWAL_DAYS    = 90;    # renew when this many days remain
 my $DEFAULT_OVERLAP_DAYS    = 30;    # keep old serial trusted this long after rotation
 my $DEFAULT_CHECK_INTERVAL  = 14400; # seconds between internal expiry checks (4 hours)
 
 
-# Check whether the ctrl-exec cert needs renewal and rotate if so.
+# Check whether the dispatcher cert needs renewal and rotate if so.
 # Called on startup and periodically by the internal check loop.
 #
 # Required opts:
@@ -41,10 +41,10 @@ sub check_and_rotate {
 
     my $renewal_days = $config->{cert_renewal_days} // $DEFAULT_RENEWAL_DAYS;
     my $ca_dir       = $config->{ca_dir}            // $CA_DIR;
-    my $disp_crt     = "$ca_dir/ctrl-exec.crt";
+    my $disp_crt     = "$ca_dir/dispatcher.crt";
 
     unless (-f $disp_crt) {
-        return { rotated => 0, error => "ctrl-exec cert not found at $disp_crt" };
+        return { rotated => 0, error => "dispatcher cert not found at $disp_crt" };
     }
 
     my $days_left = _cert_days_remaining($disp_crt);
@@ -131,7 +131,7 @@ sub expire_stale_agents {
     }
 }
 
-# Broadcast the current ctrl-exec serial to all pending agents.
+# Broadcast the current dispatcher serial to all pending agents.
 # Attempts a run of 'update-ctrl-exec-serial' on each pending agent.
 # Updates registry on success. Reports results.
 #
@@ -278,7 +278,7 @@ sub _do_rotation {
     my $ca_dir      = $config->{ca_dir}         // $CA_DIR;
     my $cert_days   = $config->{cert_days}       // $DEFAULT_CERT_DAYS;
     my $overlap_days = $config->{cert_overlap_days} // $DEFAULT_OVERLAP_DAYS;
-    my $disp_crt    = "$ca_dir/ctrl-exec.crt";
+    my $disp_crt    = "$ca_dir/dispatcher.crt";
 
     # Read old serial before overwriting
     my $old_serial = '';
@@ -334,7 +334,7 @@ sub _do_rotation {
     # It does NOT provide a grace period for capabilities: once the ctrl-exec
     # starts using the new cert, agents that still hold the old serial will
     # reject /capabilities from it (serial mismatch). Run and ping are
-    # unaffected - those endpoints do not check the ctrl-exec serial.
+    # unaffected - those endpoints do not check the dispatcher serial.
     # The expected rotation sequence is: rotate cert → broadcast serial →
     # agents reload → capabilities restored. The overlap window only matters
     # for agents that were offline during the broadcast.

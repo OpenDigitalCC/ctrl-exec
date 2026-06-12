@@ -732,7 +732,7 @@ sub _build_ua {
 
     # LWP's ssl_opts hash does not pass SSL_cert_file/SSL_key_file through
     # to IO::Socket::SSL for client cert presentation. Set them as global
-    # SSL defaults so every outbound connection uses the ctrl-exec cert.
+    # SSL defaults so every outbound connection uses the dispatcher cert.
     # Exec::TLS::hardening adds the shared cipher/version policy.
     IO::Socket::SSL::set_defaults(
         SSL_cert_file    => $config->{cert},

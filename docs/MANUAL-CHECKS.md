@@ -260,7 +260,7 @@ agent.
 
 ```bash
 # Obtain the dispatcher cert serial
-openssl x509 -noout -serial -in /etc/ctrl-exec/ctrl-exec.crt \
+openssl x509 -noout -serial -in /etc/ctrl-exec/dispatcher.crt \
     | sed 's/serial=//' | tr 'A-F' 'a-f'
 
 # Add to revoked-serials on the agent and reload

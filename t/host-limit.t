@@ -24,8 +24,8 @@ use Exec::Engine qw();
 # Minimal config hashref - only needs to exist, no real cert paths required
 # since croak fires before any SSL connection is attempted.
 my $config = {
-    cert     => '/nonexistent/ctrl-exec.crt',
-    key      => '/nonexistent/ctrl-exec.key',
+    cert     => '/nonexistent/dispatcher.crt',
+    key      => '/nonexistent/dispatcher.key',
     ca       => '/nonexistent/ca.crt',
     cert_days => 365,
 };

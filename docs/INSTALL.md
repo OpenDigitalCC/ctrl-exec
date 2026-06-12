@@ -139,8 +139,8 @@ Edit `/etc/ctrl-exec/ctrl-exec.conf`:
 
 ```ini
 port      = 7443
-cert      = /etc/ctrl-exec/ctrl-exec.crt
-key       = /etc/ctrl-exec/ctrl-exec.key
+cert      = /etc/ctrl-exec/dispatcher.crt
+key       = /etc/ctrl-exec/dispatcher.key
 ca        = /etc/ctrl-exec/ca.crt
 auth_hook = /etc/ctrl-exec/auth-hook
 
@@ -415,8 +415,8 @@ curl -s http://localhost:7445/discovery | python3 -m json.tool
 Add to `/etc/ctrl-exec/ctrl-exec.conf`:
 
 ```ini
-api_cert = /etc/ctrl-exec/ctrl-exec.crt
-api_key  = /etc/ctrl-exec/ctrl-exec.key
+api_cert = /etc/ctrl-exec/dispatcher.crt
+api_key  = /etc/ctrl-exec/dispatcher.key
 ```
 
 Restart the API service. Clients use `--cacert /etc/ctrl-exec/ca.crt` or a
@@ -507,13 +507,13 @@ validation in zero-trust or multi-dispatcher deployments.
 
 ```ini
 port      = 7443                          # mTLS port agents connect to
-cert      = /etc/ctrl-exec/ctrl-exec.crt
-key       = /etc/ctrl-exec/ctrl-exec.key
+cert      = /etc/ctrl-exec/dispatcher.crt
+key       = /etc/ctrl-exec/dispatcher.key
 ca        = /etc/ctrl-exec/ca.crt
 auth_hook = /etc/ctrl-exec/auth-hook     # optional
 api_port  = 7445                          # API server port
-api_cert  = /etc/ctrl-exec/ctrl-exec.crt  # optional, enables TLS on API
-api_key   = /etc/ctrl-exec/ctrl-exec.key  # optional
+api_cert  = /etc/ctrl-exec/dispatcher.crt  # optional, enables TLS on API
+api_key   = /etc/ctrl-exec/dispatcher.key  # optional
 cert_days = 365                           # lifetime for new/renewed agent certs
 ```
 
