@@ -1,3 +1,15 @@
+ctrl-exec (0.8.11) unstable; urgency=medium
+
+  * Rename the control-host binary package from "ctrl-exec" to
+    "ctrl-exec-dispatcher" so it is immediately distinguishable from
+    ctrl-exec-agent and ctrl-exec-common in a package or file listing.
+    The new package Provides/Replaces/Conflicts the former "ctrl-exec"
+    name so existing installs upgrade cleanly. The source package, the
+    ctrl-exec-dispatcher binary, the /etc/ctrl-exec paths and the
+    ctrl-exec system group are unchanged.
+
+ -- OpenDigital CC <sjm@opendigital.cc>  Fri, 12 Jun 2026 09:34:21 +0100
+
 ctrl-exec (0.8.10) unstable; urgency=medium
 
   * Release 0.8.10

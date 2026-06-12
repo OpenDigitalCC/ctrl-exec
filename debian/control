@@ -42,8 +42,11 @@ Description: mTLS remote script execution - agent
  that executes only the scripts named in a per-host allowlist. Install it
  on each managed host, then pair it with a control host.
 
-Package: ctrl-exec
+Package: ctrl-exec-dispatcher
 Architecture: all
+Provides: ctrl-exec
+Replaces: ctrl-exec (<< 0.8.11~)
+Conflicts: ctrl-exec (<< 0.8.11~)
 Depends:
  ${misc:Depends},
  ${perl:Depends},
@@ -53,7 +56,7 @@ Depends:
  libio-socket-ssl-perl,
  openssl,
  adduser,
-Description: mTLS remote script execution - control host
+Description: mTLS remote script execution - dispatcher (control host)
  ctrl-exec runs scripts on remote agent hosts over HTTPS with mutual
  certificate authentication. Agents expose only an explicit allowlist of
  permitted scripts; there is no shell access.

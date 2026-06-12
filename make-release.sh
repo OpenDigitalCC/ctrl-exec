@@ -641,7 +641,7 @@ echo "  SBOM:      sbom.json"
 if [[ "$BUILD_DEBS" -eq 1 ]] && compgen -G "$DIST_DIR/ctrl-exec*_${VERSION}_all.deb" >/dev/null; then
     echo "  Packages:  $DIST_DIR/ctrl-exec-common_${VERSION}_all.deb"
     echo "             $DIST_DIR/ctrl-exec-agent_${VERSION}_all.deb"
-    echo "             $DIST_DIR/ctrl-exec_${VERSION}_all.deb"
+    echo "             $DIST_DIR/ctrl-exec-dispatcher_${VERSION}_all.deb"
 fi
 echo "  Tag:       $TAG  ($COMMIT)"
 echo "  Next ver:  $NEXT_VERSION  (written to NEXT_VERSION)"
