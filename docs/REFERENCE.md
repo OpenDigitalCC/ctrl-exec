@@ -265,6 +265,29 @@ pending. Press Ctrl-C to stop pairing mode.
 Pairing mode processes one request at a time interactively. For
 unattended approval workflows, use `list-requests` and `approve`.
 
+**Automatic timeout.** Pairing mode always auto-stops after an absolute
+timeout so the pairing port cannot be left open indefinitely. The default is
+600 seconds; lower it with `--timeout <seconds>` (1–600) or the
+`pairing_timeout` config key. The window can be shortened but never extended
+beyond 600 seconds.
+
+```bash
+ced pairing-mode --timeout 120   # auto-stops after 2 minutes
+```
+
+**Background start/stop.** Run the listener detached instead of in the
+foreground:
+
+```bash
+ced pairing-mode start           # detach; auto-stops at the timeout
+ced pairing-mode stop            # stop a backgrounded session, close the port
+```
+
+`start` reports the PID and the stop deadline, then returns. Only one
+background session runs at a time (tracked by a pidfile under
+`/var/lib/ctrl-exec`). `stop` is a no-op, with a clear message, if nothing is
+running.
+
 ---
 
 ### list-requests

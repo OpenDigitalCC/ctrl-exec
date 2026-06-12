@@ -71,3 +71,13 @@ api_auth_default = deny
 #
 # pairing_rate_limit_volume  = 10/60/300
 # pairing_rate_limit_disable = 0
+
+# Pairing-mode session timeout (seconds).
+#
+# 'pairing-mode' auto-stops after this many seconds so an unattended or
+# backgrounded window cannot be left open indefinitely. The default is 600;
+# the value may be shortened but not raised above 600. A --timeout flag on the
+# command line overrides this for a single run. Applies to both the foreground
+# session and 'pairing-mode start'.
+#
+# pairing_timeout = 600

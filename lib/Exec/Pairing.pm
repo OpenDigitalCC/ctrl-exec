@@ -62,10 +62,18 @@ sub run_pairing_mode {
     my $log_fn    = $opts{log_fn}    // sub {};
     my $max_queue = $opts{max_queue} // 10;
     my $rate_config = $opts{rate_limit} // {};
+    # Absolute session timeout (seconds). When set, pairing mode auto-stops
+    # after this many seconds so an unattended or backgrounded window cannot be
+    # left open indefinitely. undef/0 means no timeout (legacy behaviour).
+    my $timeout   = $opts{timeout};
+    my $deadline  = ($timeout && $timeout > 0) ? time + $timeout : undef;
+    # Queue directory; overridable so the listener can be exercised in tests
+    # without writing under /var/lib.
+    my $pairing_dir = $opts{pairing_dir} // $PAIRING_DIR;
 
-    make_path($PAIRING_DIR) unless -d $PAIRING_DIR;
+    make_path($pairing_dir) unless -d $pairing_dir;
 
-    _expire_stale_requests($PAIRING_DIR);
+    _expire_stale_requests($pairing_dir);
 
     require IO::Socket::SSL;
     require IO::Select;
@@ -87,20 +95,21 @@ sub run_pairing_mode {
     my $interactive = -t STDIN;
     local $| = 1 if $interactive;  # unbuffered output so prompts appear immediately
 
+    my $auto = $deadline ? " (auto-stops in ${timeout}s)" : "";
     if ($interactive) {
-        print "Pairing mode active on port $port. Ctrl-C or 'quit' to stop.\n";
+        print "Pairing mode active on port $port$auto. Ctrl-C or 'quit' to stop.\n";
         print "Waiting for pairing requests...\n";
     }
     else {
-        print "Pairing mode active on port $port. Ctrl-C to stop.\n";
+        print "Pairing mode active on port $port$auto. Ctrl-C to stop.\n";
         print "Use 'ctrl-exec-dispatcher list-requests' to see pending requests.\n";
     }
 
-    $SIG{INT} = $SIG{TERM} = sub {
-        $log_fn->({ ACTION => 'pairing-mode-stop' });
-        print "\nPairing mode stopped.\n";
-        exit 0;
-    };
+    # Stop reason is set by a signal, the deadline, or the interactive 'quit'
+    # command; the loop exits on it and a single cleanup path logs and returns
+    # (so the caller can reap its renewal-check child on every exit).
+    my $stopped = '';
+    $SIG{INT} = $SIG{TERM} = sub { $stopped ||= 'signal'; };
 
     my $sel = IO::Select->new($server);
     $sel->add(\*STDIN) if $interactive;
@@ -108,10 +117,17 @@ sub run_pairing_mode {
     # Per-IP rate-limit state for the pairing port, kept in the parent loop.
     my %rate_state;
 
-    while (1) {
-        # Block until the server socket or STDIN is ready.
-        # Timeout every 5 seconds to reap finished children.
-        my @ready = $sel->can_read(5);
+    while (!$stopped) {
+        # Poll at most every 5 seconds to reap finished children, but never
+        # sleep past the session deadline.
+        my $wait = 5;
+        if ($deadline) {
+            my $remaining = $deadline - time;
+            if ($remaining <= 0) { $stopped = 'timeout'; last; }
+            $wait = $remaining if $remaining < $wait;
+        }
+        my @ready = $sel->can_read($wait);
+        last if $stopped;   # a signal arrived during can_read
 
         waitpid -1, POSIX::WNOHANG();
 
@@ -137,7 +153,7 @@ sub run_pairing_mode {
                 }
                 if ($pid == 0) {
                     $server->close;
-                    _handle_pair_request($conn, $peer_ip, $log_fn, $max_queue, $PAIRING_DIR);
+                    _handle_pair_request($conn, $peer_ip, $log_fn, $max_queue, $pairing_dir);
                     $conn->close;
                     exit 0;
                 }
@@ -169,9 +185,8 @@ sub run_pairing_mode {
                 next unless length $line;
 
                 if ($line eq 'quit' || $line eq 'q') {
-                    $log_fn->({ ACTION => 'pairing-mode-stop' });
-                    print "Pairing mode stopped.\n";
-                    exit 0;
+                    $stopped = 'quit';
+                    last;
                 }
                 elsif ($line eq 'list' || $line eq 'l') {
                     _interactive_prompt($log_fn);
@@ -219,6 +234,17 @@ sub run_pairing_mode {
             }
         }
     }
+
+    # Single cleanup path for every stop reason (signal, deadline, or quit).
+    if ($stopped eq 'timeout') {
+        print "\nPairing mode timed out after ${timeout}s. Stopped.\n";
+        $log_fn->({ ACTION => 'pairing-mode-timeout', PORT => $port });
+    }
+    else {
+        print "\nPairing mode stopped.\n";
+        $log_fn->({ ACTION => 'pairing-mode-stop' });
+    }
+    return $stopped;
 }
 
 # Return list of pending requests sorted by received time

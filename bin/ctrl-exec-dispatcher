@@ -22,6 +22,7 @@ our $VERSION = 'UNINSTALLED';
 
 my $CONFIG_PATH = '/etc/ctrl-exec/ctrl-exec.conf';
 my $PAIR_PORT   = 7444;
+my $PAIRING_PIDFILE = '/var/lib/ctrl-exec/pairing-mode.pid';
 
 main() unless caller;
 
@@ -332,20 +333,57 @@ sub mode_list_agents {
 }
 
 sub mode_pairing {
-    my ($opts) = @_;
-    my $config = _load_config();
+    my ($opts, $action) = @_;
+    $action //= '';
 
-    # Fork a child to run the cert renewal check loop.
-    # The child runs independently - if it exits, pairing mode continues.
-    # The parent reaps it on exit via END block.
+    return _pairing_stop() if $action eq 'stop';
+
+    if ($action ne '' && $action ne 'start') {
+        die "Usage: ctrl-exec-dispatcher pairing-mode [start|stop] "
+          . "[--timeout <1-600>]\n";
+    }
+
+    my $config  = _load_config();
+    my $timeout = _pairing_timeout($opts, $config);
+
+    return _pairing_start_background($opts, $config, $timeout)
+        if $action eq 'start';
+
+    # Foreground (interactive) pairing session.
+    _pairing_serve($opts, $config, $timeout);
+}
+
+# Resolve and validate the absolute pairing timeout. --timeout overrides the
+# pairing_timeout config key, which overrides the 600s default. The window may
+# be shortened but never extended beyond 600s, so an open window is always
+# bounded.
+sub _pairing_timeout {
+    my ($opts, $config) = @_;
+    my $t = $opts->{timeout};
+    $t = $config->{pairing_timeout} if !defined $t;
+    $t = 600                        if !defined $t;
+    die "Error: --timeout must be an integer number of seconds.\n"
+        unless "$t" =~ /^\d+$/;
+    $t = int($t);
+    die "Error: --timeout must be between 1 and 600 seconds.\n"
+        if $t < 1 || $t > 600;
+    return $t;
+}
+
+# Run the pairing listener plus the cert-renewal check loop, reaping the child
+# on every exit (timeout, quit, or signal). Shared by foreground and background.
+sub _pairing_serve {
+    my ($opts, $config, $timeout) = @_;
+
+    # Fork the cert-renewal check loop. It runs independently; we TERM it when
+    # the pairing listener stops so it is never left orphaned.
     my $check_pid = fork();
     if (!defined $check_pid) {
         warn "Warning: could not fork renewal check loop: $!\n";
+        $check_pid = 0;
     }
     elsif ($check_pid == 0) {
-        # Child: run renewal loop indefinitely
-        # Small startup delay so pairing mode is listening first
-        sleep 5;
+        sleep 5;   # let the listener bind first
         eval {
             Exec::Rotation::check_and_rotate(config => $config);
             Exec::Rotation::broadcast_serial(config => $config);
@@ -355,23 +393,133 @@ sub mode_pairing {
         exit 0;
     }
 
-    # Parent: register cleanup
-    $SIG{INT} = $SIG{TERM} = sub {
-        kill 'TERM', $check_pid if $check_pid;
-        Exec::Log::log_action('INFO', { ACTION => 'pairing-mode-stop' });
-        print "\nPairing mode stopped.\n";
-        exit 0;
-    };
-
+    # run_pairing_mode installs its own INT/TERM handling and RETURNS a reason
+    # string when it stops (timeout/quit/signal) instead of exiting, so control
+    # always reaches the reap below.
     Exec::Pairing::run_pairing_mode(
-        port      => $opts->{port} // $PAIR_PORT,
-        ca_dir    => '/etc/ctrl-exec',
-        cert      => $config->{cert},
-        key       => $config->{key},
-        max_queue => $config->{pairing_max_queue} // 10,
+        port       => $opts->{port} // $PAIR_PORT,
+        ca_dir     => '/etc/ctrl-exec',
+        cert       => $config->{cert},
+        key        => $config->{key},
+        max_queue  => $config->{pairing_max_queue} // 10,
         rate_limit => Exec::Pairing::build_rate_config($config),
-        log_fn    => sub { Exec::Log::log_action('INFO', $_[0]) },
+        timeout    => $timeout,
+        log_fn     => sub { Exec::Log::log_action('INFO', $_[0]) },
     );
+
+    if ($check_pid) {
+        kill 'TERM', $check_pid;
+        waitpid $check_pid, 0;
+    }
+}
+
+# Start pairing mode as a detached background process that auto-stops after the
+# timeout. A pidfile lets 'pairing-mode stop' find and stop it.
+sub _pairing_start_background {
+    my ($opts, $config, $timeout) = @_;
+
+    _pairing_assert_not_running();
+
+    # Surface cert/key problems before detaching, while stderr is still visible.
+    for my $f (['certificate', $config->{cert}], ['key', $config->{key}]) {
+        my ($what, $path) = @$f;
+        next if $path && -e $path;
+        die "Cannot start pairing mode: the dispatcher $what is missing"
+          . ($path ? ":\n    $path\n" : ".\n")
+          . "Run 'ctrl-exec-dispatcher setup-ctrl-exec' first.\n";
+    }
+
+    my $port = $opts->{port} // $PAIR_PORT;
+    my $pid  = fork();
+    die "fork failed: $!\n" unless defined $pid;
+
+    if ($pid) {
+        # Parent: wait for the child to write its pidfile, then report and exit.
+        my $ok = 0;
+        for (1 .. 50) {                       # up to ~5s
+            if (-f $PAIRING_PIDFILE) { $ok = 1; last; }
+            select undef, undef, undef, 0.1;
+        }
+        die "Pairing mode failed to start - check syslog.\n" unless $ok;
+        my $child = _pairing_read_pidfile() // $pid;
+        print "Pairing mode started in the background on port $port (PID $child).\n";
+        print "It auto-stops after ${timeout}s; stop sooner with:\n";
+        print "    ctrl-exec-dispatcher pairing-mode stop\n";
+        return;
+    }
+
+    # Child: detach into a daemon, then serve until the timeout or a stop.
+    require POSIX;
+    POSIX::setsid();
+    open STDIN,  '<', '/dev/null';
+    open STDOUT, '>', '/dev/null';
+    open STDERR, '>', '/dev/null';
+    chdir '/';
+
+    _pairing_write_pidfile($$);
+    Exec::Log::log_action('INFO',
+        { ACTION => 'pairing-mode-start', PID => $$, TIMEOUT => $timeout });
+    eval { _pairing_serve($opts, $config, $timeout); };
+    unlink $PAIRING_PIDFILE;
+    exit 0;
+}
+
+# Stop a background pairing session started with 'pairing-mode start'.
+sub _pairing_stop {
+    my $pid = _pairing_read_pidfile();
+    if (!defined $pid) {
+        print "No background pairing mode is running.\n";
+        return;
+    }
+    if (!kill 0, $pid) {
+        unlink $PAIRING_PIDFILE;
+        print "No background pairing mode is running (cleared stale pidfile).\n";
+        return;
+    }
+    kill 'TERM', $pid;
+    my $gone = 0;
+    for (1 .. 50) {                            # up to ~5s
+        unless (kill 0, $pid) { $gone = 1; last; }
+        select undef, undef, undef, 0.1;
+    }
+    if ($gone) {
+        unlink $PAIRING_PIDFILE;
+        Exec::Log::log_action('INFO', { ACTION => 'pairing-mode-stop', PID => $pid });
+        print "Pairing mode stopped (was PID $pid); pairing port closed.\n";
+    }
+    else {
+        print "Sent stop to PID $pid but it has not exited yet - check syslog.\n";
+    }
+}
+
+sub _pairing_read_pidfile {
+    open my $fh, '<', $PAIRING_PIDFILE or return undef;
+    my $line = <$fh>;
+    close $fh;
+    return undef unless defined $line;
+    chomp $line;
+    return ($line =~ /^(\d+)$/) ? $1 : undef;
+}
+
+sub _pairing_write_pidfile {
+    my ($pid) = @_;
+    (my $dir = $PAIRING_PIDFILE) =~ s{/[^/]+$}{};
+    require File::Path;
+    File::Path::make_path($dir) unless -d $dir;
+    open my $fh, '>', $PAIRING_PIDFILE
+        or die "Cannot write pidfile $PAIRING_PIDFILE: $!\n";
+    print $fh "$pid\n";
+    close $fh;
+}
+
+sub _pairing_assert_not_running {
+    my $pid = _pairing_read_pidfile();
+    return unless defined $pid;
+    if (kill 0, $pid) {
+        die "Pairing mode is already running in the background (PID $pid).\n"
+          . "Stop it first with: ctrl-exec-dispatcher pairing-mode stop\n";
+    }
+    unlink $PAIRING_PIDFILE;   # stale pidfile from a crashed run
 }
 
 sub mode_list_requests {
@@ -851,7 +999,12 @@ Modes:
                              exit 0 all-ok, 1 some failed, 2 timed out
   ping <host>[:<port>] [<host>...]
                              Test mTLS connectivity to hosts
-  pairing-mode               Accept agent pairing requests
+  pairing-mode [start|stop]  Accept agent pairing requests. Auto-stops after
+                             --timeout seconds (default 600, max 600) so an
+                             unattended window cannot stay open indefinitely.
+                             'start' runs it detached in the background;
+                             'stop' stops a backgrounded session and closes
+                             the pairing port.
   list-requests              Show pending pairing requests
   approve <reqid>            Approve a pairing request
                              [--lookup-by ip|hostname] sets how dispatch
