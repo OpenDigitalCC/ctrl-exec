@@ -71,7 +71,7 @@ sub check_and_rotate {
     return _do_rotation(config => $config);
 }
 
-# Perform rotation unconditionally - called by 'ctrl-exec rotate-cert'
+# Perform rotation unconditionally - called by 'ctrl-exec-dispatcher rotate-cert'
 # and by check_and_rotate when the threshold is reached.
 #
 # Required opts:
@@ -218,7 +218,7 @@ sub broadcast_serial {
 
 # Run the internal renewal check loop. Blocks indefinitely.
 # Called from the ctrl-exec serve loop in a separate process or thread.
-# In practice called via a forked child in bin/ctrl-exec.
+# In practice called via a forked child in bin/ctrl-exec-dispatcher.
 #
 # Required opts:
 #   config => \%config

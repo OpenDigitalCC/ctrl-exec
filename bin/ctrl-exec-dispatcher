@@ -88,7 +88,7 @@ sub _resolve_dispatch_hosts {
 
 sub mode_run {
     my ($opts, @args) = @_;
-    die "Usage: ctrl-exec run <host>[:<port>] [<host>...] <script> [-- <arg>...]\n"
+    die "Usage: ctrl-exec-dispatcher run <host>[:<port>] [<host>...] <script> [-- <arg>...]\n"
         unless @args >= 2;
 
     my ($hosts, $script, $script_args) = _parse_run_args(@args);
@@ -174,7 +174,7 @@ sub mode_run {
 
 sub mode_status {
     my ($opts, $reqid) = @_;
-    die "Usage: ctrl-exec status <reqid>\n" unless $reqid;
+    die "Usage: ctrl-exec-dispatcher status <reqid>\n" unless $reqid;
 
     my $config = _load_config();
     my $record = eval {
@@ -203,7 +203,7 @@ sub mode_status {
 
 sub mode_wait {
     my ($opts, $reqid) = @_;
-    die "Usage: ctrl-exec wait <reqid> [--timeout <seconds>]\n" unless $reqid;
+    die "Usage: ctrl-exec-dispatcher wait <reqid> [--timeout <seconds>]\n" unless $reqid;
 
     my $config   = _load_config();
     my $timeout  = $opts->{timeout} // 300;
@@ -246,7 +246,7 @@ sub mode_wait {
 
 sub mode_ping {
     my ($opts, @hosts) = @_;
-    die "Usage: ctrl-exec ping <host>[:<port>] [<host>...]\n" unless @hosts;
+    die "Usage: ctrl-exec-dispatcher ping <host>[:<port>] [<host>...]\n" unless @hosts;
 
     my $config   = _load_config();
     my $username = $opts->{username} // $ENV{USER} // '';
@@ -286,7 +286,7 @@ sub mode_list_agents {
     if ($@) {
         my $err = $@;
         if ($err =~ /Permission denied/i) {
-            die "Cannot access agent registry: permission denied.\nTry: sudo ctrl-exec list-agents\n";
+            die "Cannot access agent registry: permission denied.\nTry: sudo ctrl-exec-dispatcher list-agents\n";
         }
         die $err;
     }
@@ -394,7 +394,7 @@ sub mode_list_requests {
 
 sub mode_approve {
     my ($opts, $reqid) = @_;
-    die "Usage: ctrl-exec approve <reqid> [--lookup-by ip|hostname]\n" unless $reqid;
+    die "Usage: ctrl-exec-dispatcher approve <reqid> [--lookup-by ip|hostname]\n" unless $reqid;
 
     my $lookup_by = $opts->{lookup_by};
     if (defined $lookup_by && $lookup_by ne 'ip' && $lookup_by ne 'hostname') {
@@ -417,7 +417,7 @@ sub mode_approve {
 
 sub mode_deny {
     my ($opts, $reqid) = @_;
-    die "Usage: ctrl-exec deny <reqid>\n" unless $reqid;
+    die "Usage: ctrl-exec-dispatcher deny <reqid>\n" unless $reqid;
     Exec::Pairing::deny_request(
         reqid  => $reqid,
         log_fn => sub { Exec::Log::log_action('INFO', $_[0]) },
@@ -425,7 +425,7 @@ sub mode_deny {
 }
 
 sub mode_setup_ca {
-    print "Setting up ctrl-exec CA...\n";
+    print "Setting up dispatcher CA...\n";
     my $result = Exec::CA::generate_ca(ca_dir => '/etc/ctrl-exec');
     print "CA created:\n";
     print "  Key:  $result->{ca_key}\n";
@@ -438,14 +438,14 @@ sub mode_setup_dispatcher {
     my $disp_crt = "$ca_dir/ctrl-exec.crt";
 
     if (-f $disp_crt) {
-        # Replacing the ctrl-exec cert changes its serial. Every paired agent
-        # stores the ctrl-exec serial at pairing time and uses it to restrict
+        # Replacing the dispatcher cert changes its serial. Every paired agent
+        # stores the dispatcher serial at pairing time and uses it to restrict
         # /capabilities. After re-keying, agents will reject /capabilities
-        # from the new ctrl-exec cert until re-paired.
+        # from the new dispatcher cert until re-paired.
         my $agents = eval { Exec::Registry::list_agents() } // [];
         my $count  = scalar @$agents;
         if ($count > 0) {
-            print "WARNING: Existing ctrl-exec cert found.\n";
+            print "WARNING: Existing dispatcher cert found.\n";
             printf "  %d registered agent%s will require re-pairing after this operation.\n",
                 $count, ($count == 1 ? '' : 's');
             print "  Operations (run/ping) continue to work until agent certs expire.\n";
@@ -459,19 +459,19 @@ sub mode_setup_dispatcher {
             }
         }
         else {
-            print "Existing ctrl-exec cert found. No registered agents - replacing.\n";
+            print "Existing dispatcher cert found. No registered agents - replacing.\n";
         }
     }
 
-    print "Generating ctrl-exec certificate...\n";
+    print "Generating dispatcher certificate...\n";
     my $result = Exec::CA::generate_dispatcher_cert(
         ca_dir => $ca_dir,
         force  => 1,
     );
-    print "ctrl-exec cert created:\n";
+    print "dispatcher cert created:\n";
     print "  Key:  $result->{key}\n";
     print "  Cert: $result->{cert}\n";
-    print "Run 'ctrl-exec pairing-mode' to re-pair agents as needed.\n"
+    print "Run 'ctrl-exec-dispatcher pairing-mode' to re-pair agents as needed.\n"
         if -f "$ca_dir/ctrl-exec.crt";
 }
 
@@ -479,7 +479,7 @@ sub mode_rotate_cert {
     my ($opts) = @_;
     my $config = _load_config();
 
-    print "Rotating ctrl-exec certificate...\n";
+    print "Rotating dispatcher certificate...\n";
 
     my $result = Exec::Rotation::rotate(config => $config);
 
@@ -599,7 +599,7 @@ sub _format_async_submit {
             printf "==> %s  [ERROR: %s]\n", $host, $r->{error} // 'submit failed';
         }
     }
-    print "Check progress with: ctrl-exec status $reqid\n";
+    print "Check progress with: ctrl-exec-dispatcher status $reqid\n";
 }
 
 # Print an aggregated async run record (from RunStore::aggregate).
@@ -756,7 +756,7 @@ sub mode_list_locks {
 
 sub mode_unpair {
     my ($opts, $hostname) = @_;
-    die "Usage: ctrl-exec unpair <hostname>\n" unless $hostname;
+    die "Usage: ctrl-exec-dispatcher unpair <hostname>\n" unless $hostname;
 
     my $record = eval {
         Exec::Registry::remove_agent(hostname => $hostname)
@@ -781,7 +781,7 @@ sub mode_unpair {
 
 sub mode_edit_agent {
     my ($opts, $name) = @_;
-    die "Usage: ctrl-exec edit-agent <name> "
+    die "Usage: ctrl-exec-dispatcher edit-agent <name> "
       . "[--rename <new>] [--ip <addr>] [--agent-port <n>] [--lookup-by ip|hostname]\n"
         unless $name;
 
@@ -838,7 +838,7 @@ sub mode_edit_agent {
 
 sub usage {
     return <<'END';
-Usage: ctrl-exec <mode> [options] [args]
+Usage: ctrl-exec-dispatcher <mode> [options] [args]
 
 Modes:
   run <host>[:<port>] [<host>...] <script> [-- <arg>...]
@@ -866,8 +866,8 @@ Modes:
                              [--rename <new>] [--ip <addr>]
                              [--agent-port <n>] [--lookup-by ip|hostname]
   list-locks                 Show currently held script locks
-  rotate-cert                Rotate ctrl-exec certificate and broadcast new serial
-  serial-status              Show ctrl-exec serial and per-agent serial state
+  rotate-cert                Rotate dispatcher certificate and broadcast new serial
+  serial-status              Show dispatcher serial and per-agent serial state
   unpair <hostname>          Remove a paired agent from the registry
 
 Options:

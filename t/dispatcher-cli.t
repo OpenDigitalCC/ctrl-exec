@@ -4,7 +4,7 @@ use warnings;
 use Test::More tests => 28;
 use FindBin qw($Bin);
 
-# Load just the parsing and formatting functions from bin/ctrl-exec
+# Load just the parsing and formatting functions from bin/ctrl-exec-dispatcher
 # by requiring it into a package that won't execute main()
 {
     no warnings 'redefine';

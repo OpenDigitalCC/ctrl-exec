@@ -63,7 +63,7 @@ sub check {
     my $hook = $config->{auth_hook} // '';
 
     # No hook configured.
-    # CLI callers (bin/ctrl-exec modes) are already gated by system user
+    # CLI callers (bin/ctrl-exec-dispatcher modes) are already gated by system user
     # permissions - unconditional pass preserves the original CLI behaviour.
     # API callers apply api_auth_default (default: deny) so that an API
     # endpoint without a hook fails closed rather than open.

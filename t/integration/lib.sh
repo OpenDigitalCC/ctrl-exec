@@ -5,7 +5,7 @@
 #   source "$(dirname "$0")/lib.sh"
 #
 # Agent discovery:
-#   Agents are discovered from "ctrl-exec list-agents" at startup.
+#   Agents are discovered from "ctrl-exec-dispatcher list-agents" at startup.
 #   No hostnames are hardcoded here or in any test file.
 #
 # Exported arrays (populated by discover_agents, called from run-tests.sh):
@@ -69,14 +69,14 @@ summary() {
     return 0
 }
 
-# _list_agent_hostnames: extract hostnames from "ctrl-exec list-agents" output.
+# _list_agent_hostnames: extract hostnames from "ctrl-exec-dispatcher list-agents" output.
 # Skips the header and separator lines.
 _list_agent_hostnames() {
     sudo "$DISPATCHER" list-agents 2>/dev/null \
         | awk 'NR > 2 && /^[A-Za-z0-9]/ { print $1 }'
 }
 
-# _ping_agent <hostname>: returns 0 if agent responds to ctrl-exec ping.
+# _ping_agent <hostname>: returns 0 if agent responds to ctrl-exec-dispatcher ping.
 _ping_agent() {
     local agent="$1"
     sudo "$DISPATCHER" ping "$agent" > /dev/null 2>&1
@@ -87,7 +87,7 @@ _ping_agent() {
 # Also called automatically when AGENT1 is unset (standalone test execution).
 # Exports results so sourced test scripts inherit them.
 discover_agents() {
-    printf 'Discovering agents from ctrl-exec list-agents...\n'
+    printf 'Discovering agents from ctrl-exec-dispatcher list-agents...\n'
 
     local all_agents=()
     while IFS= read -r hostname; do
@@ -95,7 +95,7 @@ discover_agents() {
     done < <(_list_agent_hostnames)
 
     if [ "${#all_agents[@]}" -eq 0 ]; then
-        printf 'ERROR: No agents registered. Run "ctrl-exec list-agents" to check.\n' >&2
+        printf 'ERROR: No agents registered. Run "ctrl-exec-dispatcher list-agents" to check.\n' >&2
         exit 1
     fi
 

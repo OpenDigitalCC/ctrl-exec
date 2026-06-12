@@ -10,11 +10,11 @@
 # Individual tests can be run directly from the suite directory, e.g.:
 #   sudo bash 02-argument-integrity.sh
 #
-# Agents are discovered automatically from "ctrl-exec list-agents".
+# Agents are discovered automatically from "ctrl-exec-dispatcher list-agents".
 # No hostnames need to be configured.
 #
 # Environment variables:
-#   DISPATCHER   ctrl-exec binary name or path (default: ctrl-exec)
+#   DISPATCHER   ctrl-exec binary name or path (default: ctrl-exec-dispatcher)
 
 set -uo pipefail
 SUITE_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -56,7 +56,7 @@ printf '\n'
 
 # Verify ctrl-exec binary is accessible
 if ! sudo "$DISPATCHER" list-agents > /dev/null 2>&1; then
-    printf '\nERROR: Cannot run "ctrl-exec list-agents"\n'
+    printf '\nERROR: Cannot run "ctrl-exec-dispatcher list-agents"\n'
     printf 'Check the ctrl-exec is installed and you have sudo access.\n'
     exit 1
 fi

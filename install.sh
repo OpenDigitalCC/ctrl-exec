@@ -555,7 +555,7 @@ install_agent() {
 # --- ctrl-exec installation ---
 
 install_ctrl_exec_dispatcher() {
-    info "Installing ctrl-exec CLI..."
+    info "Installing the dispatcher CLI..."
 
     create_system_group "$EXEC_GROUP"
 
@@ -764,8 +764,8 @@ print_next_steps_agent() {
     echo "       $SUDO_CMD chmod 750 $SCRIPTS_DIR/your-script.sh"
     echo "       $SUDO_CMD chown root:$AGENT_GROUP $SCRIPTS_DIR/your-script.sh"
     echo ""
-    echo "  3. Request pairing (while ctrl-exec host is in pairing-mode):"
-    echo "       $SUDO_CMD ctrl-exec-agent request-pairing --dispatcher <ctrl-exec-host>"
+    echo "  3. Request pairing (while the dispatcher host is in pairing-mode):"
+    echo "       $SUDO_CMD ctrl-exec-agent request-pairing --dispatcher <dispatcher-host>"
     echo ""
     echo "  4. Once approved, verify:"
     echo "       $SUDO_CMD ctrl-exec-agent pairing-status"
@@ -787,7 +787,7 @@ print_next_steps_ctrl_exec_dispatcher() {
     echo "  1. Initialise the CA (first time only):"
     echo "       $SUDO_CMD ctrl-exec-dispatcher setup-ca"
     echo ""
-    echo "  2. Generate the ctrl-exec certificate:"
+    echo "  2. Generate the dispatcher certificate:"
     echo "       $SUDO_CMD ctrl-exec-dispatcher setup-ctrl-exec"
     echo ""
     echo "  3. Add yourself to the ctrl-exec group for CLI access without sudo:"
@@ -924,7 +924,7 @@ main() {
             print_next_steps_ctrl_exec_dispatcher
             ;;
         api)
-            # API requires the ctrl-exec role to already be installed
+            # API requires the dispatcher role to already be installed
             if [[ ! -f "$EXEC_CONF_DIR/ctrl-exec.conf" ]]; then
                 die "--api requires --dispatcher to be installed first."
             fi

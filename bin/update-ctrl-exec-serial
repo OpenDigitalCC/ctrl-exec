@@ -19,7 +19,7 @@
 # Do not add this to allowlists as a convenience on agents where rotation is
 # not configured.
 #
-# This script is called via the ctrl-exec run mechanism and is
+# This script is called via the ctrl-exec-dispatcher run mechanism and is
 # authenticated by the existing mTLS trust. It should be in scripts.conf
 # on every agent that participates in automatic cert rotation.
 #

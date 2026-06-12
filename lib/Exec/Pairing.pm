@@ -93,7 +93,7 @@ sub run_pairing_mode {
     }
     else {
         print "Pairing mode active on port $port. Ctrl-C to stop.\n";
-        print "Use 'ctrl-exec list-requests' to see pending requests.\n";
+        print "Use 'ctrl-exec-dispatcher list-requests' to see pending requests.\n";
     }
 
     $SIG{INT} = $SIG{TERM} = sub {
@@ -568,7 +568,7 @@ sub _handle_pair_request {
     print "Pairing request queued: $hostname ($peer_ip) - ID: $reqid\n";
 
     # Send reqid to agent immediately so orchestrators can use it to call
-    # 'ctrl-exec approve <reqid>' without waiting for the connection to close.
+    # 'ctrl-exec-dispatcher approve <reqid>' without waiting for the connection to close.
     # The agent reads this first response, extracts the reqid, then reads
     # a second response for the approval or denial.
     _send_raw($conn, encode_json({ status => 'pending', reqid => $reqid }));
