@@ -542,7 +542,8 @@ sub mode_list_requests {
 
 sub mode_approve {
     my ($opts, $reqid) = @_;
-    die "Usage: ctrl-exec-dispatcher approve <reqid> [--lookup-by ip|hostname]\n" unless $reqid;
+    die "Usage: ctrl-exec-dispatcher approve <reqid> "
+      . "[--lookup-by ip|hostname] [--ip <addr>] [--agent-port <n>]\n" unless $reqid;
 
     my $lookup_by = $opts->{lookup_by};
     if (defined $lookup_by && $lookup_by ne 'ip' && $lookup_by ne 'hostname') {
@@ -554,10 +555,16 @@ sub mode_approve {
         die "--agent-port must be a port number (1-65535)\n";
     }
 
+    my $ip = $opts->{ip};
+    if (defined $ip && $ip !~ /^\d{1,3}(?:\.\d{1,3}){3}$/ && $ip !~ /^[0-9A-Fa-f:]+:[0-9A-Fa-f:]+$/) {
+        die "--ip must be an IPv4 or IPv6 address\n";
+    }
+
     Exec::Pairing::approve_request(
         reqid     => $reqid,
         ca_dir    => '/etc/ctrl-exec',
         lookup_by => $lookup_by,
+        ip        => $ip,
         port      => $agent_port,
         log_fn    => sub { Exec::Log::log_action('INFO', $_[0]) },
     );
@@ -1009,6 +1016,8 @@ Modes:
   approve <reqid>            Approve a pairing request
                              [--lookup-by ip|hostname] sets how dispatch
                              resolves this agent (default: hostname)
+                             [--ip <addr>] overrides the registered IP (the
+                             agent self-reports it; needed when a NAT hides it)
                              [--agent-port <n>] overrides the agent's
                              reported operational port (default: 7443)
   deny <reqid>               Deny a pairing request

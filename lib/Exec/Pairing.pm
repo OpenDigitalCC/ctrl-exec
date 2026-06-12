@@ -288,6 +288,7 @@ sub approve_request {
     # over the agent-suggested/reported value in the request; then the default.
     my $lookup_by = _effective_lookup_by($opts{lookup_by}, $req->{lookup_by});
     my $port      = _effective_port($opts{port}, $req->{port});
+    my $ip        = _effective_ip($opts{ip}, $req->{ip});
 
     require Exec::CA;
 
@@ -336,7 +337,7 @@ sub approve_request {
     require Exec::Registry;
     Exec::Registry::register_agent(
         hostname          => $req->{hostname},
-        ip                => $req->{ip},
+        ip                => $ip,
         paired            => strftime('%Y-%m-%dT%H:%M:%SZ', gmtime),
         expiry            => $expiry // '',
         reqid             => $reqid,
@@ -413,6 +414,29 @@ sub _effective_port {
         return $p if defined $p;
     }
     return 7443;
+}
+
+# Return $v if it looks like an IPv4 or IPv6 literal, else undef. Rejects empty,
+# 'unknown', and hostnames so a garbage agent-reported value is never stored as
+# an address. Deliberately loose - a sanity check, not full address validation.
+sub _valid_ip {
+    my ($v) = @_;
+    return undef unless defined $v && length $v;
+    return $v if $v =~ /^\d{1,3}(?:\.\d{1,3}){3}$/;      # IPv4
+    return $v if $v =~ /^[0-9A-Fa-f:]+:[0-9A-Fa-f:]+$/;  # IPv6 (loose)
+    return undef;
+}
+
+# Effective IP for an approval, in priority order: operator override
+# (approve --ip) wins over the value queued at request time (the agent's
+# self-reported source IP, falling back to the connection source). '' if none.
+sub _effective_ip {
+    my (@candidates) = @_;
+    for my $v (@candidates) {
+        my $ip = _valid_ip($v);
+        return $ip if defined $ip;
+    }
+    return '';
 }
 
 # --- interactive pairing helpers ---
@@ -561,6 +585,11 @@ sub _handle_pair_request {
     my $nonce      = $data->{nonce} // '';
     my $lookup_by  = _valid_lookup_by($data->{lookup_by});  # agent-suggested hint
     my $agent_port = _valid_port($data->{port});            # agent-reported serve port
+    my $reported_ip = _valid_ip($data->{ip});               # agent-reported source IP
+    # The address to register: the agent's self-reported source IP when valid,
+    # else the connection's source IP (unreliable behind NAT). An operator can
+    # still override it at 'approve --ip'.
+    my $eff_ip     = $reported_ip // $peer_ip;
     my $received   = strftime('%Y-%m-%dT%H:%M:%SZ', gmtime);
     my $code       = _pairing_code($csr);
 
@@ -581,7 +610,8 @@ sub _handle_pair_request {
     _write_file("$pairing_dir/$reqid.json", encode_json({
         id        => $reqid,
         hostname  => $hostname,
-        ip        => $peer_ip,
+        ip        => $eff_ip,
+        source_ip => $peer_ip,
         csr       => $csr,
         nonce     => $nonce,
         lookup_by => $lookup_by,
@@ -590,8 +620,10 @@ sub _handle_pair_request {
         code      => $code,
     }));
 
-    $log_fn->({ ACTION => 'pair-request', AGENT => $hostname, IP => $peer_ip, REQID => $reqid, STATUS => 'pending' });
-    print "Pairing request queued: $hostname ($peer_ip) - ID: $reqid\n";
+    $log_fn->({ ACTION => 'pair-request', AGENT => $hostname, IP => $peer_ip,
+        ($reported_ip ? (REPORTED_IP => $reported_ip) : ()),
+        REQID => $reqid, STATUS => 'pending' });
+    print "Pairing request queued: $hostname ($eff_ip) - ID: $reqid\n";
 
     # Send reqid to agent immediately so orchestrators can use it to call
     # 'ctrl-exec-dispatcher approve <reqid>' without waiting for the connection to close.

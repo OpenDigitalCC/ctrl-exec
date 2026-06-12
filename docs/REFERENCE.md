@@ -312,10 +312,19 @@ delivers the certificate on the agent's next poll.
 ```bash
 ced approve <reqid>
 ced approve <reqid> --lookup-by ip
+ced approve <reqid> --ip 192.168.1.10
 ced approve <reqid> --agent-port 7450
 ```
 
 The request ID is shown by `list-requests` and `pairing-mode`.
+
+The IP stored for the agent is the address the agent reports for itself at
+pairing time (the source address of its connection to the dispatcher). The
+dispatcher falls back to the connection's own source IP only if the agent does
+not report one — note that source IP is unreliable when a NAT sits in front of
+the dispatcher (for example the dispatcher running in a Docker container, where
+every agent's connection appears to come from the bridge gateway). Use
+`--ip` to set the address explicitly in that case.
 
 `--lookup-by <ip|hostname>`
 : How dispatch resolves this agent's connect address (stored in the registry
@@ -324,6 +333,12 @@ The request ID is shown by `list-requests` and `pairing-mode`.
   agent-reported hostname does not resolve from the dispatcher. This overrides
   any value the agent suggested with `request-pairing --lookup-by`. See
   *Dispatch host resolution* under `run`.
+
+`--ip <addr>`
+: The address to record for this agent (registry `ip`), used by dispatch when
+  `lookup_by` is `ip`. Overrides the agent's self-reported source IP and the
+  connection source IP. Set this when a NAT in front of the dispatcher hides
+  the agent's real address. Accepts IPv4 or IPv6.
 
 `--agent-port <n>`
 : The agent's operational port, stored in the registry as `port` and used by

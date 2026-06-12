@@ -163,6 +163,11 @@ sub submit_pairing_request {
     );
     $request{lookup_by} = $lookup_by  if defined $lookup_by;
     $request{port}      = $agent_port if defined $agent_port;
+    # Report our own source address. The dispatcher prefers this over the
+    # connection's source IP, which a NAT in front of it (e.g. Docker) rewrites
+    # to the gateway address, so every agent would otherwise register the same.
+    my $source_ip = $sock->sockhost;
+    $request{ip} = $source_ip if defined $source_ip && length $source_ip;
     my $payload = JSON::encode_json(\%request);
 
     print $sock "POST /pair HTTP/1.0\r\n",
@@ -290,11 +295,15 @@ sub request_pairing {
     my $sock = IO::Socket::SSL->new(%ssl_opts)
         or return { ok => 0, error => "connect failed: $IO::Socket::SSL::SSL_ERROR" };
 
-    my $payload = JSON::encode_json({
+    my %request = (
         hostname => $hostname,
         csr      => $csr_pem,
         nonce    => $nonce,
-    });
+    );
+    # Report our own source address (see the foreground path for why).
+    my $source_ip = $sock->sockhost;
+    $request{ip} = $source_ip if defined $source_ip && length $source_ip;
+    my $payload = JSON::encode_json(\%request);
 
     print $sock "POST /pair HTTP/1.0\r\n",
                 "Content-Type: application/json\r\n",
