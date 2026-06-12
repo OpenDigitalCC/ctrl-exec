@@ -106,11 +106,10 @@ The agent stores its signed certificate, the CA certificate, and the dispatcher 
 
 # Start the Agent
 
-On the agent host:
+On the agent host (now that it is paired):
 
 ```bash
-sudo systemctl enable ctrl-exec-agent
-sudo systemctl start ctrl-exec-agent
+sudo systemctl enable --now ctrl-exec-agent
 ```
 
 Or without systemd:

@@ -87,109 +87,104 @@ automatic cert renewal
 ## Quick Start
 
 Full detail is in `INSTALL.md`. The sequence below gets ctrl-exec running
-between two hosts in about ten minutes.
+between two hosts in about ten minutes. **Run each numbered block on the host
+named in its heading** - steps 1, 3 (approve), 4-stop and 5 are on the
+dispatcher; steps 2, 3 (request) and 4-start are on the agent.
 
-### 1. dispatcher host
-
-Install and initialise the CA and dispatcher identity:
+### 1. Dispatcher host - install and create the PKI
 
 ```bash
 sudo ./install.sh --dispatcher
-sudo ced setup-ca
-sudo ced setup-ctrl-exec
-sudo usermod -aG ctrl-exec $USER
-# Log out and back in for group membership to take effect
+sudo ced setup-ca          # one-time: create the deployment CA
+sudo ced setup-ctrl-exec   # create the dispatcher's own TLS certificate
 ```
 
-Configure the auth hook. The dispatcher requires an auth hook to authorise
-`run` and `ping` requests. For an isolated network the simplest policy is
-allow-all - replace with real logic when deploying to production:
+Give your user CLI access without `sudo` (needed for `ced ping`/`run` in
+step 5):
 
 ```bash
-sudo cp /usr/local/lib/ctrl-exec/auth-hook.example /etc/ctrl-exec/auth-hook
-sudo chmod 755 /etc/ctrl-exec/auth-hook
+sudo usermod -aG ctrl-exec $USER
+newgrp ctrl-exec           # apply the new group to this shell (or re-login)
 ```
 
-Edit `/etc/ctrl-exec/auth-hook` and uncomment `exit 0` near the end of the
-file (the "Allow everything" example). The last executable line must be
-`exit 0`.
+> **Auth hook (optional).** With no auth hook configured, the dispatcher CLI
+> allows every `run`/`ping` - fine for an isolated trial. To restrict who may
+> run what, configure an auth hook later; see *Auth Hook* in `INSTALL.md`.
 
-If you prefer not to use a hook, remove or comment out the `auth_hook` line
-in `/etc/ctrl-exec/ctrl-exec.conf` and set:
-
-```ini
-api_auth_default = allow
-```
-
-### 2. Agent host
-
-Install the agent:
+### 2. Agent host - install and configure
 
 ```bash
 sudo ./install.sh --agent
 ```
 
-Edit `/etc/ctrl-exec-agent/scripts.conf` to add the scripts the agent is
-permitted to run. `logger` is available on every platform and requires no
-additional setup:
+Add the scripts the agent is allowed to run to
+`/etc/ctrl-exec-agent/scripts.conf`. `logger` exists on every platform and
+needs no extra setup:
 
 ```ini
 logger = /usr/bin/logger
 ```
 
-Start the agent:
-
-```bash
-sudo systemctl enable ctrl-exec-agent
-sudo systemctl start ctrl-exec-agent
-```
-
-Verify the agent configuration is valid before pairing:
+Check the configuration is valid (this does not need pairing):
 
 ```bash
 sudo ctrl-exec-agent self-check
 ```
 
+> **Do not start the agent service yet.** It has no certificate until it is
+> paired (step 3) and would exit immediately. You start it in step 4.
+
 ### 3. Pair the agent
 
-On the dispatcher host, start pairing mode:
+On the **dispatcher host**, open pairing mode (it auto-stops after 10 minutes):
 
 ```bash
 sudo ced pairing-mode
 ```
 
-On the agent host, request pairing:
+On the **agent host**, request pairing - replace `<dispatcher-host>` with the
+dispatcher's hostname or IP **as reachable from the agent**:
 
 ```bash
 sudo ctrl-exec-agent request-pairing --dispatcher <dispatcher-host>
 ```
 
-A pairing code is displayed on both hosts. Confirm they match, then type `a`
-in the pairing mode terminal to approve. The agent receives its signed cert
-and is ready.
+Both hosts display the same 6-digit code. Confirm they match, then type `a`
+and Enter in the pairing-mode terminal to approve. The agent stores its signed
+certificate and is ready.
 
-### 4. Verify
+### 4. Agent host - start the service
+
+Now that the agent is paired:
+
+```bash
+sudo systemctl enable --now ctrl-exec-agent
+```
+
+### 5. Dispatcher host - verify
 
 ```bash
 ced ping <agent-hostname>
-ced run <agent-hostname> --script logger -- -t test "hello from ctrl-exec"
+ced run <agent-hostname> logger -- -t test "hello from ctrl-exec"
 ```
+
+`ced list-agents` shows every paired agent and the address dispatch will use.
 
 ### Optional: API server
 
-The API server exposes ctrl-exec over HTTP on `localhost:7445`. Install and
-start it on the dispatcher host:
+The API server exposes the same operations over HTTP on `localhost:7445`.
+Install and start it on the dispatcher host:
 
 ```bash
 sudo ./install.sh --api
-sudo systemctl enable ctrl-exec-api
-sudo systemctl start ctrl-exec-api
+sudo systemctl enable --now ctrl-exec-api
 curl -s http://localhost:7445/health
 ```
 
-The API uses the same auth hook as the CLI. Ensure the hook is configured
-before starting the API - the hook is read at startup and a stale process
-will not pick up config changes without a restart.
+Unlike the CLI, the API denies requests by default. To allow them on a trusted
+network, set `api_auth_default = allow` in `/etc/ctrl-exec/ctrl-exec.conf`; to
+restrict them, configure an auth hook instead. Either is read at startup, so
+restart the service after changing it.
 
 
 ## Platform Support
