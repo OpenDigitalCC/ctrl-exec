@@ -80,7 +80,7 @@ sub make_cert {
         '-out',    $outfile,
         '-days',   $days,
         '-nodes',
-        '-subj',   '/CN=test-ctrl-exec',
+        '-subj',   '/CN=test-ctrl-exec-dispatcher',
         qw(-quiet)
     ) == 0;
 }

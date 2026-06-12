@@ -86,7 +86,7 @@ sub generate_dispatcher_cert {
         'openssl', 'req', '-new',
         '-key',  $disp_key,
         '-out',  $disp_csr,
-        '-subj', '/CN=ctrl-exec',
+        '-subj', '/CN=ctrl-exec-dispatcher',
     );
 
     _run_or_die(
