@@ -6,8 +6,9 @@
 ctrl-exec-*.tar.gz
 ctrl-exec-*.tar.gz.sha256
 
-# built Debian packages (produced by make-release.sh into dist/)
-*.deb
+# Built Debian packages are tracked in dist/ (latest release only;
+# make-release.sh prunes stale-version debs). Their dpkg-buildpackage
+# byproducts are build metadata, not artefacts to ship:
 *.buildinfo
 *.changes
 

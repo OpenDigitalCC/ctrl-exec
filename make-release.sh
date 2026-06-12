@@ -22,8 +22,9 @@
 
 set -euo pipefail
 
-# Outputs go to dist/. Add dist/ to .gitignore; release tarballs are
-# committed via git add -f to override the ignore rule.
+# Outputs go to dist/. Release tarballs are gitignored and committed via
+# git add -f; the .deb packages are tracked normally (latest release only -
+# stale-version debs are pruned on each build).
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -86,6 +87,23 @@ build_debs() {
         moved=$((moved + 1))
     done
     info "Placed $moved .deb artifact(s) in $dist/"
+
+    # Prune stale-version artefacts so dist/ carries only the current release
+    # (the .deb is committed; keeping every past version would bloat the repo).
+    # Mirrors the tarball cleanup further down. Untracks any that were committed.
+    local removed=0 old
+    for old in "$dist"/ctrl-exec*_all.deb \
+               "$dist"/ctrl-exec_*.buildinfo \
+               "$dist"/ctrl-exec_*.changes; do
+        [[ -e "$old" ]] || continue
+        case "$old" in
+            *_"${version}"_*) continue ;;
+        esac
+        rm -f "$old"
+        git rm --cached --quiet --ignore-unmatch "$old" 2>/dev/null || true
+        removed=$((removed + 1))
+    done
+    [[ "$removed" -gt 0 ]] && info "Pruned $removed stale .deb artefact(s) from $dist/"
 
     # Remove build byproducts from the working tree.
     fakeroot debian/rules clean >/dev/null 2>&1 || true
@@ -634,9 +652,10 @@ echo ""
 
 if [[ "$AUTO" -eq 1 ]]; then
     info "Auto mode: committing and pushing..."
-    git add -u                             # stages any deletions from git rm above
+    git add -u                             # stages tarball/deb deletions from git rm above
     git add sbom.json VERSION NEXT_VERSION debian/changelog
     git add -f "$TARBALL" "${TARBALL}.sha256"
+    [[ "$BUILD_DEBS" -eq 1 ]] && git add "$DIST_DIR"/ctrl-exec*_"${VERSION}"_all.deb 2>/dev/null
     git commit -m "release: $VERSION"
     git push
     git push origin "$TAG"
@@ -648,14 +667,18 @@ else
     echo "       git add -u"
     echo "       git add sbom.json VERSION NEXT_VERSION debian/changelog"
     echo "       git add -f $TARBALL ${TARBALL}.sha256"
+    if [[ "$BUILD_DEBS" -eq 1 ]]; then
+        echo "       git add $DIST_DIR/ctrl-exec*_${VERSION}_all.deb"
+    fi
     echo "       git commit -m 'release: $VERSION'"
     echo ""
     echo "  2. Push commits and tag:"
     echo "       git push && git push origin $TAG"
     echo ""
     if [[ "$BUILD_DEBS" -eq 1 ]]; then
-        echo "  The .deb packages are in $DIST_DIR/ (gitignored; copy to"
-        echo "  /srv/projects/packages/ or your apt repo as needed)."
+        echo "  The .deb packages in $DIST_DIR/ are tracked in git (latest"
+        echo "  release only; stale versions are pruned automatically). Copy"
+        echo "  to /srv/projects/packages/ or your apt repo as needed."
         echo ""
     fi
 fi
