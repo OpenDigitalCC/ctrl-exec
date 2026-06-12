@@ -259,6 +259,14 @@ sub mode_request_pairing {
         ($cfg && $cfg->{port}) ? $cfg->{port} : 7443;
     };
 
+    # Fail fast: probe the pairing port before generating a 4096-bit key, so an
+    # unreachable ctrl-exec (host down, wrong address, or simply not in pairing
+    # mode) is reported in seconds instead of after a slow keygen and a hung
+    # connect. A successful probe only proves the port is open - it does not
+    # prove pairing mode is active; the TLS handshake in submit confirms that.
+    my $pair_port = $opts->{port} // 7444;
+    _preflight_dispatcher($ctrl_exec_host, $pair_port);
+
     print "Generating key and CSR for '$host'...\n" unless $background;
     my $pair = Exec::Agent::AgentPairing::generate_key_and_csr(
         hostname => $host,
@@ -274,7 +282,7 @@ sub mode_request_pairing {
     # Submit the CSR. The ctrl-exec queues it and returns a reqid immediately.
     my $submitted = Exec::Agent::AgentPairing::submit_pairing_request(
         'ctrl-exec' => $ctrl_exec_host,
-        port       => $opts->{port} // 7444,
+        port       => $pair_port,
         csr_pem    => $pair->{csr_pem},
         hostname   => $host,
         lookup_by  => $lookup_by,
@@ -287,9 +295,18 @@ sub mode_request_pairing {
             die "Pairing failed: could not resolve ctrl-exec hostname '$ctrl_exec_host'.\n"
               . "Check the hostname is correct or use an IP address instead.\n";
         }
-        if ($err =~ /connect failed|connection refused|No route to host/i) {
-            die "Pairing failed: could not connect to ctrl-exec at $ctrl_exec_host.\n"
+        if ($err =~ /connection refused|No route to host/i) {
+            die "Pairing failed: could not connect to ctrl-exec at $ctrl_exec_host:$pair_port.\n"
               . "Check the ctrl-exec address is correct and pairing mode is active:\n"
+              . "  sudo ctrl-exec pairing-mode\n";
+        }
+        # The pre-flight probe reached the port, so a TLS/handshake failure here
+        # means something is listening but not speaking the pairing protocol -
+        # almost always the ctrl-exec is up but not in pairing mode.
+        if ($err =~ /unexpected eof|SSL connect|handshake|connect failed|no response|empty acknowledgement/i) {
+            die "Pairing failed: reached $ctrl_exec_host:$pair_port, but it is not\n"
+              . "responding as a pairing listener. The ctrl-exec is most likely\n"
+              . "running but not in pairing mode. On the ctrl-exec host, run:\n"
               . "  sudo ctrl-exec pairing-mode\n";
         }
         die "Pairing failed: $err\n";
@@ -970,6 +987,27 @@ sub _pairing_code {
     # Take first 4 bytes as a 32-bit unsigned int, modulo 1,000,000
     my $n = unpack('N', substr($digest, 0, 4)) % 1_000_000;
     return sprintf '%06d', $n;
+}
+
+# Quick TCP reachability probe for the pairing port, run before the slow keygen.
+# Dies with an actionable message if the ctrl-exec cannot be reached at all.
+# A successful probe only proves the port is open - it does NOT prove pairing
+# mode is active; the TLS handshake in submit_pairing_request confirms that and
+# reports a distinct "not in pairing mode" error if it fails.
+sub _preflight_dispatcher {
+    my ($host, $port) = @_;
+    require IO::Socket::INET;
+    my $probe = IO::Socket::INET->new(
+        PeerHost => $host,
+        PeerPort => $port,
+        Proto    => 'tcp',
+        Timeout  => 5,
+    );
+    return if $probe;   # reachable - socket closes when $probe leaves scope
+    die "Pairing failed: cannot reach ctrl-exec at $host:$port.\n"
+      . "Check the address is correct, the ctrl-exec host is up, and that it\n"
+      . "is running pairing mode:\n"
+      . "  sudo ctrl-exec pairing-mode\n";
 }
 
 sub usage {
