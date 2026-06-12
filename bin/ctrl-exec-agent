@@ -101,6 +101,34 @@ sub mode_serve {
         %rate_state = ();
     };
 
+    # Pre-flight: the agent cannot serve until it has been paired - pairing is
+    # what installs the certificate, key, and CA the TLS listener needs. Without
+    # this check a missing cert makes IO::Socket::SSL die deep in its internals
+    # ("SSL_cert_file ... can't be used: No such file or directory"), which tells
+    # the operator nothing about the actual fix. Check the files the server is
+    # about to load and, if one is absent, explain how to pair instead.
+    for my $f ([certificate => $config->{cert}],
+               [key         => $config->{key}],
+               [CA          => $config->{ca}]) {
+        my ($what, $path) = @$f;
+        next if -e $path;
+        print STDERR <<"MSG";
+ctrl-exec-agent: cannot start - this agent has not been paired yet.
+
+The TLS $what file it needs is missing:
+    $path
+
+Pairing installs the certificate, key, and CA an agent needs to serve. Pair
+this agent with its dispatcher, as root, with:
+
+    sudo ctrl-exec-agent request-pairing --dispatcher <dispatcher-host>
+
+then approve the request on the dispatcher. Once pairing completes, start the
+agent again. Run 'ctrl-exec-agent pairing-status' to check pairing state.
+MSG
+        exit 1;
+    }
+
     require IO::Socket::SSL;
     require Exec::TLS;
 
