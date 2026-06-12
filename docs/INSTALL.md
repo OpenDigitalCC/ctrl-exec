@@ -482,7 +482,7 @@ The API server listens on port 7445. All bodies are JSON with
 200   Success
 400   Bad request
 403   Auth denied
-404   Unknown endpoint
+404   Unknown endpoint, or unknown agent (host is not a registered agent)
 409   Lock conflict (script already running on host)
 500   Server error
 ```

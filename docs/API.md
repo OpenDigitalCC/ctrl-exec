@@ -19,6 +19,14 @@ see DEVELOPER.md.
 dispatcher CLI, as HTTP endpoints with JSON request and response bodies. The
 auth hook and lock checking apply identically to CLI and API requests.
 
+**Addressing agents.** Every host named in `/ping`, `/run`, and `/discovery`
+must be a **registered agent** — the exact name shown by `ced list-agents`. The
+dispatcher resolves each name to its connect address through the registry
+(`lookup_by`, the stored `ip`, and `port`), the same way for every endpoint; an
+optional `name:<port>` overrides the port for that call. A name that is not a
+registered agent returns `404` ("unknown agent") — there is no DNS fallback to
+an arbitrary host. This is identical to the CLI, which errors the same way.
+
 Endpoints: `GET /`, `GET /health`, `POST /ping`, `POST /run`,
 `GET /discovery`, `POST /discovery`, `GET /status/{reqid}`,
 `GET /openapi.json`, `GET /openapi-live.json`.
@@ -314,7 +322,8 @@ from this live response, so `ced list-agents --tags` can filter offline.
 202   Async run accepted (POST /run with "async": true)
 400   Bad request (missing body, invalid JSON, missing required field)
 403   Auth denied
-404   Unknown route or unknown/expired reqid (status endpoint)
+404   Unknown route; unknown agent (a /ping, /run, or /discovery host is not a
+      registered agent); or unknown/expired reqid (status endpoint)
 409   Lock conflict
 500   Server error
 ```

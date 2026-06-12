@@ -1235,7 +1235,8 @@ Full endpoint documentation is in API.md. Summary:
   enumerations from the registry and a capabilities scan.
 
 HTTP status codes: 200 success, 400 bad request, 403 auth denied, 404 not
-found, 409 lock conflict, 500 server error.
+found / unknown agent (a target host is not a registered agent), 409 lock
+conflict, 500 server error.
 
 ---
 

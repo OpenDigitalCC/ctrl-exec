@@ -10,6 +10,8 @@ current_page: /api
 
 The auth hook applies to all endpoints. With no hook configured, behaviour is governed by `api_auth_default` (default: `deny`). See [Auth Hooks](/auth).
 
+Every host named in `/ping`, `/run`, and `/discovery` must be a **registered agent** (the exact name from `ced list-agents`). The dispatcher resolves each name to its connect address through the registry (`lookup_by`, stored `ip`, `port`) the same way for every endpoint; `name:<port>` overrides the port for that call. A name that is not a registered agent returns `404` (`unknown agent`) — there is no DNS fallback.
+
 # Endpoints
 
 | Method | Path | Description |
@@ -271,7 +273,7 @@ Use this endpoint to generate accurate client code or to drive tooling that need
 | `202` | Async run accepted (`"async": true`) |
 | `400` | Bad request — missing field or invalid JSON |
 | `403` | Auth denied |
-| `404` | Unknown route or unknown/expired reqid |
+| `404` | Unknown route; unknown agent (a `/ping`, `/run`, or `/discovery` host is not a registered agent); or unknown/expired reqid |
 | `409` | Lock conflict |
 | `500` | Server error |
 
