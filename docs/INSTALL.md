@@ -312,6 +312,101 @@ curl -s http://localhost:7445/health | python3 -m json.tool
 ```
 
 
+## Network Topology and NAT
+
+ctrl-exec opens connections in two directions, on two ports:
+
+- **Pairing (once per agent):** the *agent* connects out to the dispatcher's
+  pairing port (default 7444).
+- **Dispatch and renewal (ongoing):** the *dispatcher* connects out to each
+  agent's operational port (default 7443), for every `run`, `ping`, and
+  automatic certificate renewal.
+
+So the reachability requirement is asymmetric:
+
+- the agent only needs to reach the dispatcher's pairing port **once**, at
+  pairing time;
+- the dispatcher must reach every agent's operational port **continuously**.
+
+Because dispatch is dispatcher-initiated, **each agent must be inbound-reachable
+on its operational port from the dispatcher**. A host the dispatcher cannot dial
+cannot serve as an agent without a network relay (see *Both sides behind NAT*).
+
+### How the agent's address is recorded
+
+At pairing the agent reports its own source address, and the dispatcher records,
+in priority order:
+
+1. `approve --ip <addr>` — an explicit operator override (authoritative);
+2. the address the **agent reported** for itself;
+3. the source IP of the pairing connection (a last resort — unreliable behind a
+   NAT, which rewrites it to the gateway).
+
+`--lookup-by hostname` (the default) ignores the stored IP and resolves the
+agent by name at dispatch time instead; `--lookup-by ip` dials the stored IP.
+Correct a record after the fact with `ced edit-agent <name> --ip <addr>`.
+
+### Dispatcher behind NAT, agents directly reachable
+
+The common case — for example the dispatcher in a Docker container, agents on
+the LAN.
+
+- **Pairing:** publish the dispatcher's pairing port so agents can reach it
+  (e.g. Docker `-p 7444:7444` on the host). Agents connect to the host's
+  address.
+- **Address:** the agent self-reports its real (pre-NAT) address, so it is
+  registered correctly. (Recording the *connection* source IP here would store
+  the NAT gateway address for every agent — which is what the self-report
+  avoids.)
+- **Dispatch:** works as long as the dispatcher's network can route to the
+  agents. Docker masquerades container egress through the host, so LAN agents
+  are reachable with no extra configuration.
+- **Action:** usually none. Forward 7444 inbound to the dispatcher. If an
+  agent's self-reported address is not the one to use, set it with
+  `approve --ip` / `edit-agent --ip`, or use `--lookup-by hostname`.
+
+### Agent behind NAT, dispatcher directly reachable
+
+- **Pairing:** works unchanged — the agent dials out, which the NAT permits.
+- **Address:** the agent self-reports its *private* address, which the
+  dispatcher cannot reach, so it **must be overridden** with the agent's public
+  address, and the agent's NAT must **forward the operational port** to it.
+- **Action:**
+  - On the agent's router, forward the operational port to the agent
+    (`WAN:7443 -> agent:7443`, or a different external port).
+  - Approve with the public address:
+    `ced approve <reqid> --ip <public-ip>` — add
+    `--agent-port <external-port>` if the forwarded external port is not 7443.
+  - Or point a public DNS name at the agent's NAT and approve with
+    `--lookup-by hostname`.
+
+### Both sides behind NAT
+
+Combine the two: the dispatcher's pairing port must be forwarded (for pairing)
+and each agent's operational port must be forwarded (for dispatch). Register
+each agent's public address with `approve --ip` (plus `--agent-port` if the
+external port is remapped), or a public hostname with `--lookup-by hostname`.
+
+If an agent sits behind a NAT you cannot configure for inbound forwarding (for
+example carrier-grade NAT), the dispatcher cannot reach it. The clean solution
+is to put the hosts on a routable overlay network — a WireGuard or VPN mesh, or
+an SSH reverse tunnel that exposes the agent's port into the dispatcher's
+network — and then pair and dispatch over the overlay addresses, where NAT no
+longer applies.
+
+### Reachability summary
+
+| Who is NAT'd        | Forward inbound                         | Register agent IP as            |
+|---------------------|-----------------------------------------|---------------------------------|
+| Neither             | nothing                                 | agent self-report (automatic)   |
+| Dispatcher only     | dispatcher pairing port (7444)          | agent self-report (automatic)   |
+| Agent only          | agent operational port (7443)           | agent public IP (`--ip`)        |
+| Both                | both of the above                       | agent public IP (`--ip`)        |
+
+In every NAT case `--lookup-by hostname` with a public DNS name is an
+alternative to a fixed `--ip`.
+
+
 ## CLI Reference
 
 ### Run
@@ -678,6 +773,9 @@ Agent unreachable after pairing
 : Check the service is running: `systemctl status ctrl-exec-agent`.
   Check port 7443 is open: `ss -tlnp | grep 7443`.
   Verify cert: `sudo ctrl-exec-agent pairing-status`.
+  Confirm the registered address is the one the dispatcher should dial
+  (`ced list-agents`); if a NAT is involved, see *Network Topology and NAT*
+  and correct it with `ced edit-agent <name> --ip <addr>`.
 
 Connection refused
 : The agent service is not running. `sudo systemctl start ctrl-exec-agent`.

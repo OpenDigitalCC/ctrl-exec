@@ -94,11 +94,24 @@ This is the workflow for scripted or orchestrated pairing approval.
 At approval the operator can set how dispatch reaches the agent:
 
 ```bash
-ced approve <reqid> --lookup-by ip        # connect by the IP seen at pairing
+ced approve <reqid> --lookup-by ip        # dispatch by IP, not hostname
+ced approve <reqid> --ip 192.168.1.10     # set the agent's address explicitly
 ced approve <reqid> --agent-port 7450     # agent serves on a non-default port
 ```
 
-`--lookup-by ip` is the fix when the agent-reported hostname does not resolve from the dispatcher host; `--agent-port` records a non-default operational port. Both can also be changed later without re-pairing via `ced edit-agent`.
+The agent self-reports its source address at pairing, and that is the IP recorded by default. `--ip` overrides it — needed when a NAT in front of the dispatcher or the agent hides the real address (see [Networking and NAT](#networking-and-nat)). `--lookup-by ip` dispatches by the stored IP rather than the hostname; `--agent-port` records a non-default operational port. All three can also be changed later without re-pairing via `ced edit-agent`.
+
+# Networking and NAT
+
+ctrl-exec connects in two directions: the **agent** dials the dispatcher's pairing port (7444) once, at pairing; the **dispatcher** dials each **agent's** operational port (7443) for every run, ping, and renewal. Every agent must therefore be inbound-reachable on its operational port from the dispatcher.
+
+The address recorded for an agent is, in priority order: an explicit `approve --ip`, then the agent's self-reported source address, then the pairing connection's source IP — the last of which is unreliable behind a NAT, which rewrites it to the gateway address.
+
+**Dispatcher behind NAT** (for example in Docker), agents directly reachable: publish the dispatcher's pairing port (`-p 7444:7444`). The agent self-reports its real address, so it registers correctly, and dispatch works over the dispatcher's routed egress. No override is needed in the common case.
+
+**Agent behind NAT**, dispatcher reachable: the agent self-reports a private address the dispatcher cannot reach. Forward the operational port on the agent's router and approve with the public address — `ced approve <reqid> --ip <public-ip>` (add `--agent-port` if the external port differs) — or point a public DNS name at the agent's NAT and use `--lookup-by hostname`.
+
+**Both behind NAT:** forward the dispatcher's pairing port and each agent's operational port, and register each agent's public address (`--ip`) or hostname. Where inbound forwarding to an agent is impossible (for example carrier-grade NAT), put the hosts on a routable overlay — a WireGuard or VPN mesh, or an SSH reverse tunnel — and pair and dispatch over the overlay addresses, where NAT no longer applies.
 
 # Automated Pairing
 
