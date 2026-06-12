@@ -42,7 +42,29 @@ sudo apk add perl-io-socket-ssl perl-json openssl perl
 opkg install perl perlbase-io perl-io-socket-ssl perl-json
 ```
 
-The installer checks all dependencies before making any changes and prints the correct install command if anything is missing.
+The installer checks all dependencies before making any changes and prints the correct install command if anything is missing. (Debian/Ubuntu **packages** resolve these automatically — see the next section.)
+
+# Installing from Packages
+
+On Debian and Ubuntu, the `.deb` packages are the simplest route: `apt` resolves the runtime dependencies for you. Three packages are published per release:
+
+- `ctrl-exec-common` — the shared Perl library, required on **every** host.
+- `ctrl-exec-dispatcher` — the `ced` CLI and the `ctrl-exec-api` server, for the **dispatcher** host.
+- `ctrl-exec-agent` — the `cea` service, for **each agent** host.
+
+Download the release `.deb` files from the [releases page](https://github.com/OpenDigitalCC/ctrl-exec/releases), then install the shared library plus the role for that host:
+
+```bash
+# dispatcher host
+sudo apt install ./ctrl-exec-common_*.deb ./ctrl-exec-dispatcher_*.deb
+
+# agent host
+sudo apt install ./ctrl-exec-common_*.deb ./ctrl-exec-agent_*.deb
+```
+
+Use `apt install ./<file>.deb`, not `dpkg -i`, so the Perl and OpenSSL dependencies are pulled in automatically. The packages seed example config into `/etc`, create the `ctrl-exec` group, and install the systemd units **without enabling or starting them** — you start the agent after pairing. The dispatcher package includes the API server, so no separate install is needed for it.
+
+For Alpine, OpenWrt, or a source build, use the tarball installer below.
 
 # Installing from Source
 
@@ -88,6 +110,8 @@ Shortcut symlinks installed in `/usr/local/bin`:
 ced  →  ctrl-exec-dispatcher
 cea  →  ctrl-exec-agent
 ```
+
+The above is the tarball layout. **Packages** install the binaries under `/usr/bin`, the library under `/usr/share/perl5/Exec`, and examples under `/usr/share/ctrl-exec/examples`; the `/etc`, `/var/lib`, and `/opt` paths are identical.
 
 ## Group Access
 

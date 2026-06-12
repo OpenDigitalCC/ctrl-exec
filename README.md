@@ -86,23 +86,62 @@ automatic cert renewal
 
 ## Quick Start
 
-Full detail is in `INSTALL.md`. The sequence below gets ctrl-exec running
-between two hosts in about ten minutes. **Run each numbered block on the host
-named in its heading** - steps 1, 3 (approve), 4-stop and 5 are on the
-dispatcher; steps 2, 3 (request) and 4-start are on the agent.
+Full detail is in `INSTALL.md`. This gets ctrl-exec running between two hosts -
+one dispatcher, one agent - in about ten minutes. First **install** on both
+hosts (packages or tarball), then run the common **setup** steps.
 
-### 1. Dispatcher host - install and create the PKI
+### Install
+
+Install on **both** hosts. Debian/Ubuntu packages are the simplest route and
+the one most deployments use; the tarball installer is for source installs and
+for Alpine/OpenWrt. Pick one method - the setup steps afterwards are identical.
+
+**Option A - Debian/Ubuntu packages (recommended).** Download the release
+`.deb` files from the
+[releases page](https://github.com/OpenDigitalCC/ctrl-exec/releases), then
+install the shared library plus the role for that host.
+
+On the dispatcher host:
 
 ```bash
-sudo ./install.sh --dispatcher
-sudo ced setup-ca          # one-time: create the deployment CA
-sudo ced setup-ctrl-exec   # create the dispatcher's own TLS certificate
+sudo apt install ./ctrl-exec-common_*.deb ./ctrl-exec-dispatcher_*.deb
 ```
 
-Give your user CLI access without `sudo` (needed for `ced ping`/`run` in
-step 5):
+On each agent host:
 
 ```bash
+sudo apt install ./ctrl-exec-common_*.deb ./ctrl-exec-agent_*.deb
+```
+
+Use `apt install ./<file>.deb` rather than `dpkg -i` so the Perl/OpenSSL
+dependencies are pulled in automatically. The dispatcher package also bundles
+the API server (`ctrl-exec-api`).
+
+**Option B - tarball (any platform, including Alpine/OpenWrt).** Clone the repo
+on each host and run the installer for that host's role:
+
+```bash
+git clone https://github.com/OpenDigitalCC/ctrl-exec.git && cd ctrl-exec
+sudo ./install.sh --dispatcher    # on the dispatcher host
+sudo ./install.sh --agent         # on each agent host
+```
+
+`install.sh` checks its dependencies first and prints the exact package command
+if any are missing; see `INSTALL.md` for Alpine/OpenWrt notes.
+
+Either method gives you `ced` (dispatcher) and `cea` (agent) on `PATH`, the
+`ctrl-exec` system group, and the systemd units - installed but not started.
+
+### Set up
+
+These steps are the same whichever way you installed. Run each block on the
+host named in its heading.
+
+**1. Dispatcher host - create the PKI and grant CLI access**
+
+```bash
+sudo ced setup-ca          # one-time: create the deployment CA
+sudo ced setup-ctrl-exec   # create the dispatcher's own TLS certificate
 sudo usermod -aG ctrl-exec $USER
 newgrp ctrl-exec           # apply the new group to this shell (or re-login)
 ```
@@ -111,30 +150,23 @@ newgrp ctrl-exec           # apply the new group to this shell (or re-login)
 > allows every `run`/`ping` - fine for an isolated trial. To restrict who may
 > run what, configure an auth hook later; see *Auth Hook* in `INSTALL.md`.
 
-### 2. Agent host - install and configure
+**2. Agent host - configure (do not start the service yet)**
 
-```bash
-sudo ./install.sh --agent
-```
-
-Add the scripts the agent is allowed to run to
-`/etc/ctrl-exec-agent/scripts.conf`. `logger` exists on every platform and
-needs no extra setup:
+Add the scripts the agent may run to `/etc/ctrl-exec-agent/scripts.conf`
+(`logger` exists on every platform and needs no setup), then check the config:
 
 ```ini
 logger = /usr/bin/logger
 ```
 
-Check the configuration is valid (this does not need pairing):
-
 ```bash
 sudo ctrl-exec-agent self-check
 ```
 
-> **Do not start the agent service yet.** It has no certificate until it is
-> paired (step 3) and would exit immediately. You start it in step 4.
+> Don't start the agent service yet - it has no certificate until it is paired
+> (step 3) and would exit immediately. You start it in step 4.
 
-### 3. Pair the agent
+**3. Pair the agent**
 
 On the **dispatcher host**, open pairing mode (it auto-stops after 10 minutes):
 
@@ -153,15 +185,13 @@ Both hosts display the same 6-digit code. Confirm they match, then type `a`
 and Enter in the pairing-mode terminal to approve. The agent stores its signed
 certificate and is ready.
 
-### 4. Agent host - start the service
-
-Now that the agent is paired:
+**4. Agent host - start the service** (now that it is paired)
 
 ```bash
 sudo systemctl enable --now ctrl-exec-agent
 ```
 
-### 5. Dispatcher host - verify
+**5. Dispatcher host - verify**
 
 ```bash
 ced ping <agent-hostname>
@@ -172,19 +202,21 @@ ced run <agent-hostname> logger -- -t test "hello from ctrl-exec"
 
 ### Optional: API server
 
-The API server exposes the same operations over HTTP on `localhost:7445`.
-Install and start it on the dispatcher host:
+The HTTP API exposes the same operations on `localhost:7445`.
+
+- **Package install:** the API ships with the dispatcher package - just start
+  it: `sudo systemctl enable --now ctrl-exec-api`.
+- **Tarball install:** add the role first with `sudo ./install.sh --api`, then
+  start it as above.
 
 ```bash
-sudo ./install.sh --api
-sudo systemctl enable --now ctrl-exec-api
 curl -s http://localhost:7445/health
 ```
 
 Unlike the CLI, the API denies requests by default. To allow them on a trusted
-network, set `api_auth_default = allow` in `/etc/ctrl-exec/ctrl-exec.conf`; to
-restrict them, configure an auth hook instead. Either is read at startup, so
-restart the service after changing it.
+network set `api_auth_default = allow` in `/etc/ctrl-exec/ctrl-exec.conf`, or
+configure an auth hook to restrict them; either is read at startup, so restart
+the service after changing it.
 
 
 ## Platform Support

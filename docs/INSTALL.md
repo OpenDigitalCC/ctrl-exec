@@ -48,7 +48,47 @@ correct install command if anything is missing.
 
 ## Installation
 
-The installer must be run as root. A role must be specified.
+Install one of two ways: from the Debian/Ubuntu **packages** (recommended on
+those platforms) or from the **source tarball** (any platform, including Alpine
+and OpenWrt). Both produce the same binaries, the same `/etc`, `/var/lib`, and
+group layout, and the same systemd units; they differ only in where the binaries
+and examples live (`/usr` for packages, `/usr/local` for the tarball). The
+*Initial Setup* steps that follow are identical for either.
+
+### Debian/Ubuntu packages
+
+Three packages are published per release:
+
+- `ctrl-exec-common` — the shared Perl library. Required on **every** host.
+- `ctrl-exec-dispatcher` — the `ced` CLI and the `ctrl-exec-api` server. Install
+  on the **dispatcher** (control) host.
+- `ctrl-exec-agent` — the `cea` agent service. Install on **each managed** host.
+
+Download the release `.deb` files from the
+[releases page](https://github.com/OpenDigitalCC/ctrl-exec/releases) (or build
+them from a source checkout with `./make-release.sh`), then install `common`
+plus the role for that host:
+
+```bash
+# dispatcher host
+sudo apt install ./ctrl-exec-common_*.deb ./ctrl-exec-dispatcher_*.deb
+
+# agent host
+sudo apt install ./ctrl-exec-common_*.deb ./ctrl-exec-agent_*.deb
+```
+
+Use `apt install ./<file>.deb` rather than `dpkg -i`: apt resolves the runtime
+dependencies (libwww-perl, libio-socket-ssl-perl, libjson-perl, openssl) from
+your configured sources, whereas `dpkg -i` fails if they are not already
+present. The packages seed example config into `/etc/ctrl-exec` and
+`/etc/ctrl-exec-agent`, create the `ctrl-exec` group, and install the systemd
+units **without enabling or starting them** — you start the agent only after
+pairing (see *Initial Setup*).
+
+### Source tarball (install.sh)
+
+Works on Debian/Ubuntu, Alpine, and OpenWrt. Run as root; a role must be
+specified:
 
 ```bash
 sudo ./install.sh --agent        # on each remote host
@@ -59,39 +99,45 @@ sudo ./install.sh --run-tests    # run test suite from source directory
 ```
 
 `--run-tests` may be combined with a role flag to run tests after installation,
-or used alone to test without installing.
+or used alone to test without installing. The installer checks all dependencies
+before making any changes and prints the exact package command if any are
+missing. (Unlike the packages, the dispatcher's API server is a separate
+`--api` role here.)
 
 ### Installed paths
 
+The tarball installs the binaries and library under `/usr/local`; the packages
+install them under `/usr` (`/usr/bin`, `/usr/share/perl5/Exec`, examples in
+`/usr/share/ctrl-exec/examples`). The config, state, and group paths are
+identical.
+
 ```
-/usr/local/bin/ctrl-exec-dispatcher
-/usr/local/bin/ced                  (symlink -> ctrl-exec-dispatcher)
-/usr/local/bin/ctrl-exec-agent
-/usr/local/bin/ctrl-exec-api
-/usr/local/lib/ctrl-exec/          Perl library modules
-/etc/ctrl-exec/                    ctrl-exec config, CA material, auth hook
-/etc/ctrl-exec-agent/              Agent config and certs
-/opt/ctrl-exec-scripts/            Managed scripts on agent hosts
-/var/lib/ctrl-exec/pairing/        Pending pairing requests
-/var/lib/ctrl-exec/agents/         Agent registry
-/var/lib/ctrl-exec/locks/          Concurrency lock files (transient)
-/etc/systemd/system/ctrl-exec-agent.service   (systemd platforms only)
-/etc/systemd/system/ctrl-exec-api.service     (systemd platforms only)
+/usr/local/bin/{ctrl-exec-dispatcher, ced, ctrl-exec-agent, ctrl-exec-api}
+                                   the CLIs (packages: /usr/bin)
+/usr/local/lib/ctrl-exec/          Perl library (packages: /usr/share/perl5/Exec)
+/etc/ctrl-exec/                    dispatcher config, CA material, auth hook
+/etc/ctrl-exec-agent/              agent config and certs
+/opt/ctrl-exec-scripts/            managed scripts on agent hosts
+/var/lib/ctrl-exec/pairing/        pending pairing requests
+/var/lib/ctrl-exec/agents/         agent registry
+/var/lib/ctrl-exec/locks/          concurrency lock files (transient)
+ctrl-exec-agent.service            systemd unit (tarball: /etc/systemd/system;
+ctrl-exec-api.service              packages: /usr/lib/systemd/system)
 ```
 
-The installer stamps the release version from the `VERSION` file into the three
-binaries at install time. The source files in the distribution carry the
-sentinel value `UNINSTALLED` until the installer runs. After installation,
-`ced --version` reports the version of the release that was installed.
+The tarball installer stamps the release version from the `VERSION` file into
+the binaries at install time (the source files carry the sentinel `UNINSTALLED`
+until then); `ced --version` then reports the installed release. Packages carry
+their version in the `.deb` itself.
 
 ### ctrl-exec group
 
-The installer creates a `ctrl-exec` system group. Add yourself to it for
-CLI access without sudo:
+Both methods create a `ctrl-exec` system group. Add yourself to it for CLI
+access without sudo:
 
 ```bash
 sudo usermod -aG ctrl-exec $USER
-# Log out and back in for the group to take effect
+# Log out and back in (or run `newgrp ctrl-exec`) for the group to take effect
 ```
 
 
