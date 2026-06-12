@@ -28,8 +28,8 @@ access to `/dev/log`. Fix: `PrivateDevices=no` and add `AF_UNIX` to
 On each agent host, trigger a ping and check the log:
 
 ```bash
-# From the ctrl-exec host
-sudo ctrl-exec ping <agent>
+# From the dispatcher host
+sudo ced ping <agent>
 
 # On the agent host (Debian/systemd)
 sudo journalctl -u ctrl-exec-agent --since "1 minute ago"
@@ -39,7 +39,7 @@ logread | grep ctrl-exec-agent | tail -10
 ```
 
 Pass
-: `ACTION=ping PEER=<ctrl-exec-ip> REQID=<hex>` appears within a few seconds
+: `ACTION=ping PEER=<dispatcher-ip> REQID=<hex>` appears within a few seconds
   of the ping.
 
 Fail
@@ -51,7 +51,7 @@ Fail
 
 Confirms the agent is listening on port 7443, the TLS stack is functional,
 and the agent is actively enforcing serial policy. Requires the agent to be
-running and paired. Run this check on the agent host directly — no ctrl-exec
+running and paired. Run this check on the agent host directly — no dispatcher
 access is needed.
 
 ```bash
@@ -61,7 +61,7 @@ sudo ctrl-exec-agent self-ping
 Pass
 : Output shows port listening, mTLS handshake OK, and `403 serial mismatch
   (expected)`. The 403 is the correct result — the agent's own cert is not
-  a ctrl-exec cert, and the agent correctly rejects it.
+  a dispatcher cert, and the agent correctly rejects it.
 
 Fail — port not listening
 : The agent service is not running or is bound to a different port. Check
@@ -130,7 +130,7 @@ chmod 755 /etc/ctrl-exec/auth-hook
 Run a script, then check the log on the agent host:
 
 ```bash
-sudo ctrl-exec run <agent> env-dump
+sudo ced run <agent> env-dump
 sudo journalctl -t ctrl-exec-auth --since "1 minute ago"
 ```
 
@@ -156,8 +156,8 @@ echo "reload-test = /opt/ctrl-exec-scripts/env-dump.sh" \
 # Reload without restart
 systemctl reload ctrl-exec-agent   # or: /etc/init.d/ctrl-exec-agent reload
 
-# Attempt to run the new entry from the ctrl-exec
-sudo ctrl-exec run <agent> reload-test
+# Attempt to run the new entry from the dispatcher
+sudo ced run <agent> reload-test
 ```
 
 Pass
@@ -179,8 +179,8 @@ Not suitable for automated suite runs — it requires deliberately triggering an
 waiting out a 5-minute block.
 
 ```bash
-# Fire 11 rapid pings from the ctrl-exec to one agent
-for i in $(seq 1 11); do sudo ctrl-exec ping <agent>; done
+# Fire 11 rapid pings from the dispatcher to one agent
+for i in $(seq 1 11); do sudo ced ping <agent>; done
 
 # The 11th should fail or return an error
 # Check the agent log for the rate-block entry
@@ -188,7 +188,7 @@ sudo journalctl -u ctrl-exec-agent --since "1 minute ago" | grep rate-block
 ```
 
 Pass
-: `ACTION=rate-block PEER=<ctrl-exec-ip> REASON=volume` appears in the log.
+: `ACTION=rate-block PEER=<dispatcher-ip> REASON=volume` appears in the log.
   Subsequent pings fail with `no response from child` for approximately 5
   minutes, then recover automatically.
 
@@ -204,27 +204,27 @@ Note
 ## 7. Pairing Flow — Fresh Agent
 
 Confirms the full pairing sequence works end-to-end: agent submits CSR,
-ctrl-exec displays the pairing code, operator approves, agent stores certs.
+dispatcher displays the pairing code, operator approves, agent stores certs.
 
 Run on a host that has not previously been paired, or after clearing
 `/etc/ctrl-exec-agent/agent.{key,crt}`:
 
 ```bash
 # On the agent host
-sudo ctrl-exec-agent request-pairing --dispatcher <ctrl-exec-hostname>
+sudo ctrl-exec-agent request-pairing --dispatcher <dispatcher-host>
 
-# On the ctrl-exec host (in a separate terminal)
-sudo ctrl-exec list-requests
+# On the dispatcher host (in a separate terminal)
+sudo ced list-requests
 # Verify the hostname, source IP, and 6-digit pairing code match
 # what the agent displayed, then approve:
-sudo ctrl-exec approve <agent-hostname>
+sudo ced approve <agent-hostname>
 
 # Confirm the agent accepted the cert
-sudo ctrl-exec ping <agent-hostname>
+sudo ced ping <agent-hostname>
 ```
 
 Pass
-: `ACTION=pair-complete` appears in the agent log. `ctrl-exec ping` returns ok.
+: `ACTION=pair-complete` appears in the agent log. `ced ping` returns ok.
 
 Fail
 : Pairing code mismatch - reject and investigate. Nonce mismatch - check for
@@ -234,12 +234,12 @@ Fail
 
 ## 8. Cert Rotation Broadcast
 
-Confirms that `ctrl-exec rotate-cert` reaches all registered agents and that
-each agent updates its stored ctrl-exec serial.
+Confirms that `ced rotate-cert` reaches all registered agents and that
+each agent updates its stored dispatcher serial.
 
 ```bash
-sudo ctrl-exec rotate-cert
-sudo ctrl-exec serial-status
+sudo ced rotate-cert
+sudo ced serial-status
 ```
 
 Pass
@@ -259,7 +259,7 @@ subsequent connections from that cert to be rejected, without restarting the
 agent.
 
 ```bash
-# Obtain the ctrl-exec cert serial
+# Obtain the dispatcher cert serial
 openssl x509 -noout -serial -in /etc/ctrl-exec/ctrl-exec.crt \
     | sed 's/serial=//' | tr 'A-F' 'a-f'
 
@@ -268,7 +268,7 @@ echo "<serial>" >> /etc/ctrl-exec-agent/revoked-serials
 systemctl reload ctrl-exec-agent
 
 # Attempt a ping - should fail
-sudo ctrl-exec ping <agent>
+sudo ced ping <agent>
 
 # Check the agent log
 sudo journalctl -u ctrl-exec-agent --since "1 minute ago" | grep revoked
@@ -294,7 +294,7 @@ sudo kill -9 $(systemctl show -p MainPID ctrl-exec-agent | cut -d= -f2)
 # Wait 5 seconds (RestartSec=5) then check
 sleep 6
 systemctl is-active ctrl-exec-agent
-sudo ctrl-exec ping <agent>
+sudo ced ping <agent>
 ```
 
 Pass
@@ -317,8 +317,8 @@ logs to the ring buffer readable via `logread`.
 sleep 3
 /etc/init.d/ctrl-exec-agent status
 
-# From the ctrl-exec host
-sudo ctrl-exec ping <openwrt-agent>
+# From the dispatcher host
+sudo ced ping <openwrt-agent>
 
 # On the OpenWrt agent
 logread | grep ctrl-exec-agent | tail -10

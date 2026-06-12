@@ -15,7 +15,7 @@ Syslog tags:
 - `ctrl-exec-dispatcher` — emitted by both `ced` and `ctrl-exec-api`
 - `ctrl-exec-agent` — emitted by `cea`
 
-Every operation generates a 16-character cryptographically random request ID (`REQID`). The same `REQID` appears in both the ctrl-exec and agent log entries for the same operation, enabling cross-host correlation:
+Every operation generates a 16-character cryptographically random request ID (`REQID`). The same `REQID` appears in both the dispatcher and agent log entries for the same operation, enabling cross-host correlation:
 
 ```bash
 grep 'REQID=a1b2c3d4' /var/log/syslog
@@ -97,7 +97,7 @@ In containers, rsyslog runs inside the image and is configured from `SYSLOG_HOST
 | `run` | INFO | `SCRIPT`, `EXIT`, `PEER`, `REQID` | Script completed — non-zero EXIT is still INFO |
 | `deny` | WARNING | `SCRIPT`, `PEER`, `REQID`, `REASON?` | Script not in allowlist, or hook denied |
 | `auth` | INFO/WARNING/ERR | `RESULT`, `AUTHACTION`, `USER`, `IP` | Agent hook result |
-| `serial-reject` | WARNING | `PEER`, `REQID` | ctrl-exec serial mismatch |
+| `serial-reject` | WARNING | `PEER`, `REQID` | dispatcher serial mismatch |
 | `revoked-cert` | WARNING | `PEER`, `SERIAL` | Revoked cert presented |
 | `tls-failure` | WARNING | `PEER`, `REASON` | TLS handshake failed |
 | `ip-block` | WARNING | `PEER` | Source IP not in `allowed_ips` |
@@ -109,7 +109,7 @@ In containers, rsyslog runs inside the image and is configured from `SYSLOG_HOST
 | `stdin-timeout` | WARNING | `BYTES` | Script did not consume stdin within timeout |
 | `revoked-serials-absent` | INFO | `PATH`, `REASON` | Revocation list file not found — normal on a fresh agent |
 | `pair-complete` | INFO | `PEER`, `REQID` | Agent stored cert after pairing |
-| `pair-denied` | WARNING | `REQID`, `REASON` | Pairing denied by ctrl-exec |
+| `pair-denied` | WARNING | `REQID`, `REASON` | Pairing denied by the dispatcher |
 | `pair-timeout` | WARNING | `REQID` | Approval window expired |
 
 # Field Glossary
@@ -142,7 +142,7 @@ In containers, rsyslog runs inside the image and is configured from `SYSLOG_HOST
 : Certificate expiry date in OpenSSL format.
 
 `EXIT`
-: Script exit code. `0` = success; positive = script failure; `-1` = ctrl-exec-side failure; `126` = exec failed or killed by signal.
+: Script exit code. `0` = success; positive = script failure; `-1` = dispatcher-side failure; `126` = exec failed or killed by signal.
 
 `HOSTS`
 : Comma-separated list of target hosts for this dispatch.
@@ -160,10 +160,10 @@ In containers, rsyslog runs inside the image and is configured from `SYSLOG_HOST
 : Human-readable description of a config warning.
 
 `NEW_SERIAL`
-: The new ctrl-exec certificate serial after rotation.
+: The new dispatcher certificate serial after rotation.
 
 `OLD_SERIAL`
-: The previous ctrl-exec certificate serial.
+: The previous dispatcher certificate serial.
 
 `OVERLAP_EXPIRES`
 : Unix timestamp after which agents that have not confirmed the new serial are marked stale.
@@ -181,7 +181,7 @@ In containers, rsyslog runs inside the image and is configured from `SYSLOG_HOST
 : Short reason code for a denial or block. Values include `queue-full`, `volume`, `probe`, `not-in-allowlist`, `hook-denied`, `hook-not-executable`.
 
 `REQID`
-: 16-character cryptographically random request ID. Present on all run, ping, and pairing events. Identical in both ctrl-exec and agent log entries for the same operation.
+: 16-character cryptographically random request ID. Present on all run, ping, and pairing events. Identical in both dispatcher and agent log entries for the same operation.
 
 `RESULT`
 : Auth hook outcome: `allow`, `deny`, `deny-credentials`, `deny-privilege`, or `error`.

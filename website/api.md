@@ -142,7 +142,7 @@ Exit code values:
 | --- | --- |
 | `0` | Script succeeded |
 | positive | Script exited with failure |
-| `-1` | ctrl-exec-side failure (connection error, timeout) |
+| `-1` | dispatcher-side failure (connection error, timeout) |
 | `126` | Exec failed or script killed by signal |
 
 Response (lock conflict):
@@ -156,7 +156,7 @@ Response (lock conflict):
 }
 ```
 
-The top-level `reqid` is the correlation ID for this dispatch. It appears in both ctrl-exec and agent log entries. Results are stored for 24 hours and retrievable via `GET /status/{reqid}`.
+The top-level `reqid` is the correlation ID for this dispatch. It appears in both dispatcher and agent log entries. Results are stored for 24 hours and retrievable via `GET /status/{reqid}`.
 
 ## Asynchronous runs
 

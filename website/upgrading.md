@@ -26,7 +26,7 @@ The general upgrade procedure for all versions:
 
 4. Run the installer for each role:
    ```bash
-   sudo ./install.sh --ctrl-exec
+   sudo ./install.sh --dispatcher
    # on each agent host:
    sudo ./install.sh --agent
    ```

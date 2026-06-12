@@ -6,33 +6,37 @@ brand: odcc
 
 # ctrl-exec
 
-A Perl machine-to-machine remote script execution system. The ctrl-exec host
+A Perl machine-to-machine remote script execution system. The dispatcher host
 runs scripts on remote agent hosts via HTTPS with mutual certificate
 authentication. No SSH involved; agents expose only an explicit allowlist of
 permitted scripts.
 
-Designed for infrastructure automation pipelines where a control host needs
+Designed for infrastructure automation pipelines where a dispatcher host needs
 to trigger operations on a fleet of managed hosts with strong identity
 guarantees and a minimal attack surface.
 
 
 ## How It Works
 
-ctrl-exec (control host)
-: CLI tool and optional HTTP API. Connects to agents, sends signed requests,
-  collects results. Manages the private CA, agent registry, and cert lifecycle.
-  The API server exposes run, ping, discovery, and status endpoints with an
-  OpenAPI spec (static and live-generated).
+ctrl-exec has exactly two roles: a single **dispatcher host** that initiates
+work, and one or more **agent hosts** that carry it out.
 
-ctrl-exec-agent (remote hosts)
-: mTLS HTTPS server on port 7443. Executes only scripts named in a per-host
-  allowlist. No shell - arguments are passed directly to the OS. Reloads
-  config on SIGHUP without dropping connections.
+`ctrl-exec-dispatcher` (`ced`) - the dispatcher host
+: The control host. A CLI tool plus an optional HTTP API (`ctrl-exec-api`).
+  Connects to agents, sends signed requests, collects results. Manages the
+  private CA, the agent registry, and the cert lifecycle. The API server
+  exposes run, ping, discovery, and status endpoints with an OpenAPI spec
+  (static and live-generated). There is one dispatcher host per deployment.
+
+`ctrl-exec-agent` (`cea`) - an agent host
+: A managed host. An mTLS HTTPS server on port 7443, one per host. Executes
+  only scripts named in a per-host allowlist. No shell - arguments are passed
+  directly to the OS. Reloads config on SIGHUP without dropping connections.
 
 pairing
 : One-time certificate exchange. The agent generates a key and CSR, connects
-  to the ctrl-exec on port 7444, and waits for operator approval. The
-  ctrl-exec signs the CSR with its private CA and returns the cert. After
+  to the dispatcher on port 7444, and waits for operator approval. The
+  dispatcher signs the CSR with its private CA and returns the cert. After
   pairing, all traffic uses mTLS on port 7443.
 
 auth hook
@@ -68,7 +72,7 @@ automatic cert renewal
   codes, OpenAPI spec endpoints, and the run result status store.
 
 `DOCKER.md`
-: Deploying ctrl-exec and agents in Alpine Docker containers, including
+: Deploying dispatcher and agents in Alpine Docker containers, including
   entrypoint patterns, volume mounts, and the pairing workflow in Docker.
 
 `SECURITY.md`
@@ -85,19 +89,19 @@ automatic cert renewal
 Full detail is in `INSTALL.md`. The sequence below gets ctrl-exec running
 between two hosts in about ten minutes.
 
-### 1. ctrl-exec host
+### 1. dispatcher host
 
-Install and initialise the CA and ctrl-exec identity:
+Install and initialise the CA and dispatcher identity:
 
 ```bash
-sudo ./install.sh --ctrl-exec
-sudo ctrl-exec setup-ca
-sudo ctrl-exec setup-ctrl-exec
+sudo ./install.sh --dispatcher
+sudo ced setup-ca
+sudo ced setup-ctrl-exec
 sudo usermod -aG ctrl-exec $USER
 # Log out and back in for group membership to take effect
 ```
 
-Configure the auth hook. The ctrl-exec requires an auth hook to authorise
+Configure the auth hook. The dispatcher requires an auth hook to authorise
 `run` and `ping` requests. For an isolated network the simplest policy is
 allow-all - replace with real logic when deploying to production:
 
@@ -148,16 +152,16 @@ sudo ctrl-exec-agent self-check
 
 ### 3. Pair the agent
 
-On the ctrl-exec host, start pairing mode:
+On the dispatcher host, start pairing mode:
 
 ```bash
-sudo ctrl-exec pairing-mode
+sudo ced pairing-mode
 ```
 
 On the agent host, request pairing:
 
 ```bash
-sudo ctrl-exec-agent request-pairing --dispatcher <ctrl-exec-hostname>
+sudo ctrl-exec-agent request-pairing --dispatcher <dispatcher-host>
 ```
 
 A pairing code is displayed on both hosts. Confirm they match, then type `a`
@@ -167,14 +171,14 @@ and is ready.
 ### 4. Verify
 
 ```bash
-ctrl-exec ping <agent-hostname>
-ctrl-exec run <agent-hostname> --script logger -- -t test "hello from ctrl-exec"
+ced ping <agent-hostname>
+ced run <agent-hostname> --script logger -- -t test "hello from ctrl-exec"
 ```
 
 ### Optional: API server
 
 The API server exposes ctrl-exec over HTTP on `localhost:7445`. Install and
-start it on the ctrl-exec host:
+start it on the dispatcher host:
 
 ```bash
 sudo ./install.sh --api

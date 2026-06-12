@@ -1,5 +1,5 @@
 ---
-title: ctrl-exec and agent - Developer document
+title: dispatcher and agent - Developer document
 subtitle: Purpose, contents, protocol, logging, security model and extending
 brand: opendigitalcc
 ---
@@ -9,7 +9,7 @@ brand: opendigitalcc
 ## Purpose and Design Criteria
 
 ctrl-exec is a Perl machine-to-machine remote script execution system. It
-allows a control host (the ctrl-exec) to run scripts on remote hosts (agents)
+allows a dispatcher host (the dispatcher) to run scripts on remote hosts (agents)
 over mTLS-authenticated HTTPS, with no SSH involved.
 
 The design criteria were:
@@ -24,19 +24,19 @@ locked-down execution
   executed via `fork`/`exec` with no shell, preventing injection via arguments.
 
 mTLS trust
-: All operational traffic uses mutual TLS. Both ctrl-exec and agent present
-  certificates signed by a private CA. The CA is created once on the ctrl-exec
+: All operational traffic uses mutual TLS. Both dispatcher and agent present
+  certificates signed by a private CA. The CA is created once on the dispatcher
   host; the CA key never leaves that host.
 
 pairing workflow
 : The initial certificate exchange uses a separate TLS port (7444) where the
-  agent connects to the ctrl-exec to submit a CSR. The ctrl-exec holds the
+  agent connects to the dispatcher to submit a CSR. The dispatcher holds the
   connection open while waiting for operator approval. On approval the CSR is
   signed and the cert is delivered back over the open connection. Approved
   agents are recorded in a persistent registry.
 
 automatic cert renewal
-: Agent certs are renewed automatically by the ctrl-exec over the mTLS
+: Agent certs are renewed automatically by the dispatcher over the mTLS
   operational port (7443). Renewal is triggered when remaining cert validity
   drops below half the configured lifetime. No operator involvement required
   during normal operation.
@@ -47,7 +47,7 @@ argument support
 
 structured logging
 : All actions are logged to syslog in a consistent `ACTION=value KEY=value`
-  format with a request ID that correlates ctrl-exec and agent log lines for
+  format with a request ID that correlates dispatcher and agent log lines for
   the same operation.
 
 auth hook
@@ -59,9 +59,9 @@ auth hook
   control; ctrl-exec deliberately does not implement config-based ACLs.
 
 token forwarding pipeline
-: Tokens and usernames are forwarded from the ctrl-exec through to the agent
+: Tokens and usernames are forwarded from the dispatcher through to the agent
   and into the script's stdin context. This supports multi-hop token validation:
-  the ctrl-exec hook, the agent hook, and the script itself can all
+  the dispatcher hook, the agent hook, and the script itself can all
   independently verify that the token is still valid and authorised for the
   stated purpose. Each hop trusts the CA for identity but verifies authority
   independently via its own token validation.
@@ -90,7 +90,7 @@ function-based design
   certificates signed by the private CA.
 
 7444
-: Pairing port. Only open when the ctrl-exec is in `pairing-mode`. TLS server
+: Pairing port. Only open when the dispatcher is in `pairing-mode`. TLS server
   cert only (no client cert required) since the agent has no cert yet. Agents
   connect here to submit a CSR and wait for the signed cert.
 
@@ -102,7 +102,7 @@ function-based design
 
 ## Certificate Layout
 
-ctrl-exec host (`/etc/ctrl-exec/`)
+dispatcher host (`/etc/ctrl-exec/`)
 
 ```
 ca.key          CA private key (0600, root only, never leaves this host)
@@ -117,7 +117,7 @@ Agent host (`/etc/ctrl-exec-agent/`)
 
 ```
 agent.key       Agent's private key (0640, root:ctrl-exec-agent)
-agent.crt       Agent's cert, signed by ctrl-exec CA (0640, root:ctrl-exec-agent)
+agent.crt       Agent's cert, signed by dispatcher CA (0640, root:ctrl-exec-agent)
 ca.crt          CA cert from ctrl-exec (0644)
 agent.conf      Port, cert paths, optional script_dirs and tags
 scripts.conf    Allowlist: name = /absolute/path
@@ -200,17 +200,17 @@ Functions:
 : Generates `ctrl-exec.key` (4096-bit RSA, 0600), `ctrl-exec.csr`, signs it
   with the CA, writes `ctrl-exec.crt` (825 days), removes the CSR.
   Guards: dies if CA does not exist, dies if `ctrl-exec.crt` already exists
-  unless `force => 1`. Called by `bin/ctrl-exec setup-ctrl-exec`.
+  unless `force => 1`. Called by `bin/ced setup-ctrl-exec`.
   Options: `ca_dir`, `force`.
 
 
 ### `Exec::Pairing`
 
-ctrl-exec-side pairing server and approval queue. Handles the initial
-certificate exchange from the ctrl-exec's perspective.
+dispatcher-side pairing server and approval queue. Handles the initial
+certificate exchange from the dispatcher's perspective.
 
 The pairing flow uses the filesystem as a message queue between the main
-ctrl-exec process (which the operator interacts with via `approve`/`deny`)
+dispatcher process (which the operator interacts with via `approve`/`deny`)
 and the forked child processes (which hold connections open to waiting agents).
 
 File states in `/var/lib/ctrl-exec/pairing/`:
@@ -229,7 +229,7 @@ a persistent record of the approved agent before cleaning up the pairing files.
 
 Nonce
 : Each pairing request carries a random nonce generated by the agent. The
-  ctrl-exec stores it in the `.json` queue file and echoes it in the
+  dispatcher stores it in the `.json` queue file and echoes it in the
   `.approved` response. The agent verifies the nonce matches before storing
   the delivered certs. This prevents misrouted or replayed approval responses.
 
@@ -282,13 +282,13 @@ Important SSL note - `SSL_no_shutdown => 1` on parent close
 
 ### `Exec::Rotation`
 
-ctrl-exec cert lifecycle management. Monitors the ctrl-exec's own cert
+dispatcher cert lifecycle management. Monitors the dispatcher's own cert
 expiry, rotates it when approaching expiry, and broadcasts the new serial to
-all registered agents so they can update their trusted-ctrl-exec serial.
+all registered agents so they can update their trusted-dispatcher serial.
 
 The module is used in two ways: `check_and_rotate` is called at startup and
 by the background loop in `run_check_loop`; `rotate` is called directly by
-`ctrl-exec rotate-cert` for operator-initiated rotation.
+`ced rotate-cert` for operator-initiated rotation.
 
 Call sequence for automatic rotation:
 
@@ -300,7 +300,7 @@ run_check_loop
   └─ broadcast_serial      (run update-ctrl-exec-serial on all pending agents)
 ```
 
-Call sequence for manual rotation (`ctrl-exec rotate-cert`):
+Call sequence for manual rotation (`ced rotate-cert`):
 
 ```
 rotate
@@ -330,14 +330,14 @@ Agent serial status values in the registry:
 ```
 unknown    Paired before serial tracking was introduced
 pending    Serial broadcast attempted but not yet confirmed
-confirmed  Agent has acknowledged the current ctrl-exec serial
+confirmed  Agent has acknowledged the current dispatcher serial
 stale      Overlap window expired without confirmation
 ```
 
 Functions:
 
 `check_and_rotate(%opts)`
-: Reads the ctrl-exec cert expiry. If remaining days is below
+: Reads the dispatcher cert expiry. If remaining days is below
   `cert_renewal_days` (default 90), calls `_do_rotation`. Returns
   `{ rotated => 0 }`, `{ rotated => 1, serial => $hex, ... }`, or
   `{ rotated => 0, error => $str }` for non-fatal failures.
@@ -345,7 +345,7 @@ Functions:
 
 `rotate(%opts)`
 : Unconditional rotation. Thin wrapper around `_do_rotation`. Used by
-  `ctrl-exec rotate-cert`. Required: `config`.
+  `ced rotate-cert`. Required: `config`.
 
 `load_state(%opts)`
 : Reads and parses `rotation.json`. Returns the state hashref or `undef` if
@@ -395,7 +395,7 @@ Private functions:
 
 Persistent store of all paired agents. Written by `Exec::Pairing::approve_request`
 at pairing time and updated by `Exec::Engine::_renew_one` after cert
-renewal. Read by `bin/ctrl-exec list-agents` and by `Exec::API` for
+renewal. Read by `bin/ced list-agents` and by `Exec::API` for
 the `/discovery` endpoint.
 
 One JSON file per agent in `/var/lib/ctrl-exec/agents/{hostname}.json`.
@@ -456,7 +456,7 @@ children and reading their pipes as they finish.
 
 Cert renewal is triggered automatically after every successful ping. If the
 agent's cert expiry (returned in the ping response) is within half the
-configured `cert_days`, the ctrl-exec initiates renewal over the same mTLS
+configured `cert_days`, the dispatcher initiates renewal over the same mTLS
 connection. Renewal failure is logged at ERR level but does not affect the
 ping result.
 
@@ -522,8 +522,8 @@ Private functions (not part of public API but documented for extension):
 
 Auth hook runner. Called before every `run` and `ping` operation from both
 the CLI and the API. Also called by the agent's `handle_run` when
-`config->{auth_hook}` is set - the same module serves both ctrl-exec-side
-and agent-side hook execution. If no hook is configured (ctrl-exec or agent),
+`config->{auth_hook}` is set - the same module serves both dispatcher-side
+and agent-side hook execution. If no hook is configured (dispatcher or agent),
 all requests pass unconditionally.
 
 The hook is an external executable called with request context as environment
@@ -650,7 +650,7 @@ Functions:
 
 ### `Exec::Output`
 
-Output formatting for CLI tables. Extracted from `bin/ctrl-exec` to enable
+Output formatting for CLI tables. Extracted from `bin/ctrl-exec-dispatcher` to enable
 independent unit testing. All functions write to stdout.
 
 Functions:
@@ -813,9 +813,9 @@ Context hashref fields:
 script      Script name as requested
 args        Arrayref of positional arguments
 reqid       Request ID
-peer_ip     ctrl-exec's IP address
-username    Username from the ctrl-exec request (may be empty)
-token       Auth token from the ctrl-exec request (may be empty)
+peer_ip     dispatcher's IP address
+username    Username from the dispatcher request (may be empty)
+token       Auth token from the dispatcher request (may be empty)
 timestamp   ISO 8601 UTC timestamp of the request
 ```
 
@@ -823,11 +823,11 @@ timestamp   ISO 8601 UTC timestamp of the request
 ### `Exec::Agent::AgentPairing`
 
 Agent-side pairing and cert renewal support. Generates key and CSR, connects
-to the ctrl-exec pairing port, submits the CSR and waits (up to 11 minutes)
+to the dispatcher pairing port, submits the CSR and waits (up to 11 minutes)
 for the signed cert. Also handles cert-only renewal using the existing key.
 
 The 11-minute timeout on the socket is intentionally longer than the
-ctrl-exec's 10-minute poll window, so the agent gets a proper denial response
+dispatcher's 10-minute poll window, so the agent gets a proper denial response
 rather than a socket timeout.
 
 Nonce
@@ -849,7 +849,7 @@ Functions:
   file does not exist.
 
 `request_pairing(%opts)`
-: Connects to the ctrl-exec's pairing port, sends `{ hostname, csr, nonce }`,
+: Connects to the dispatcher's pairing port, sends `{ hostname, csr, nonce }`,
   waits for response, verifies nonce. Returns `{ ok => 1, cert_pem, ca_pem }`
   or `{ ok => 0, error }`.
   Options: `ctrl-exec` (required), `csr_pem`, `hostname`, `port` (default 7444).
@@ -866,24 +866,24 @@ Functions:
 HTTP response reading
 : `request_pairing` reads headers line-by-line until the blank separator,
   extracts `Content-Length`, then calls `read()` for exactly that many bytes.
-  Reading to EOF would block - the ctrl-exec child holds the connection open
+  Reading to EOF would block - the dispatcher child holds the connection open
   while polling and does not close it when sending the response.
 
 
-## `bin/ctrl-exec`
+## `bin/ctrl-exec-dispatcher`
 
-The ctrl-exec CLI. Argument parsing and output formatting only; all business
+The dispatcher CLI. Argument parsing and output formatting only; all business
 logic is in the library modules.
 
 Modes:
 
 `setup-ca`
-: Calls `Exec::CA::generate_ca()`. One-time operation on the ctrl-exec
+: Calls `Exec::CA::generate_ca()`. One-time operation on the dispatcher
   host. Creates the CA key and cert in `/etc/ctrl-exec/`.
 
 `setup-ctrl-exec`
 : Calls `Exec::CA::generate_dispatcher_cert()`. Generates the
-  ctrl-exec's own key and cert signed by the CA. Run after `setup-ca`.
+  dispatcher's own key and cert signed by the CA. Run after `setup-ca`.
   Replaces the four manual openssl commands previously required.
 
 `pairing-mode`
@@ -954,7 +954,7 @@ Modes:
 : Performs a preflight writability check on `/etc/ctrl-exec-agent` before
   making any network connection. Dies immediately with "re-run with sudo" if
   the directory is not writable. On success: generates key and CSR, connects
-  to the ctrl-exec pairing port, waits for approval, stores certs.
+  to the dispatcher pairing port, waits for approval, stores certs.
 
 `pairing-status`
 : Calls `Exec::Agent::AgentPairing::pairing_status()` and prints the result.
@@ -1027,12 +1027,12 @@ sub mode_serve {
   All variables come from `mode_serve`'s scope and are passed explicitly - there
   is no closure over them. `$peer_serial` is a plain lowercase hex string (or
   `''`) extracted before fork. `$revoked` is a hashref keyed by hex serial.
-  `$disp_serial` is the stored ctrl-exec serial hex string (or `''` if not
+  `$disp_serial` is the stored dispatcher serial hex string (or `''` if not
   yet set).
 
 Testability
 : `bin/ctrl-exec-agent` calls `main()` unconditionally — it does not use
-  the `main() unless caller` idiom used by `bin/ctrl-exec`. This is a
+  the `main() unless caller` idiom used by `bin/ctrl-exec-dispatcher`. This is a
   deliberate design choice: functions defined in the binary (`_peer_serial`,
   `handle_connection`, `handle_capabilities`) are covered by integration
   tests, which exercise them through the full accept-loop path. Unit tests
@@ -1067,7 +1067,7 @@ Endpoints handled in `handle_connection`:
   body. Validates the script name against the allowlist (and `script_dirs` if
   configured). If `config->{auth_hook}` is set, calls `Exec::Auth::check`
   with the full request context including `username` and `token` - this is the
-  agent-side auth hook, independent of the ctrl-exec's own hook. On pass,
+  agent-side auth hook, independent of the dispatcher's own hook. On pass,
   builds a `$context` hashref (script, args, reqid, peer_ip, username, token,
   timestamp) and passes it to `Agent::Runner::run_script`. Returns
   `{ script, exit, stdout, stderr, reqid }`.
@@ -1087,7 +1087,7 @@ Endpoints handled in `handle_connection`:
   failure.
 
 `POST /renew-complete`
-: Receives `{ cert, ca, reqid }` from the ctrl-exec, calls `store_certs` with
+: Receives `{ cert, ca, reqid }` from the dispatcher, calls `store_certs` with
   the new cert and the existing key. Logs `ACTION=renew-complete STATUS=cert-stored`.
 
 
@@ -1105,7 +1105,7 @@ installer and grants CLI access without sudo to users added to it.
 
 All JSON over HTTP/1.0.
 
-Agent endpoints (ctrl-exec → agent, mTLS on port 7443):
+Agent endpoints (dispatcher → agent, mTLS on port 7443):
 
 Run request (`POST /run`):
 
@@ -1119,7 +1119,7 @@ Run request (`POST /run`):
 }
 ```
 
-`username` and `token` are forwarded from the ctrl-exec request (CLI flag,
+`username` and `token` are forwarded from the dispatcher request (CLI flag,
 env var, or API body). The agent does not validate them directly - it passes
 them to its own auth hook (if configured) and into the script's stdin context.
 
@@ -1153,25 +1153,25 @@ Capabilities response (`GET /capabilities`):
 }
 ```
 
-Cert renewal request (`POST /renew`, ctrl-exec → agent):
+Cert renewal request (`POST /renew`, dispatcher → agent):
 
 ```json
 { "reqid": "c1d2e3f40001" }
 ```
 
-Cert renewal response (agent → ctrl-exec):
+Cert renewal response (agent → dispatcher):
 
 ```json
 { "status": "ok", "csr": "-----BEGIN CERTIFICATE REQUEST-----\n...", "reqid": "c1d2e3f40001" }
 ```
 
-Cert delivery (`POST /renew-complete`, ctrl-exec → agent):
+Cert delivery (`POST /renew-complete`, dispatcher → agent):
 
 ```json
 { "status": "ok", "cert": "-----BEGIN CERTIFICATE-----\n...", "ca": "-----BEGIN CERTIFICATE-----\n...", "reqid": "c1d2e3f40001" }
 ```
 
-Pairing request (agent → ctrl-exec, port 7444, `POST /pair`):
+Pairing request (agent → dispatcher, port 7444, `POST /pair`):
 
 ```json
 { "hostname": "agent-host-01", "csr": "-----BEGIN CERTIFICATE REQUEST-----\n...", "nonce": "a3f4c2b1..." }
@@ -1239,14 +1239,14 @@ ctrl-exec-agent[5678]: ACTION=run EXIT=0 PEER=192.0.2.11 REQID=a3f9b2c10001 SCRI
 ctrl-exec-api[9012]: ACTION=api-request LEN=25 METHOD=POST PATH=/ping PEER=127.0.0.1
 ```
 
-The `REQID` field appears in both ctrl-exec and agent log lines for the
+The `REQID` field appears in both dispatcher and agent log lines for the
 same operation, enabling cross-host log correlation.
 
 
 ## Automatic Cert Renewal
 
 Cert lifetime is configured in `ctrl-exec.conf` as `cert_days` (default 365).
-Renewal is triggered by the ctrl-exec after every successful ping when the
+Renewal is triggered by the dispatcher after every successful ping when the
 agent's remaining cert validity drops below half the configured lifetime.
 
 The renewal flow:
@@ -1257,11 +1257,11 @@ The renewal flow:
 2. If renewal is due, `_renew_one` sends `POST /renew` to the agent. The agent
    generates a CSR from its existing key (`generate_csr_only`) and returns it.
    The key is not regenerated - key continuity is preserved across renewals.
-3. The ctrl-exec signs the CSR via `Exec::CA::sign_csr` using
+3. The dispatcher signs the CSR via `Exec::CA::sign_csr` using
    `cert_days` from config, then sends `POST /renew-complete` with the new
    cert and CA PEM.
 4. The agent stores the new cert via `store_certs` and logs completion.
-5. The ctrl-exec updates the registry expiry for the agent.
+5. The dispatcher updates the registry expiry for the agent.
 
 Renewal failure is logged at ERR level and does not affect the ping result.
 The operator can investigate via syslog. A cert that fails renewal will
@@ -1291,7 +1291,7 @@ no shell execution
   Shell metacharacters in arguments have no effect.
 
 mTLS on port 7443
-: `SSL_verify_mode => SSL_VERIFY_PEER` on both sides means both ctrl-exec and
+: `SSL_verify_mode => SSL_VERIFY_PEER` on both sides means both dispatcher and
   agent must present a cert signed by the CA. An agent with no cert, or a cert
   signed by a different CA, cannot connect.
 
@@ -1305,17 +1305,17 @@ pairing port security
 pairing preflight check
 : `request-pairing` verifies that `/etc/ctrl-exec-agent` is writable before
   making any network connection. This prevents a stale pairing request being
-  left in the ctrl-exec queue when the agent cannot write the received certs.
+  left in the dispatcher queue when the agent cannot write the received certs.
 
 cert renewal security
 : Renewal uses the already-authenticated mTLS connection on port 7443. The
-  ctrl-exec only initiates renewal for hosts in its registry. The agent only
+  dispatcher only initiates renewal for hosts in its registry. The agent only
   accepts renewal over the authenticated operational port - pairing mode does
   not need to be running.
 
 unpairing
-: `ctrl-exec unpair <hostname>` removes the registry entry, ending the
-  ctrl-exec's knowledge of the agent. The agent's cert remains technically
+: `ced unpair <hostname>` removes the registry entry, ending the
+  dispatcher's knowledge of the agent. The agent's cert remains technically
   valid until its natural expiry date. No CRL mechanism is implemented. The
   agent should be decommissioned promptly after unpairing.
 
@@ -1326,12 +1326,12 @@ API security
 
 auth hook token
 : The token is passed to the hook via `ENVEXEC_TOKEN` env var and as a JSON
-  field on stdin. It is never logged by the ctrl-exec. The CLI reads it from
+  field on stdin. It is never logged by the dispatcher. The CLI reads it from
   `--token` or `$ENVEXEC_TOKEN` env var; using the env var prevents the
   token appearing in `ps` output.
 
 file permissions
-: CA key: 0600 root. ctrl-exec cert/key: 0600 root. Agent cert/key: 0640
+: CA key: 0600 root. dispatcher cert/key: 0600 root. Agent cert/key: 0640
   root:ctrl-exec-agent. Scripts: 0750 root:ctrl-exec-agent. The
   `ctrl-exec-agent` system user has no login shell and no home directory.
   Runtime dirs: 0770 root:ctrl-exec.
@@ -1420,8 +1420,8 @@ echo "my-script = /opt/ctrl-exec-scripts/my-script.sh" \
 sudo systemctl kill --signal=HUP ctrl-exec-agent
 
 # Verify discovery sees the new script
-sudo ctrl-exec ping agent-host-01
-sudo ctrl-exec run agent-host-01 my-script
+sudo ced ping agent-host-01
+sudo ced run agent-host-01 my-script
 ```
 
 Scripts receive positional arguments exactly as passed. They should exit 0 on
@@ -1446,8 +1446,8 @@ Adding a new API endpoint
   `_handle_*` function following the existing pattern: parse body, auth check,
   do work, call `_send_json()`.
 
-Adding a new ctrl-exec CLI mode
-: Add an entry to the `%dispatch` hash in `main()` in `bin/ctrl-exec`.
+Adding a new dispatcher CLI mode
+: Add an entry to the `%dispatch` hash in `main()` in `bin/ctrl-exec-dispatcher`.
   Add a `mode_*` function. Keep network logic in Engine; keep output formatting
   in `Exec::Output`; keep the mode function thin.
 
@@ -1459,16 +1459,16 @@ Adding a new library module
 Adding agent tags
 : Tags are free-form key-value pairs in the `[tags]` section of `agent.conf`.
   They appear in `/capabilities` responses and therefore in discovery output.
-  The ctrl-exec does not interpret them. Tag-based filtering or routing belongs
+  The dispatcher does not interpret them. Tag-based filtering or routing belongs
   in the auth hook or in tooling that consumes the API.
 
 Adding an agent-side auth hook
 : Set `auth_hook` in `agent.conf` to an executable path. The agent calls
   `Exec::Auth::check` in `handle_run` after allowlist validation.
-  The hook receives the same context as the ctrl-exec hook, including the
+  The hook receives the same context as the dispatcher hook, including the
   forwarded `username` and `token`. This enables independent token validation
   on the agent - for example, verifying the token against a central validation
-  service without trusting the ctrl-exec's prior check.
+  service without trusting the dispatcher's prior check.
 
 Changing cert lifetime
 : Set `cert_days` in `ctrl-exec.conf`. All new certs (pairing and renewal)
@@ -1490,7 +1490,7 @@ libjson-perl             perl-json                 JSON
 openssl                  openssl                   (binary) key, CSR, cert ops
 ```
 
-ctrl-exec role
+dispatcher role
 
 ```
 Debian                   Alpine                   Module / binary
@@ -1514,7 +1514,7 @@ The version is stored in a single `VERSION` file in the repository root using
 semver (`n.n.n`). It is the only authoritative source of the version.
 
 Module files (`lib/`) carry no version strings. The three binaries
-(`bin/ctrl-exec`, `bin/ctrl-exec-agent`, `bin/ctrl-exec-api`) carry the
+(`bin/ctrl-exec-dispatcher`, `bin/ctrl-exec-agent`, `bin/ctrl-exec-api`) carry the
 sentinel value `UNINSTALLED` in their `our $VERSION` declaration in the source
 tree. This value is replaced at two points:
 
@@ -1524,7 +1524,7 @@ tree. This value is replaced at two points:
   binaries after copying them to `/usr/local/bin/`. If installed from a dev
   checkout without a release tarball, `UNINSTALLED` is preserved.
 
-This means `ctrl-exec --version`, agent ping responses, and API health checks
+This means `ced --version`, agent ping responses, and API health checks
 all report the version of the release that was installed, or `UNINSTALLED` if
 run directly from the source tree.
 
@@ -1587,7 +1587,7 @@ version without a deliberate commit.
 The tarball contains:
 
 ```
-bin/ctrl-exec
+bin/ctrl-exec-dispatcher
 bin/ctrl-exec-agent
 bin/ctrl-exec-api
 lib/

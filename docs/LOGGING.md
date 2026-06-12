@@ -7,7 +7,7 @@ brand: odcc
 # ctrl-exec - Logging Reference
 
 This document is the authoritative reference for every structured log line
-emitted by `ctrl-exec` and `ctrl-exec-agent`. It is intended for operators
+emitted by `ctrl-exec-dispatcher`, `ctrl-exec-api`, and `ctrl-exec-agent`. It is intended for operators
 building log pipelines, alerting rules, SIEM integrations, or audit tooling.
 
 For configuration reference, see REFERENCE.md. For alerting recommendations
@@ -42,7 +42,7 @@ Facility
 
 `REQID=`
 : A 16-character lowercase hex string generated per dispatch operation by
-  `Engine::gen_reqid()`. The same REQID appears in both the ctrl-exec log
+  `Engine::gen_reqid()`. The same REQID appears in both the dispatcher log
   and the corresponding agent log, making cross-host correlation possible
   with a single grep. Not present on all actions — see per-action field
   lists below.
@@ -56,14 +56,14 @@ To trace a single operation across both sides:
 grep 'REQID=a1b2c3d4e5f60001' /var/log/syslog
 ```
 
-On the ctrl-exec side, `ACTION=dispatch` is logged at the start of a
+On the dispatcher side, `ACTION=dispatch` is logged at the start of a
 multi-host operation with a shared REQID. Each per-host `ACTION=run` or
 `ACTION=ping` uses the same REQID. On the agent side, `ACTION=run` and
 `ACTION=ping` are logged with the same REQID when the operation completes.
 
 There is no `ACTION=run` entry on the agent side at the start of script
-execution — only at completion. If the ctrl-exec's `read_timeout` fires
-before the script exits, the ctrl-exec logs an error, but no agent log
+execution — only at completion. If the dispatcher's `read_timeout` fires
+before the script exits, the dispatcher logs an error, but no agent log
 entry appears until the script eventually exits. An operator cannot
 determine from syslog alone that a script is currently running.
 
@@ -122,9 +122,9 @@ container setup, including why an in-container rsyslog is used in preference
 to a direct connection.
 
 
-## ctrl-exec-Side Actions
+## Dispatcher-Side Actions
 
-These actions are emitted by `bin/ctrl-exec` and `bin/ctrl-exec-api` via
+These actions are emitted by `bin/ctrl-exec-dispatcher` and `bin/ctrl-exec-api` via
 `Exec::Engine`, `Exec::Auth`, `Exec::Lock`, and
 `Exec::Log`.
 
@@ -194,7 +194,7 @@ ACTION=ping TARGET=web-01:7443 ERROR="read timeout after 60s" RTT=60001ms REQID=
 ### run (success)
 
 Emitted when a script completes on one agent and a response is received by
-the ctrl-exec. Logged once per host, regardless of the script's exit code.
+the dispatcher. Logged once per host, regardless of the script's exit code.
 
 Priority
 : INFO
@@ -216,7 +216,7 @@ ACTION=run SCRIPT=backup TARGET=db-01:7443 EXIT=0 RTT=1203ms REQID=a1b2c3d4e5f60
 
 ### run (error)
 
-Emitted when the ctrl-exec cannot reach the agent, the connection fails, or
+Emitted when the dispatcher cannot reach the agent, the connection fails, or
 the response cannot be parsed. The script may or may not have run.
 
 Priority
@@ -239,7 +239,7 @@ ACTION=run SCRIPT=backup TARGET=db-01:7443 ERROR="read timeout after 60s" RTT=60
 
 ### lock-acquire
 
-Emitted in the ctrl-exec child process when a concurrency lock is
+Emitted in the dispatcher child process when a concurrency lock is
 successfully acquired for a `host:script` pair before dispatch.
 
 Priority
@@ -369,9 +369,9 @@ ACTION=capabilities TARGET=web-01:7443 ERROR="connection refused" RTT=5ms
 On success, `capabilities` is logged at INFO with `SCRIPTS` (count) and
 `RTT` in place of `ERROR`.
 
-### auth (ctrl-exec-side)
+### auth (dispatcher-side)
 
-The ctrl-exec-side auth hook is called before every `run` and `ping`
+The dispatcher-side auth hook is called before every `run` and `ping`
 operation. Results are logged by `Exec::Auth`. All variants use the
 `auth` action.
 
@@ -384,7 +384,7 @@ Fields present on all auth log lines
 | --- | --- | --- |
 | ACTION | string | `auth` |
 | RESULT | string | `pass`, `deny`, or `error` |
-| AUTHACTION | string | The ctrl-exec operation: `run` or `ping` |
+| AUTHACTION | string | The dispatcher operation: `run` or `ping` |
 | USER | string | Username from the request, or `(none)` if absent |
 | IP | string | Source IP (`127.0.0.1` for CLI callers) |
 
@@ -420,9 +420,9 @@ ACTION=auth RESULT=deny REASON=denied AUTHACTION=run USER=alice IP=127.0.0.1
 ACTION=auth RESULT=error REASON=hook-not-executable HOOK=/etc/ctrl-exec/auth-hook IP=127.0.0.1
 ```
 
-### pair-denied (ctrl-exec-side)
+### pair-denied (dispatcher-side)
 
-Emitted by the ctrl-exec binary when a pairing request approval is
+Emitted by the dispatcher binary when a pairing request approval is
 explicitly denied.
 
 Priority
@@ -435,7 +435,7 @@ Fields
 | ACTION | string | `pair-denied` |
 | REQID | hex | Pairing request ID |
 
-### pair-timeout (ctrl-exec-side)
+### pair-timeout (dispatcher-side)
 
 Emitted in background pairing mode when the timeout expires before approval
 arrives.
@@ -452,7 +452,7 @@ Fields
 
 ### pairing-mode-start
 
-Emitted when `ctrl-exec pairing-mode` starts and the listener is ready
+Emitted when `ced pairing-mode` starts and the listener is ready
 on port 7444.
 
 Priority
@@ -471,7 +471,7 @@ ACTION=pairing-mode-start PORT=7444
 
 ### pairing-mode-stop
 
-Emitted when `ctrl-exec pairing-mode` is stopped (Ctrl-C, SIGTERM, or
+Emitted when `ced pairing-mode` is stopped (Ctrl-C, SIGTERM, or
 the operator types `quit`).
 
 Priority
@@ -570,7 +570,7 @@ ACTION=pair-deny AGENT=web-01 REQID=a1b2c3d4e5f60001
 
 ### unpair
 
-Emitted when an agent is removed from the registry via `ctrl-exec unpair`.
+Emitted when an agent is removed from the registry via `ced unpair`.
 
 Priority
 : INFO
@@ -591,7 +591,7 @@ ACTION=unpair AGENT=db-01 EXPIRY="Mar 13 12:00:00 2026 GMT"
 ## API-Side Actions
 
 These actions are emitted by `bin/ctrl-exec-api` via `Exec::API`
-under the syslog tag `ctrl-exec`.
+under the syslog tag `ctrl-exec-api`.
 
 ### api-start
 
@@ -710,8 +710,8 @@ Fields
 | Field | Type | Description |
 | --- | --- | --- |
 | ACTION | string | `ping` |
-| PEER | string | IP address of the connecting ctrl-exec |
-| REQID | hex | Request ID from the ctrl-exec |
+| PEER | string | IP address of the connecting dispatcher |
+| REQID | hex | Request ID from the dispatcher |
 
 ```
 ACTION=ping PEER=10.0.0.1 REQID=a1b2c3d4e5f60001
@@ -732,8 +732,8 @@ Fields
 | ACTION | string | `run` |
 | SCRIPT | string | Script name from the allowlist |
 | EXIT | integer | Script exit code |
-| PEER | string | IP address of the connecting ctrl-exec |
-| REQID | hex | Request ID from the ctrl-exec |
+| PEER | string | IP address of the connecting dispatcher |
+| REQID | hex | Request ID from the dispatcher |
 
 ```
 ACTION=run SCRIPT=backup EXIT=0 PEER=10.0.0.1 REQID=a1b2c3d4e5f60001
@@ -743,7 +743,7 @@ A non-zero `EXIT` value is still logged at INFO priority — the agent
 reports what the script returned, not whether the operator considers it a
 failure. Alert on the `EXIT` value itself, not on the priority level. The
 agent-side log is the authoritative source for exit codes; the
-ctrl-exec-side `run` entry may show a transport-level error in the
+dispatcher-side `run` entry may show a transport-level error in the
 `ERROR` field instead of the script's exit code if the connection was
 interrupted.
 
@@ -751,13 +751,13 @@ interrupted.
 
 The agent-side auth hook is called after allowlist validation on every
 `/run` request. The same action name and field structure as the
-ctrl-exec-side auth log. See the auth description under ctrl-exec-Side
+dispatcher-side auth log. See the auth description under ctrl-exec-Side
 Actions for the full field and variant reference.
 
 On the agent side:
 
 - `AUTHACTION` is always `run` (the agent hook is not called for `/ping`)
-- `IP` is the ctrl-exec's source IP, not `127.0.0.1`
+- `IP` is the dispatcher's source IP, not `127.0.0.1`
 - `REASON=no-hook-cli` does not occur — the agent has no CLI caller path
 
 ### deny
@@ -775,7 +775,7 @@ Fields
 | --- | --- | --- |
 | ACTION | string | `deny` |
 | SCRIPT | string | Script name from the request |
-| PEER | string | IP address of the connecting ctrl-exec |
+| PEER | string | IP address of the connecting dispatcher |
 | REQID | hex | Request ID |
 | REASON | string | Present only when denied by auth hook; contains the hook denial reason |
 
@@ -796,7 +796,7 @@ no REASON field; hook denials always have one.
 
 ### serial-reject
 
-Emitted when the ctrl-exec's cert serial does not match the stored value
+Emitted when the dispatcher's cert serial does not match the stored value
 on the agent. Applied to both `/run` and `/ping` requests.
 
 Priority
@@ -989,7 +989,7 @@ ACTION=capabilities-deny PEER=10.0.0.1 REASON=denied
 
 ### capabilities-no-serial
 
-Emitted when the agent has no stored ctrl-exec serial and the serial check
+Emitted when the agent has no stored dispatcher serial and the serial check
 on `/capabilities` is therefore skipped. The request proceeds but the
 restriction is not enforced.
 
@@ -1002,13 +1002,13 @@ Fields
 | --- | --- | --- |
 | ACTION | string | `capabilities-no-serial` |
 | PEER | string | IP address |
-| REASON | string | `no ctrl-exec serial stored - re-pair to enable restriction` |
+| REASON | string | `no dispatcher serial stored - re-pair to enable restriction` |
 
 ```
-ACTION=capabilities-no-serial PEER=10.0.0.1 REASON="no ctrl-exec serial stored - re-pair to enable restriction"
+ACTION=capabilities-no-serial PEER=10.0.0.1 REASON="no dispatcher serial stored - re-pair to enable restriction"
 ```
 
-Re-pair the agent to write the ctrl-exec serial and enable the restriction.
+Re-pair the agent to write the dispatcher serial and enable the restriction.
 
 ### capabilities (agent-side, success)
 
@@ -1043,7 +1043,7 @@ Fields
 | --- | --- | --- |
 | ACTION | string | `pair-complete` |
 | STATUS | string | `approved` |
-| DISPATCHER | string | Hostname or IP of the ctrl-exec that was contacted |
+| DISPATCHER | string | Hostname or IP of the dispatcher that was contacted |
 
 ```
 ACTION=pair-complete STATUS=approved DISPATCHER=ctrl-exec.example.com
@@ -1051,7 +1051,7 @@ ACTION=pair-complete STATUS=approved DISPATCHER=ctrl-exec.example.com
 
 ### pair-denied (agent-side)
 
-Emitted in background pairing mode when the ctrl-exec explicitly denies
+Emitted in background pairing mode when the dispatcher explicitly denies
 the request.
 
 Priority
@@ -1063,7 +1063,7 @@ Fields
 | --- | --- | --- |
 | ACTION | string | `pair-denied` |
 | REQID | hex | Pairing request ID |
-| REASON | string | Denial reason from the ctrl-exec response |
+| REASON | string | Denial reason from the dispatcher response |
 
 ```
 ACTION=pair-denied REQID=00c9845e0001 REASON=denied
@@ -1173,12 +1173,12 @@ the file if it does exist.
 ## Rotation Actions
 
 These actions are emitted by `Exec::Rotation` under the syslog tag
-`ctrl-exec`. They cover the ctrl-exec cert lifecycle: expiry checking,
+`ctrl-exec-dispatcher`. They cover the dispatcher cert lifecycle: expiry checking,
 rotation, and serial broadcast to agents.
 
 ### cert-check
 
-Emitted each time the internal check loop evaluates the ctrl-exec cert
+Emitted each time the internal check loop evaluates the dispatcher cert
 expiry. Frequency is controlled by `cert_check_interval` (default 4 hours).
 
 Priority
@@ -1189,7 +1189,7 @@ Fields
 | Field | Type | Description |
 | --- | --- | --- |
 | ACTION | string | `cert-check` |
-| DAYS_LEFT | integer | Days remaining on the ctrl-exec cert |
+| DAYS_LEFT | integer | Days remaining on the dispatcher cert |
 | THRESHOLD | integer | `cert_renewal_days` threshold from config |
 
 ```
@@ -1367,13 +1367,13 @@ ACTION=rotation-state-corrupt PATH=/var/lib/ctrl-exec/rotation.json ERROR="..." 
 | ACTION | string | Event type identifier. Always first. |
 | AGENT | string | Agent hostname (used in `unpair`, `pair-approve`, `pair-deny`, `serial-confirmed`, `serial-stale`) |
 | AGENTS | integer | Count of agents marked pending for serial broadcast (used in `cert-rotated`) |
-| AUTHACTION | string | ctrl-exec operation being authorised: `run`, `ping`, or `api` |
+| AUTHACTION | string | dispatcher operation being authorised: `run`, `ping`, or `api` |
 | BIND | string | Network address the API is bound to (used in `api-start`) |
 | BYTES | integer | Byte count (used in `stdin-timeout`) |
 | CONFLICTS | string | Comma-separated `host:script` pairs in lock conflict |
 | COUNT | integer | Table capacity ceiling that triggered eviction (used in `rate-evict`) |
-| DAYS_LEFT | integer | Days remaining on the ctrl-exec cert (used in `cert-check`, `cert-renewal-start`) |
-| DISPATCHER | string | ctrl-exec hostname as contacted by agent during pairing |
+| DAYS_LEFT | integer | Days remaining on the dispatcher cert (used in `cert-check`, `cert-renewal-start`) |
+| DISPATCHER | string | dispatcher hostname as contacted by agent during pairing |
 | ENTRY | string | Offending config entry (used in `config-warn`) |
 | ERROR | string | Error description for failure actions |
 | EXIT | integer | Script exit code |
@@ -1386,11 +1386,11 @@ ACTION=rotation-state-corrupt PATH=/var/lib/ctrl-exec/rotation.json ERROR="..." 
 | LEN | integer | Content-Length of an API request body (used in `api-request`) |
 | METHOD | string | HTTP method (used in `api-request`) |
 | MSG | string | Human-readable description of a warning |
-| NEW_SERIAL | string | Lowercase hex serial of the new ctrl-exec cert (used in `cert-rotated`) |
-| OLD_SERIAL | string | Lowercase hex serial of the previous ctrl-exec cert (used in `cert-rotated`) |
+| NEW_SERIAL | string | Lowercase hex serial of the new dispatcher cert (used in `cert-rotated`) |
+| OLD_SERIAL | string | Lowercase hex serial of the previous dispatcher cert (used in `cert-rotated`) |
 | OVERLAP_EXPIRES | string | ISO 8601 UTC timestamp when the rotation overlap window closes |
 | PATH | string | HTTP request path or filesystem path depending on action |
-| PEER | string | IP address of the remote party (ctrl-exec connecting to agent, or agent connecting to ctrl-exec) |
+| PEER | string | IP address of the remote party (dispatcher connecting to agent, or agent connecting to dispatcher) |
 | PEER_SERIAL | string | Lowercase hex cert serial of the connecting peer |
 | PORT | integer | Listening port number |
 | REASON | string | Textual description of a denial, error, or warning |
@@ -1401,7 +1401,7 @@ ACTION=rotation-state-corrupt PATH=/var/lib/ctrl-exec/rotation.json ERROR="..." 
 | SCRIPTS | integer | Count of scripts in a capabilities response |
 | SERIAL | string | Lowercase hex cert serial (used in `revoked-cert`, `serial-broadcast`) |
 | STATUS | string | State indicator: `ok`, `starting`, `approved`, `pending`, etc. |
-| TARGET | string | `host:port` of the agent as addressed by the ctrl-exec |
+| TARGET | string | `host:port` of the agent as addressed by the dispatcher |
 | THRESHOLD | integer | `cert_renewal_days` value from config (used in `cert-check`) |
 | TLS | string | `yes` or `no` indicating TLS state of the API listener |
 | USER | string | Username from the request, or `(none)` |
@@ -1430,30 +1430,30 @@ Security events
 | --- | --- | --- |
 | `ACTION=rate-block REASON=volume` | Source IP exceeded connection volume threshold | Investigate source IP; sustained occurrences indicate scanning or connection flooding |
 | `ACTION=rate-block REASON=probe` | Source IP exceeded TLS handshake failure threshold | Investigate source IP; consistent probe failures indicate certificate probing or brute-force attempts |
-| `ACTION=serial-reject` | ctrl-exec cert serial mismatch on agent | Check rotation broadcast status; run `ctrl-exec serial-status`; should not occur during normal post-rotation operation |
+| `ACTION=serial-reject` | dispatcher cert serial mismatch on agent | Check rotation broadcast status; run `ced serial-status`; should not occur during normal post-rotation operation |
 | `ACTION=revoked-cert` | Revoked cert presented to agent | Treat as a security event; investigate source IP immediately |
 | `ACTION=ip-block` | Connection from IP outside `allowed_ips` | Review `allowed_ips` config; unexpected occurrences indicate traffic from an unrecognised source |
 | `ACTION=deny` (repeated, same PEER) | Script not in allowlist or hook denying repeatedly | Check agent allowlist; may indicate misconfiguration or probing for available scripts |
-| `ACTION=capabilities-deny REASON=serial-mismatch` | Capabilities restricted by serial check failing | Check rotation state via `ctrl-exec serial-status`; re-pair if serial is permanently stale |
+| `ACTION=capabilities-deny REASON=serial-mismatch` | Capabilities restricted by serial check failing | Check rotation state via `ced serial-status`; re-pair if serial is permanently stale |
 
 Execution failures
 
 | Pattern | Meaning | Response |
 | --- | --- | --- |
 | `ACTION=run EXIT=<non-zero>` (agent-side) | Script exited with a failure code | The non-zero exit is logged at INFO priority on both sides; correlate with REQID to find output; check script behaviour |
-| `ACTION=run ERROR=` (ctrl-exec-side) | ctrl-exec could not reach agent or parse response | Check agent reachability and cert validity |
+| `ACTION=run ERROR=` (dispatcher-side) | dispatcher could not reach agent or parse response | Check agent reachability and cert validity |
 | `ACTION=ping ERROR=` | Ping failed | Agent unreachable or cert issue; cert renewal will not trigger until ping succeeds |
 | `ACTION=renew ERROR=` | Cert renewal failed | Check agent connectivity; cert will expire if renewals continue to fail |
-| `ACTION=cert-rotation-fail` | ctrl-exec cert rotation failed | Investigate immediately; rotation retried on next check interval |
+| `ACTION=cert-rotation-fail` | dispatcher cert rotation failed | Investigate immediately; rotation retried on next check interval |
 
 Rotation events
 
 | Pattern | Meaning | Response |
 | --- | --- | --- |
 | `ACTION=serial-broadcast-fail` (for same AGENT, repeated) | Agent not receiving serial update | Check agent connectivity; agent will be marked stale after overlap window expires |
-| `ACTION=serial-stale` | Agent overlap window expired without confirmation | Re-pair the agent; it will reject `/capabilities` from the current ctrl-exec cert until re-paired |
+| `ACTION=serial-stale` | Agent overlap window expired without confirmation | Re-pair the agent; it will reject `/capabilities` from the current dispatcher cert until re-paired |
 | `ACTION=rotation-state-corrupt` | `rotation.json` unreadable | Manual intervention required; rotation state must be restored before the next rotation attempt |
-| All agents `ACTION=serial-reject` simultaneously after rotation | Rotation broadcast failed or cert not synced across HA nodes | Run `ctrl-exec serial-status` and `ctrl-exec rotate-cert` immediately |
+| All agents `ACTION=serial-reject` simultaneously after rotation | Rotation broadcast failed or cert not synced across HA nodes | Run `ced serial-status` and `ced rotate-cert` immediately |
 
 Configuration problems
 
@@ -1462,8 +1462,8 @@ Configuration problems
 | `ACTION=config-warn` | Invalid config entry at load time | Review `agent.conf`; fix or remove the offending entry; should not occur in a healthy deployment after initial setup |
 | `ACTION=accept-fatal` | Agent main loop exiting | Agent will stop serving; investigate and restart immediately |
 | `ACTION=auth RESULT=error REASON=hook-not-executable` | Auth hook missing or not executable | Fix hook path and permissions; all requests are failing until resolved |
-| `ACTION=capabilities-no-serial` | Agent lacks stored ctrl-exec serial | Re-pair agent to enable serial-based restriction on `/capabilities` |
-| `ACTION=run-store-fail` | API result cannot be stored | Check disk space on ctrl-exec host; `GET /status/{reqid}` will return 404 for affected requests |
+| `ACTION=capabilities-no-serial` | Agent lacks stored dispatcher serial | Re-pair agent to enable serial-based restriction on `/capabilities` |
+| `ACTION=run-store-fail` | API result cannot be stored | Check disk space on dispatcher host; `GET /status/{reqid}` will return 404 for affected requests |
 
 Pairing events
 
@@ -1473,5 +1473,5 @@ Pairing events
 | `ACTION=pair-complete` | Agent stored the signed cert | Informational; confirm expected if unattended pairing |
 | `ACTION=pair-denied` (agent-side) | Pairing request denied | Confirm intentional; re-run `request-pairing` if denial was in error |
 | `ACTION=pair-timeout` | Pairing approval window expired | Re-run `request-pairing`; increase `--timeout` if approval latency is high |
-| `ACTION=pair-reject REASON=queue-full` | Pairing queue at capacity | Review pending requests via `ctrl-exec list-requests`; deny stale entries to free queue |
+| `ACTION=pair-reject REASON=queue-full` | Pairing queue at capacity | Review pending requests via `ced list-requests`; deny stale entries to free queue |
 | `ACTION=stdin-timeout` (repeated, same SCRIPT) | Script not consuming stdin context | Review script startup behaviour; add `exec 0</dev/null` if stdin is not needed, or increase `stdin_timeout` in `agent.conf` |

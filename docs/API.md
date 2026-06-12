@@ -9,14 +9,14 @@ OpenAPI specification, and the live spec generator that augments the spec
 with discovered host and script data.
 
 For installation and configuration of the API server, see INSTALL.md. For
-the agent-side wire format (the mTLS protocol between ctrl-exec and agents),
+the agent-side wire format (the mTLS protocol between dispatcher and agents),
 see DEVELOPER.md.
 
 
 ## Overview
 
 `ctrl-exec-api` exposes the same run, ping, and discovery operations as the
-ctrl-exec CLI, as HTTP endpoints with JSON request and response bodies. The
+dispatcher CLI, as HTTP endpoints with JSON request and response bodies. The
 auth hook and lock checking apply identically to CLI and API requests.
 
 Endpoints: `GET /`, `GET /health`, `POST /ping`, `POST /run`,
@@ -156,11 +156,11 @@ Response (success):
 
 `reqid`
 : Request ID at the top level of the response. Matches `REQID` in syslog on
-  both ctrl-exec and agent. Use to poll `GET /status/{reqid}` or to
+  both dispatcher and agent. Use to poll `GET /status/{reqid}` or to
   correlate log entries across both sides.
 
 `exit`
-: Script exit code. 0 = success. Positive = script failure. -1 = ctrl-exec-side
+: Script exit code. 0 = success. Positive = script failure. -1 = dispatcher-side
   failure (connection error, timeout). 126 = killed by signal or exec failed.
 
 Response (lock conflict):
@@ -255,7 +255,7 @@ Submit with `"async": true`, record the top-level `reqid`, then poll
 detached, so it survives the connection close and an agent restart
 (`KillMode=process`); results are held agent-side and fetched on demand.
 The calling programme controls the polling cadence; there is no push or
-callback. The CLI `ctrl-exec wait <reqid>` implements this poll loop.
+callback. The CLI `ced wait <reqid>` implements this poll loop.
 
 ---
 
@@ -303,7 +303,7 @@ itself, that value appears as a `reported_hostname` field on the entry; it is
 omitted when it matches the registry name.
 
 Discovery also refreshes each registered agent's cached `tags` in the registry
-from this live response, so `ctrl-exec list-agents --tags` can filter offline.
+from this live response, so `ced list-agents --tags` can filter offline.
 
 ---
 

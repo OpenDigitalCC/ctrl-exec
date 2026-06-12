@@ -10,21 +10,21 @@ current_page: /agents
 
 ![ctrl-exec fleet model — agents, allowlists, and tag-based grouping](ctrl-exec-fleet-model.svg)
 
-`ctrl-exec-agent` (`cea`) is a lightweight daemon that runs on each managed host. It listens on port 7443 over mTLS, enforces a local script allowlist, and executes scripts on request from an authorised ctrl-exec instance.
+`ctrl-exec-agent` (`cea`) is a lightweight daemon that runs on each managed host. It listens on port 7443 over mTLS, enforces a local script allowlist, and executes scripts on request from an authorised dispatcher instance.
 
-An agent holds no state that cannot be reconstructed from its configuration files. It does not contact ctrl-exec except when responding to incoming requests — there is no polling, no keepalive, and no persistent connection.
+An agent holds no state that cannot be reconstructed from its configuration files. It does not contact the dispatcher except when responding to incoming requests — there is no polling, no keepalive, and no persistent connection.
 
 # Agent Registration
 
 An agent joins the fleet through the pairing protocol. Pairing is a one-time ceremony that establishes mutual trust:
 
-- The agent receives a CA-signed certificate identifying it to ctrl-exec.
-- The agent stores the ctrl-exec's certificate serial number, which it verifies on every subsequent connection.
-- ctrl-exec records the agent in the registry at `/var/lib/ctrl-exec/agents/`.
+- The agent receives a CA-signed certificate identifying it to the dispatcher.
+- The agent stores the dispatcher's certificate serial number, which it verifies on every subsequent connection.
+- The dispatcher records the agent in the registry at `/var/lib/ctrl-exec/agents/`.
 
 After pairing, the agent is identified by its certificate serial. The registry entry contains the hostname, IP, pairing timestamp, certificate expiry, serial confirmation state, the dispatch fields `lookup_by` (resolve by `hostname` or `ip`) and operational `port`, and the agent's cached tags.
 
-Dispatch resolves a registered agent to its stored address (`lookup_by`) and `port`, so an agent on a non-default port — or one whose reported hostname does not resolve from the control host — is reachable without per-command flags. These dispatch fields can be changed without re-pairing using `ced edit-agent` (rename, address, port, lookup mode); the certificate is unaffected.
+Dispatch resolves a registered agent to its stored address (`lookup_by`) and `port`, so an agent on a non-default port — or one whose reported hostname does not resolve from the dispatcher host — is reachable without per-command flags. These dispatch fields can be changed without re-pairing using `ced edit-agent` (rename, address, port, lookup mode); the certificate is unaffected.
 
 See [Pairing](/pairing) for the full protocol and the `--lookup-by` / `--agent-port` options at approval.
 
@@ -58,7 +58,7 @@ sudo systemctl kill --signal=HUP ctrl-exec-agent
 
 # Capabilities Response
 
-When ctrl-exec calls `/discovery` on an agent, the agent returns its current capabilities: the list of allowlisted scripts (name, path, and whether the path is executable) and its tags.
+When the dispatcher calls `/discovery` on an agent, the agent returns its current capabilities: the list of allowlisted scripts (name, path, and whether the path is executable) and its tags.
 
 This is used by `ctrl-exec-api`'s `/openapi-live.json` endpoint to generate a live OpenAPI spec reflecting the actual scripts installed on each connected agent. It is also used by `ced list-agents` to show what each agent can do.
 
@@ -77,13 +77,13 @@ site = london
 
 Tags are reloaded on SIGHUP. ctrl-exec does not interpret tag values — they are metadata for callers and integrations.
 
-ctrl-exec caches each agent's tags in the registry, refreshed from the live capabilities response on every `discovery`. `ced list-agents --tags key=value[,key=value...]` filters on the cache (AND across pairs), so the filter is fast and works offline; an agent shows no tags until the first discovery against it.
+The dispatcher caches each agent's tags in the registry, refreshed from the live capabilities response on every `discovery`. `ced list-agents --tags key=value[,key=value...]` filters on the cache (AND across pairs), so the filter is fast and works offline; an agent shows no tags until the first discovery against it.
 
 # Agent Modes
 
 ## serve
 
-Normal operation. Listens for incoming mTLS connections from ctrl-exec and serves requests.
+Normal operation. Listens for incoming mTLS connections from the dispatcher and serves requests.
 
 ```bash
 ctrl-exec-agent serve
@@ -92,7 +92,7 @@ ctrl-exec-agent serve --config /etc/ctrl-exec-agent/agent.conf
 
 ## self-ping
 
-Connects to `127.0.0.1:7443` using the agent's own certificate. Confirms the port is listening and mTLS is functional. The expected response is `403 serial mismatch` — the agent's own certificate is not a ctrl-exec certificate, and the agent correctly rejects it. Any other result indicates a configuration problem.
+Connects to `127.0.0.1:7443` using the agent's own certificate. Confirms the port is listening and mTLS is functional. The expected response is `403 serial mismatch` — the agent's own certificate is not a dispatcher certificate, and the agent correctly rejects it. Any other result indicates a configuration problem.
 
 ```bash
 ctrl-exec-agent self-ping
@@ -108,7 +108,7 @@ ctrl-exec-agent self-check
 
 ## pairing-status
 
-Shows the agent's current certificate, expiry date, and the stored ctrl-exec serial number.
+Shows the agent's current certificate, expiry date, and the stored dispatcher serial number.
 
 ```bash
 ctrl-exec-agent pairing-status
@@ -122,12 +122,12 @@ No operator action is needed during normal operation. Renewal failure is logged 
 
 # Cert Serial Tracking
 
-The agent stores the ctrl-exec's certificate serial in `/etc/ctrl-exec-agent/dispatcher-serial`. Every incoming connection is checked against this value. A mismatch is rejected with 403 and logged as `ACTION=serial-reject`.
+The agent stores the dispatcher's certificate serial in `/etc/ctrl-exec-agent/dispatcher-serial`. Every incoming connection is checked against this value. A mismatch is rejected with 403 and logged as `ACTION=serial-reject`.
 
-After a ctrl-exec certificate rotation (`ced rotate-cert`), all agents must receive the new serial. Agents that were offline during the broadcast will reject ctrl-exec until the update is delivered. The overlap window (`cert_overlap_days`) is the time allowed for this.
+After a dispatcher certificate rotation (`ced rotate-cert`), all agents must receive the new serial. Agents that were offline during the broadcast will reject the dispatcher until the update is delivered. The overlap window (`cert_overlap_days`) is the time allowed for this.
 
 An agent reporting `serial-reject` consistently after a rotation should be checked with:
 
 ```bash
-ctrl-exec serial-status
+ced serial-status
 ```

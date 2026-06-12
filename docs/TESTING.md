@@ -7,7 +7,7 @@ brand: odcc
 # ctrl-exec - Testing Guide
 
 ctrl-exec has two levels of testing: unit tests that run entirely on the
-control host without any network or agent involvement, and integration tests
+dispatcher host without any network or agent involvement, and integration tests
 that require at least one live paired agent.
 
 Unit tests use `prove` and are safe to run at any time. Integration tests use
@@ -77,8 +77,8 @@ parallel and multi-host tests; files that require two agents skip gracefully
 when only one is available.
 
 ```bash
-sudo ctrl-exec list-agents
-sudo ctrl-exec ping <agent>
+sudo ced list-agents
+sudo ced ping <agent>
 ```
 
 **2. Rate limiter raised**
@@ -99,7 +99,7 @@ itself is covered by `t/rate-limit.t` (unit) and `13-rate-limit-integration.sh`
 
 **3. Test scripts installed on each agent**
 
-The integration tests call scripts by name via the ctrl-exec. These scripts
+The integration tests call scripts by name via the dispatcher. These scripts
 must exist in the agent's allowlist. Install them by running
 `setup-agent-scripts.sh` on each agent host:
 
@@ -165,7 +165,7 @@ sudo bash t/integration/run-tests.sh 01-security-boundary.sh 02-argument-integri
 sudo bash t/integration/01-security-boundary.sh
 ```
 
-The runner discovers agents automatically via `ctrl-exec list-agents` and
+The runner discovers agents automatically via `ced list-agents` and
 pings each one before the suite begins. No agent names are hardcoded.
 
 Output shows pass/fail/skip for each assertion within a file, followed by a
@@ -217,7 +217,7 @@ results via dispatch.
 ### Environment Variables
 
 `DISPATCHER`
-: ctrl-exec binary name or path. Default: `ctrl-exec`. Override if the
+: dispatcher binary name or path. Default: `ctrl-exec`. Override if the
   binary is not in PATH or you want to test a specific build.
 
 `AGENT_SSH_USER`
@@ -255,7 +255,7 @@ against the installed files immediately after installation. This is the
 recommended way to verify a new installation or upgrade.
 
 ```bash
-sudo bash install.sh --ctrl-exec --run-tests
+sudo bash install.sh --dispatcher --run-tests
 sudo bash install.sh --agent --run-tests
 ```
 
@@ -283,7 +283,7 @@ Skipping unit tests.
 All integration test files source `lib.sh`, which provides:
 
 Agent discovery
-: `discover_agents` queries `ctrl-exec list-agents`, pings each registered
+: `discover_agents` queries `ced list-agents`, pings each registered
   agent, and exports `AGENTS` (all reachable), `AGENT1` (first), `AGENT2`
   (second). Called once by the runner before any test files run; test files
   call it automatically when run standalone.

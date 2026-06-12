@@ -14,8 +14,8 @@ ctrl-exec has no built-in ACL system. All access control beyond the allowlist is
 
 There are two independent hook points:
 
-ctrl-exec-side hook
-: Configured in `ctrl-exec.conf` via `auth_hook`. Called before every `run`, `ping`, `capabilities`, and API request. Runs on the control host before any agent connection is made.
+dispatcher-side hook
+: Configured in `ctrl-exec.conf` via `auth_hook`. Called before every `run`, `ping`, `capabilities`, and API request. Runs on the dispatcher host before any agent connection is made.
 
 Agent-side hook
 : Configured in `agent.conf` via `auth_hook`. Called on the agent after allowlist validation, before script execution. Covers `run` requests only.
@@ -36,7 +36,7 @@ ENVEXEC_SCRIPT      script name requested (empty for ping)
 ENVEXEC_HOSTS       comma-separated list of target hosts
 ENVEXEC_ARGS        space-joined arguments — unreliable, see note below
 ENVEXEC_ARGS_JSON   arguments as a JSON array string
-ENVEXEC_USERNAME    username from the request (caller-supplied, not verified by ctrl-exec)
+ENVEXEC_USERNAME    username from the request (caller-supplied, not verified by the dispatcher)
 ENVEXEC_TOKEN       auth token from the request
 ENVEXEC_SOURCE_IP   127.0.0.1 for CLI callers; caller IP for API callers
 ENVEXEC_TIMESTAMP   ISO 8601 UTC timestamp
@@ -61,9 +61,9 @@ Setting `auth_deny_generic = 1` in `ctrl-exec.conf` withholds that detail from A
 
 # Token Forwarding
 
-Tokens are forwarded from ctrl-exec through to agent hooks and to script stdin. A token validated at the ctrl-exec side is the same token available to the agent-side hook and to the script itself.
+Tokens are forwarded from the dispatcher through to agent hooks and to script stdin. A token validated at the dispatcher side is the same token available to the agent-side hook and to the script itself.
 
-Tokens are never logged by ctrl-exec or the agent. To prevent tokens appearing in `ps` output, pass them via the environment rather than `--token`:
+Tokens are never logged by the dispatcher or the agent. To prevent tokens appearing in `ps` output, pass them via the environment rather than `--token`:
 
 ```bash
 ENVEXEC_TOKEN=mytoken ced run host-a backup-mysql
@@ -145,7 +145,7 @@ In `agent.conf`:
 auth_hook = /etc/ctrl-exec-agent/hooks/auth.sh
 ```
 
-The hook must be executable by the user running ctrl-exec or the agent:
+The hook must be executable by the user running the dispatcher or the agent:
 
 ```bash
 chmod 750 /etc/ctrl-exec/hooks/auth.sh
@@ -163,7 +163,7 @@ When the API server has no hook configured, the `api_auth_default` setting gover
 
 # Security Notes
 
-- `ENVEXEC_USERNAME` is a caller-supplied string. ctrl-exec does not verify it. Validate usernames only via a token or an external authentication service.
+- `ENVEXEC_USERNAME` is a caller-supplied string. The dispatcher does not verify it. Validate usernames only via a token or an external authentication service.
 - Do not log environment variables wholesale from within a hook — tokens will be written to your audit log. Log only the specific fields that are needed.
 - The hook's working directory is not guaranteed. Use absolute paths for all file references.
 - A hook that exits non-zero causes all requests to fail. Test hooks against the expected inputs before deploying to production.

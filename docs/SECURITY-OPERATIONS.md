@@ -12,22 +12,22 @@ and deployment-specific guidance. For the system's security model and
 architecture, see SECURITY.md.
 
 
-## ctrl-exec Host Security
+## dispatcher host Security
 
-The security of the entire fleet depends on the security of the ctrl-exec
-host. The CA key, ctrl-exec cert and key, full agent registry, and lock files
-all reside there. An attacker with root access to the ctrl-exec host can issue
+The security of the entire fleet depends on the security of the dispatcher
+host. The CA key, dispatcher cert and key, full agent registry, and lock files
+all reside there. An attacker with root access to the dispatcher host can issue
 arbitrary agent certificates and connect to any agent.
 
-Treat the ctrl-exec host as a privileged infrastructure node:
+Treat the dispatcher host as a privileged infrastructure node:
 
 - Restrict interactive login to named administrators only; no shared accounts
 - Audit all access via system auth logs (`/var/log/auth.log` or equivalent)
-- Keep the ctrl-exec host off the general network; access via bastion or VPN
+- Keep the dispatcher host off the general network; access via bastion or VPN
 - Apply OS-level hardening (no unnecessary services, up-to-date packages)
-- Do not run untrusted workloads on the ctrl-exec host
+- Do not run untrusted workloads on the dispatcher host
 
-The `ctrl-exec` group grants CLI access to the ctrl-exec binary and read
+The `ctrl-exec` group grants CLI access to the dispatcher binary and read
 access to the agent registry at `/var/lib/ctrl-exec/agents/`. This includes
 each agent's hostname and IP address. Membership of the `ctrl-exec` group
 is a privilege; treat it accordingly.
@@ -41,7 +41,7 @@ callers include in requests; they are forwarded to the auth hook as
 validation, expiry, and revocation logic lives in the auth hook.
 
 The `username` field is a caller-supplied string with no structural meaning
-within ctrl-exec. The ctrl-exec does not authenticate it, and it is not
+within ctrl-exec. The dispatcher does not authenticate it, and it is not
 verified to match any local or remote identity. Its purpose is to carry an
 identity assertion that an auth hook can forward to an external authentication
 service alongside the token. A hook that grants elevated permissions based
@@ -69,14 +69,14 @@ maintain its own user database; it delegates to the identity service.
 
 Token revocation for a compromised service: update the auth hook to reject the
 service's token. If the hook validates against a central service, revoke the
-token there. No ctrl-exec restart is required; the hook's own logic takes
+token there. No dispatcher restart is required; the hook's own logic takes
 effect on the next request.
 
 
 ## Auth Hook Security
 
 Hook update path
-: Do not push auth hook updates via `ctrl-exec run`. If the hook is replaced
+: Do not push auth hook updates via `ced run`. If the hook is replaced
   by a script that a compromised token can invoke, the hook that validates that
   token can be overwritten. Update hooks through direct filesystem access,
   configuration management tooling (Ansible, Salt, Puppet), or a dedicated
@@ -98,12 +98,12 @@ External validation service availability
   are time-critical.
 
 Two-token pattern
-: The ctrl-exec-side hook and the agent-side hook are independent and can
+: The dispatcher-side hook and the agent-side hook are independent and can
   validate different tokens. A higher-assurance deployment can issue separate
-  credentials for the ctrl-exec-to-hook path and the agent-to-hook path.
-  The ctrl-exec validates a ctrl-exec-level token; the agent validates a
+  credentials for the dispatcher-to-hook path and the agent-to-hook path.
+  The dispatcher validates a dispatcher-level token; the agent validates a
   forwarded per-operation token. This is a supported configuration - the
-  token is forwarded from ctrl-exec to agent in the request body and is
+  token is forwarded from dispatcher to agent in the request body and is
   available to both hooks.
 
 Agent hook scope
@@ -160,7 +160,7 @@ write a plausible-looking but incorrect hex serial, causing all subsequent
 `/run` and `/ping` operations to return 403 until the correct serial is
 restored. The auth hook should restrict invocation of `update-ctrl-exec-serial`
 to privileged tokens only. A standard operator token should not be able to call
-this script. Use a separate token issued to the ctrl-exec's own rotation
+this script. Use a separate token issued to the dispatcher's own rotation
 machinery, and block it for all other callers in the hook.
 
 ### Call rate limiting per agent
@@ -217,7 +217,7 @@ exit 0
 it is not caller-supplied and cannot be spoofed. The state directory should
 be `0700` owned by the user the hook runs as. The hook should be set `0700`
 with root ownership; its parent directory should not be writable by the
-ctrl-exec process.
+dispatcher process.
 
 Note that `SIGHUP` from `update-ctrl-exec-serial` clears rate-limit state
 in the *agent's* connection limiter, not in this hook's state file. The two
@@ -228,7 +228,7 @@ mechanisms are independent.
 
 If the CA private key is compromised, every cert signed by it must be treated
 as untrusted. An attacker with the CA key can issue valid agent certificates
-and connect to any agent as if they were the ctrl-exec.
+and connect to any agent as if they were the dispatcher.
 
 Recovery procedure:
 
@@ -236,14 +236,14 @@ Recovery procedure:
    The priority is preventing the attacker from using newly-issued certs before
    recovery completes.
 
-2. On the ctrl-exec host, regenerate the CA:
+2. On the dispatcher host, regenerate the CA:
 
    ```bash
    # Back up the compromised material first for forensics
    cp -a /etc/ctrl-exec /etc/ctrl-exec.compromised.$(date +%Y%m%d)
 
-   ctrl-exec setup-ca   # generates new CA key and cert
-   ctrl-exec setup-ctrl-exec  # generates new ctrl-exec cert signed by new CA
+   ced setup-ca   # generates new CA key and cert
+   ced setup-ctrl-exec  # generates new dispatcher cert signed by new CA
    ```
 
 3. Distribute the new CA cert to all agents. This cannot be done via ctrl-exec
@@ -257,13 +257,13 @@ Recovery procedure:
    ```bash
    # On each agent host
    rm /etc/ctrl-exec-agent/agent.{key,crt}
-   ctrl-exec-agent request-pairing --dispatcher <ctrl-exec>
+   ctrl-exec-agent request-pairing --dispatcher <dispatcher-host>
    ```
 
 5. Once all agents are re-paired, decommission the compromised CA material.
    Ensure the old CA cert is removed from all trust stores.
 
-6. Investigate how the CA key was accessed: review ctrl-exec host auth logs,
+6. Investigate how the CA key was accessed: review dispatcher host auth logs,
    check for unauthorised access to `/etc/ctrl-exec/ca.key`, and determine
    the scope of the compromise before returning to normal operations.
 
@@ -291,11 +291,11 @@ Operational signals worth alerting on:
 
 - All agents returning `ACTION=serial-reject` simultaneously after a rotation
   indicates the rotation broadcast failed or was corrupted. Run
-  `ctrl-exec serial-status` and `ctrl-exec rotate-cert` immediately.
+  `ced serial-status` and `ced rotate-cert` immediately.
 - A sudden increase in `ACTION=run EXIT=non-zero` across multiple agents may
   indicate a script was modified or a dependency broke. Correlate with
   deployment events. Note that non-zero exit is logged at INFO priority on
-  both ctrl-exec and agent — alert on the EXIT value itself, not the
+  both dispatcher and agent — alert on the EXIT value itself, not the
   log priority level.
 
 `cert_overlap_days` calibration
@@ -332,27 +332,27 @@ Rate state persistence
   time. When adding a new script whose interpreter is a JIT runtime, remove
   `MemoryDenyWriteExecute=yes` from the unit file before deploying.
 
-No ctrl-exec-side agent cert revocation
+No dispatcher-side agent cert revocation
 : The revocation list on agents covers certs presented *to* the agent. There
-  is no equivalent mechanism on the ctrl-exec side to block a stolen agent
-  cert from connecting to the ctrl-exec. An agent that has been decommissioned
-  via `ctrl-exec unpair` has its cert left technically valid until natural
+  is no equivalent mechanism on the dispatcher side to block a stolen agent
+  cert from connecting to the dispatcher. An agent that has been decommissioned
+  via `ced unpair` has its cert left technically valid until natural
   expiry. See Unpairing and Decommission below for the recommended workflow
   to close this window promptly.
 
 
 ## Unpairing and Decommission
 
-`ctrl-exec unpair <hostname>` removes the agent from the registry. The agent
+`ced unpair <hostname>` removes the agent from the registry. The agent
 will no longer receive cert renewals and will become stale when the overlap
 window expires. However, the agent's certificate remains cryptographically
 valid until its natural expiry date, which is printed by the unpair command.
 During that window, a host holding a copy of the agent cert and key can still
-connect to the ctrl-exec on port 7443.
+connect to the dispatcher on port 7443.
 
 The recommended workflow after unpairing is:
 
-1. Run `ctrl-exec unpair <hostname>`. Note the expiry date printed.
+1. Run `ced unpair <hostname>`. Note the expiry date printed.
 
 2. Obtain the agent cert serial:
 
@@ -361,7 +361,7 @@ The recommended workflow after unpairing is:
    ```
 
    If you no longer have access to the agent host, retrieve the serial from
-   the registry record before unpairing, or from the ctrl-exec's CA serial
+   the registry record before unpairing, or from the dispatcher's CA serial
    log if available.
 
 3. Add the serial to the revocation list on every agent that the decommissioned
@@ -373,7 +373,7 @@ The recommended workflow after unpairing is:
    systemctl reload ctrl-exec-agent
    ```
 
-   For fleet-wide distribution, use `ctrl-exec run` to push the serial append
+   For fleet-wide distribution, use `ced run` to push the serial append
    and SIGHUP to all remaining agents before the unpairing takes effect.
 
 4. Verify the serial appears in the revocation list on the affected agents:
@@ -400,15 +400,15 @@ rather than reloading if in-flight connections must also be terminated.
 ## Docker-Specific Security
 
 Docker socket access
-: Any user or process with access to the Docker socket on the ctrl-exec host
+: Any user or process with access to the Docker socket on the dispatcher host
   can start a container with the `ctrl-exec-data` volume mounted and read the
   CA private key. Restrict Docker socket access to root and any explicitly
   designated operators. Do not grant Docker socket access to services running
-  on the ctrl-exec host that do not require it. This is the most significant
+  on the dispatcher host that do not require it. This is the most significant
   additional risk of a containerised deployment versus a bare-metal install.
 
 Stale pairing request
-: The ctrl-exec's pairing queue automatically cleans up requests older than
+: The dispatcher's pairing queue automatically cleans up requests older than
   10 minutes. In the Docker workflow, the agent container exits after sending
   its pairing request and must be restarted by the operator after approval.
   If the 10-minute window expires before the container is restarted and
@@ -422,28 +422,28 @@ Stale pairing request
   attacker receives the CSR and can return a certificate signed by their own
   CA. The agent stores whatever cert is returned. All subsequent operations use
   the attacker's CA as the trust anchor. Verify `DISPATCHER_HOST` points at
-  the correct ctrl-exec before starting agent containers. For production
+  the correct dispatcher before starting agent containers. For production
   deployments, consider setting `DISPATCHER_HOST` in a compose file under
   version control rather than passing it as a runtime variable.
 
 `allowed_ips` in containerised deployments
 : In a Docker network, all containers on the same network can reach port 7443
-  on the agent container. Set `allowed_ips` in `agent.conf` to the ctrl-exec
+  on the agent container. Set `allowed_ips` in `agent.conf` to the dispatcher
   container's IP or subnet to limit which containers can connect to the agent.
-  The ctrl-exec container's IP is stable within a compose deployment (Docker
+  The dispatcher container's IP is stable within a compose deployment (Docker
   assigns IPs deterministically by service name). Example:
 
   ```ini
   allowed_ips = 172.18.0.0/16
   ```
 
-  For tighter control, use Docker network policies or pin the ctrl-exec
+  For tighter control, use Docker network policies or pin the dispatcher
   container's IP in the compose file and use an exact IP in `allowed_ips`.
 
 Volume backup
 : All persistent state is on named volumes. Back up both `ctrl-exec-data`
-  (CA key, ctrl-exec cert) and `ctrl-exec-registry` (agent registry) on the
-  ctrl-exec side. On the agent side, `agent-data` contains the agent cert and
+  (CA key, dispatcher cert) and `ctrl-exec-registry` (agent registry) on the
+  dispatcher side. On the agent side, `agent-data` contains the agent cert and
   key. Loss of `agent-data` requires re-pairing that agent. Loss of
   `ctrl-exec-data` requires regenerating the CA and re-pairing the entire
   fleet. Treat volume backup with the same priority as the CA key backup

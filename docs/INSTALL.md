@@ -32,13 +32,13 @@ Agent (`--agent`)
 - Debian: `libio-socket-ssl-perl`, `libjson-perl`
 - Alpine: `perl-io-socket-ssl`, `perl-json`
 
-ctrl-exec (`--ctrl-exec`)
+dispatcher (`--dispatcher`)
 
 - Debian: `libwww-perl`, `libio-socket-ssl-perl`, `libjson-perl`
 - Alpine: `perl-libwww`, `perl-io-socket-ssl`, `perl-json`
 
 API (`--api`)
-: No additional packages beyond the ctrl-exec role.
+: No additional packages beyond the dispatcher role.
 
 All roles require `openssl` (present on any standard installation) and `perl`.
 
@@ -52,8 +52,8 @@ The installer must be run as root. A role must be specified.
 
 ```bash
 sudo ./install.sh --agent        # on each remote host
-sudo ./install.sh --ctrl-exec   # on the control host
-sudo ./install.sh --api          # on the control host, after --ctrl-exec
+sudo ./install.sh --dispatcher   # on the dispatcher host
+sudo ./install.sh --api          # on the dispatcher host, after --dispatcher
 sudo ./install.sh --uninstall    # remove files (preserves config and certs)
 sudo ./install.sh --run-tests    # run test suite from source directory
 ```
@@ -64,7 +64,8 @@ or used alone to test without installing.
 ### Installed paths
 
 ```
-/usr/local/bin/ctrl-exec
+/usr/local/bin/ctrl-exec-dispatcher
+/usr/local/bin/ced                  (symlink -> ctrl-exec-dispatcher)
 /usr/local/bin/ctrl-exec-agent
 /usr/local/bin/ctrl-exec-api
 /usr/local/lib/ctrl-exec/          Perl library modules
@@ -81,7 +82,7 @@ or used alone to test without installing.
 The installer stamps the release version from the `VERSION` file into the three
 binaries at install time. The source files in the distribution carry the
 sentinel value `UNINSTALLED` until the installer runs. After installation,
-`ctrl-exec --version` reports the version of the release that was installed.
+`ced --version` reports the version of the release that was installed.
 
 ### ctrl-exec group
 
@@ -115,24 +116,24 @@ and are skipped automatically if not available.
 
 ## Initial Setup
 
-### 1. ctrl-exec host - CA and certificates
+### 1. dispatcher host - CA and certificates
 
 Initialise the CA (once only - do not repeat on an existing installation):
 
 ```bash
-sudo ctrl-exec setup-ca
+sudo ced setup-ca
 ```
 
-Generate the ctrl-exec's own certificate:
+Generate the dispatcher's own certificate:
 
 ```bash
-sudo ctrl-exec setup-ctrl-exec
+sudo ced setup-ctrl-exec
 ```
 
 Both commands write to `/etc/ctrl-exec/`. The CA private key (`ca.key`) is
 set 0600 and must not leave this host. Back it up to encrypted offline storage.
 
-### 2. Configure the ctrl-exec
+### 2. Configure the dispatcher
 
 Edit `/etc/ctrl-exec/ctrl-exec.conf`:
 
@@ -192,10 +193,10 @@ sudo chown root:ctrl-exec-agent /opt/ctrl-exec-scripts/your-script.sh
 
 ### 4. Pairing
 
-On the ctrl-exec host, start pairing mode:
+On the dispatcher host, start pairing mode:
 
 ```bash
-sudo ctrl-exec pairing-mode
+sudo ced pairing-mode
 ```
 
 This blocks until interrupted. When run in a terminal it is interactive -
@@ -205,7 +206,7 @@ or deny.
 On the agent host:
 
 ```bash
-sudo ctrl-exec-agent request-pairing --dispatcher <ctrl-exec-hostname>
+sudo ctrl-exec-agent request-pairing --dispatcher <dispatcher-host>
 ```
 
 The agent connects and waits. A prompt appears in the pairing mode terminal:
@@ -233,15 +234,15 @@ For non-interactive use (scripted or from a service), use separate commands
 from another terminal while pairing mode runs:
 
 ```bash
-ctrl-exec list-requests
-ctrl-exec approve <reqid>
-ctrl-exec deny <reqid>
+ced list-requests
+ced approve <reqid>
+ced deny <reqid>
 ```
 
 Confirm the agent is registered:
 
 ```bash
-ctrl-exec list-agents
+ced list-agents
 ```
 
 ### 5. Start the agent
@@ -260,7 +261,7 @@ On Alpine or without systemd:
 ctrl-exec-agent serve
 ```
 
-### 6. Verify from the ctrl-exec
+### 6. Verify from the dispatcher
 
 On the agent host, confirm the agent is listening and enforcing policy
 correctly with a loopback test:
@@ -271,14 +272,14 @@ sudo ctrl-exec-agent self-ping
 
 `self-ping` connects to `127.0.0.1:7443`, completes the mTLS handshake,
 and sends a ping. The agent responds with 403 serial mismatch — the
-correct behaviour, since the agent's own cert is not a ctrl-exec cert.
+correct behaviour, since the agent's own cert is not a dispatcher cert.
 A successful `self-ping` confirms the port is listening, TLS is working,
 and the agent is enforcing serial policy.
 
-Then verify from the ctrl-exec host:
+Then verify from the dispatcher host:
 
 ```bash
-ctrl-exec ping <agent-hostname>
+ced ping <agent-hostname>
 ```
 
 Expected output:
@@ -317,41 +318,41 @@ curl -s http://localhost:7445/health | python3 -m json.tool
 
 ```bash
 # Run a script on one host
-ctrl-exec run host-a backup-mysql
+ced run host-a backup-mysql
 
 # With arguments (everything after -- is passed to the script)
-ctrl-exec run host-a logger -- -t my-tag "hello from ctrl-exec"
+ced run host-a logger -- -t my-tag "hello from ctrl-exec"
 
 # Multiple hosts in parallel
-ctrl-exec run host-a host-b host-c check-disk
+ced run host-a host-b host-c check-disk
 
 # Custom port on one host
-ctrl-exec run host-a:7450 host-b backup-mysql
+ced run host-a:7450 host-b backup-mysql
 
 # JSON output
-ctrl-exec run host-a backup-mysql --json
+ced run host-a backup-mysql --json
 
 # With auth token (preferred: via environment, does not appear in ps)
-ENVEXEC_TOKEN=mytoken ctrl-exec run host-a backup-mysql
-ctrl-exec run host-a backup-mysql --token mytoken --username deploy
+ENVEXEC_TOKEN=mytoken ced run host-a backup-mysql
+ced run host-a backup-mysql --token mytoken --username deploy
 ```
 
 ### Ping
 
 ```bash
-ctrl-exec ping host-a
-ctrl-exec ping host-a host-b host-c
-ctrl-exec ping host-a --json
+ced ping host-a
+ced ping host-a host-b host-c
+ced ping host-a --json
 ```
 
 ### Agent management
 
 ```bash
-ctrl-exec list-agents                  # all paired agents with cert expiry
-ctrl-exec list-requests                # pending pairing requests
-ctrl-exec approve <reqid>              # approve a pairing request
-ctrl-exec deny <reqid>                 # deny a pairing request
-ctrl-exec unpair <hostname>            # remove agent from registry
+ced list-agents                  # all paired agents with cert expiry
+ced list-requests                # pending pairing requests
+ced approve <reqid>              # approve a pairing request
+ced deny <reqid>                 # deny a pairing request
+ced unpair <hostname>            # remove agent from registry
 ```
 
 `unpair` removes the registry entry. The agent cert remains valid until its
@@ -496,8 +497,8 @@ exit 0
 
 Agents can also run an auth hook, configured via `auth_hook` in `agent.conf`.
 This runs after allowlist validation and receives the same context including
-token and username forwarded from the ctrl-exec. Useful for independent token
-validation in zero-trust or multi-ctrl-exec deployments.
+token and username forwarded from the dispatcher. Useful for independent token
+validation in zero-trust or multi-dispatcher deployments.
 
 
 ## Configuration Reference
@@ -533,7 +534,7 @@ script_dirs = /opt/ctrl-exec-scripts
 # Pairing port (default: 7444)
 # pairing_port = 7444
 
-# Restrict connections to known ctrl-exec IPs (optional)
+# Restrict connections to known dispatcher IPs (optional)
 # allowed_ips = 192.168.1.10, 10.0.0.0/8
 
 # Rate limiting (defaults shown - omit to use defaults)
@@ -609,11 +610,11 @@ No operator action is needed during normal operation. To check cert status:
 # On the agent host
 sudo ctrl-exec-agent pairing-status
 
-# From the ctrl-exec (CERT EXPIRY column)
-ctrl-exec ping host-a host-b
+# From the dispatcher (CERT EXPIRY column)
+ced ping host-a host-b
 ```
 
-Renewal failure is logged at ERR level on the ctrl-exec and retried on the
+Renewal failure is logged at ERR level on the dispatcher and retried on the
 next ping. A cert that fails repeatedly will eventually expire and require
 re-pairing.
 
@@ -621,13 +622,13 @@ To change cert lifetime, update `cert_days` in `ctrl-exec.conf`. Existing
 certs are unaffected until their next renewal.
 
 
-## ctrl-exec Redundancy
+## Dispatcher Redundancy
 
 Two ctrl-exec installations can share a CA and manage the same agent fleet
-independently. Each ctrl-exec signs certs and maintains its own registry.
-Agents accept connections from any ctrl-exec that shares the CA.
+independently. Each dispatcher signs certs and maintains its own registry.
+Agents accept connections from any dispatcher that shares the CA.
 
-On the primary ctrl-exec after `setup-ca` and `setup-ctrl-exec`:
+On the primary dispatcher after `setup-ca` and `setup-ctrl-exec`:
 
 ```bash
 # Transfer CA material to secondary over a secure channel
@@ -638,11 +639,11 @@ sudo scp /etc/ctrl-exec/ca.crt root@secondary:/etc/ctrl-exec/ca.crt
 On the secondary:
 
 ```bash
-sudo ctrl-exec setup-ctrl-exec
+sudo ced setup-ctrl-exec
 ```
 
-Each ctrl-exec then pairs with agents independently. Agents must pair with
-each ctrl-exec separately. This is active-active with independent registries -
+Each dispatcher then pairs with agents independently. Agents must pair with
+each dispatcher separately. This is active-active with independent registries -
 registry synchronisation is an operational responsibility.
 
 
@@ -696,11 +697,11 @@ Auth denied unexpectedly
 Pairing request missing from `list-requests`
 : Agent may have failed mid-pairing (run `sudo ctrl-exec-agent request-pairing`
   to retry). Stale requests older than 10 minutes are cleaned automatically.
-  Check ctrl-exec syslog for `ACTION=pair-request`.
+  Check dispatcher syslog for `ACTION=pair-request`.
 
 Cert renewal not occurring
 : Renewal is triggered by ping. Check `CERT EXPIRY` in ping output.
-  Check ctrl-exec syslog for `ACTION=renew` and `ERR` lines.
+  Check dispatcher syslog for `ACTION=renew` and `ERR` lines.
 
 Connection blocked unexpectedly (`ACTION=rate-block` in syslog)
 : The agent has rate-limited the source IP. The volume threshold (default: 10

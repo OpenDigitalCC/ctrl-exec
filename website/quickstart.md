@@ -8,7 +8,7 @@ current_page: /quickstart
 
 # Prerequisites
 
-On the control host (where `ced` will run):
+On the dispatcher host (where `ced` will run):
 
 ```bash
 # Debian / Ubuntu
@@ -37,10 +37,10 @@ git clone https://github.com/OpenDigitalCC/ctrl-exec.git
 cd ctrl-exec
 ```
 
-On the control host:
+On the dispatcher host:
 
 ```bash
-sudo ./install.sh --ctrl-exec
+sudo ./install.sh --dispatcher
 ```
 
 On each agent host:
@@ -58,28 +58,28 @@ newgrp ctrl-exec
 
 # Initialise the CA
 
-Run once on the control host. This generates the CA key and certificate and the ctrl-exec's own TLS certificate.
+Run once on the dispatcher host. This generates the CA key and certificate and the dispatcher's own TLS certificate.
 
 ```bash
-sudo ctrl-exec setup-ca
-sudo ctrl-exec setup-ctrl-exec
+sudo ced setup-ca
+sudo ced setup-ctrl-exec
 ```
 
 The CA key at `/etc/ctrl-exec/ca.key` is the root of trust for the deployment. Back it up to encrypted offline storage before proceeding.
 
 # Start Pairing Mode
 
-On the control host, open the pairing listener:
+On the dispatcher host, open the pairing listener:
 
 ```bash
-sudo ctrl-exec pairing-mode
+sudo ced pairing-mode
 ```
 
 Leave this running. Open a second terminal for the next steps.
 
 # Pair an Agent
 
-On the agent host, submit a pairing request. Replace `ctrl-exec.example.com` with the hostname or IP of your control host:
+On the agent host, submit a pairing request. Replace `ctrl-exec.example.com` with the hostname or IP of your dispatcher host:
 
 ```bash
 sudo ctrl-exec-agent request-pairing --dispatcher ctrl-exec.example.com
@@ -92,7 +92,7 @@ Pairing code: 482 917
 Waiting for approval...
 ```
 
-Back on the control host, the pairing-mode terminal displays the same code:
+Back on the dispatcher host, the pairing-mode terminal displays the same code:
 
 ```
 New request from agent-host.example.com (192.168.1.42)
@@ -102,7 +102,7 @@ Approve? [a/d]:
 
 Verify the codes match. Type `a` and press Enter to approve.
 
-The agent stores its signed certificate, the CA certificate, and the ctrl-exec serial. Pairing is complete.
+The agent stores its signed certificate, the CA certificate, and the dispatcher serial. Pairing is complete.
 
 # Start the Agent
 
@@ -121,7 +121,7 @@ sudo ctrl-exec-agent serve &
 
 # Confirm Connectivity
 
-From the control host:
+From the dispatcher host:
 
 ```bash
 ced ping agent-host.example.com
@@ -160,7 +160,7 @@ sudo systemctl kill --signal=HUP ctrl-exec-agent
 
 # Run a Script
 
-From the control host:
+From the dispatcher host:
 
 ```bash
 ced run agent-host.example.com check-disk

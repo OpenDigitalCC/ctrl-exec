@@ -8,7 +8,7 @@ current_page: /install
 
 # Dependencies
 
-## Control host (`ced`)
+## Dispatcher host (`ced`)
 
 Debian / Ubuntu:
 
@@ -56,15 +56,15 @@ cd ctrl-exec
 Run the installer as root. Specify one or more roles:
 
 ```bash
-sudo ./install.sh --ctrl-exec      # control host
+sudo ./install.sh --dispatcher      # dispatcher host
 sudo ./install.sh --agent          # agent host
-sudo ./install.sh --api            # optional API server (control host)
+sudo ./install.sh --api            # optional API server (dispatcher host)
 ```
 
 Multiple roles can be combined:
 
 ```bash
-sudo ./install.sh --ctrl-exec --api
+sudo ./install.sh --dispatcher --api
 ```
 
 The installer detects Debian/Ubuntu or Alpine automatically and installs to the paths below.
@@ -76,7 +76,7 @@ The installer detects Debian/Ubuntu or Alpine automatically and installs to the 
 /usr/local/bin/ctrl-exec-agent         cea binary
 /usr/local/bin/ctrl-exec-api           API server binary
 /usr/local/lib/ctrl-exec/              Perl library modules
-/etc/ctrl-exec/                        ctrl-exec config and CA material
+/etc/ctrl-exec/                        dispatcher config and CA material
 /etc/ctrl-exec-agent/                  Agent config and certificates
 /opt/ctrl-exec-scripts/                Managed scripts (agent hosts)
 /var/lib/ctrl-exec/                    Runtime state: registry, locks, runs
@@ -180,9 +180,9 @@ OpenWrt is not affected by the `PrivateDevices`/`AF_UNIX` syslog constraint that
 
 # Docker
 
-ctrl-exec and `ctrl-exec-agent` run as Alpine Linux containers. All persistent state is on named volumes; containers are stateless and can be rebuilt without losing pairing or configuration.
+The dispatcher and `ctrl-exec-agent` run as Alpine Linux containers. All persistent state is on named volumes; containers are stateless and can be rebuilt without losing pairing or configuration.
 
-## ctrl-exec container
+## Dispatcher container
 
 First-start initialisation entrypoint:
 
@@ -191,15 +191,15 @@ First-start initialisation entrypoint:
 set -e
 CONF_DIR=/etc/ctrl-exec
 if [ ! -f "$CONF_DIR/ca.crt" ]; then
-    ctrl-exec setup-ca
-    ctrl-exec setup-ctrl-exec
+    ced setup-ca
+    ced setup-ctrl-exec
 fi
 exec ctrl-exec-api
 ```
 
 ## Agent container
 
-The agent uses a two-phase entrypoint: pair on first start, serve on subsequent starts. Set `DISPATCHER_HOST` to the hostname or address of the ctrl-exec container.
+The agent uses a two-phase entrypoint: pair on first start, serve on subsequent starts. Set `DISPATCHER_HOST` to the hostname or address of the dispatcher container.
 
 ```bash
 #!/bin/sh
@@ -210,7 +210,7 @@ if [ -z "$DISPATCHER_HOST" ]; then
 fi
 if [ ! -f "$CONF_DIR/agent.crt" ]; then
     ctrl-exec-agent request-pairing --dispatcher "$DISPATCHER_HOST"
-    echo "Pairing request sent. Approve on ctrl-exec, then restart this container."
+    echo "Pairing request sent. Approve on the dispatcher, then restart this container."
     exit 0
 fi
 exec ctrl-exec-agent serve
@@ -258,4 +258,4 @@ networks:
 
 `DISPATCHER_HOST: ctrl-exec` uses Docker's internal DNS. No IP addresses required.
 
-On first start, approve the agent's pairing request on the ctrl-exec container, then restart the agent container to begin serving.
+On first start, approve the agent's pairing request on the dispatcher container, then restart the agent container to begin serving.

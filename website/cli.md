@@ -20,7 +20,7 @@ current_page: /cli
 : Output results as JSON. Applies to `run`, `ping`, and `list-agents`.
 
 `--username <name>`
-: Username to include in the request context. Defaults to `$USER`. Advisory — forwarded to auth hooks and scripts but not verified by ctrl-exec.
+: Username to include in the request context. Defaults to `$USER`. Advisory — forwarded to auth hooks and scripts but not verified by the dispatcher.
 
 `--token <token>`
 : Auth token to include in the request context. Defaults to `$ENVEXEC_TOKEN` environment variable if set. Prefer passing via the environment to prevent the value appearing in `ps` output.
@@ -134,7 +134,7 @@ ced deny <reqid>
 Approves or denies a pending pairing request by ID. Used from a separate terminal while `pairing-mode` is running, or in automated pairing workflows.
 
 `--lookup-by`
-: How dispatch resolves this agent — by its registered hostname (default) or by the IP recorded at pairing. Use `ip` when the agent-reported hostname does not resolve from the control host.
+: How dispatch resolves this agent — by its registered hostname (default) or by the IP recorded at pairing. Use `ip` when the agent-reported hostname does not resolve from the dispatcher host.
 
 `--agent-port <n>`
 : The agent's operational port (default 7443), recorded so dispatch reaches it without a per-command port.
@@ -193,7 +193,7 @@ Initialises the CA. One-time operation on a new ctrl-exec installation. Writes `
 sudo ced setup-ctrl-exec
 ```
 
-Generates the ctrl-exec's own TLS certificate signed by the CA. Run once after `setup-ca`. Also required on a secondary ctrl-exec in a redundant HA setup.
+Generates the dispatcher's own TLS certificate signed by the CA. Run once after `setup-ca`. Also required on a secondary dispatcher in a redundant HA setup.
 
 # rotate-cert
 
@@ -201,7 +201,7 @@ Generates the ctrl-exec's own TLS certificate signed by the CA. Run once after `
 sudo ced rotate-cert
 ```
 
-Generates a new ctrl-exec certificate, broadcasts the new serial to all registered agents, and tracks per-agent confirmation in the registry. For use in scheduled certificate rotation or after a certificate compromise.
+Generates a new dispatcher certificate, broadcasts the new serial to all registered agents, and tracks per-agent confirmation in the registry. For use in scheduled certificate rotation or after a certificate compromise.
 
 The overlap window (`cert_overlap_days`, default 30 days) is the time allowed for offline agents to receive the update before they are marked stale.
 

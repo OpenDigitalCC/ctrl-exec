@@ -91,17 +91,17 @@ exposes exactly the scripts the operator has allowed. Nothing else is reachable.
   or credential.
 - The auth hook is the policy engine for who is authorised to call a permitted
   script, with what token, with what arguments. It runs after the allowlist
-  check. Both the ctrl-exec and the agent can run independent hooks -
+  check. Both the dispatcher and the agent can run independent hooks -
   operator-written, operator-maintained, enforcing any access model (token,
   user, script pattern, argument content, source IP). The two layers are
   complementary: the allowlist restricts the available surface; the hook
   controls access to that surface.
-- Token forwarding through the pipeline means each hop (ctrl-exec hook, agent
+- Token forwarding through the pipeline means each hop (dispatcher hook, agent
   hook, script itself) can independently verify that a token is still valid for
-  the stated purpose - ctrl-exec does not assume its own check is the last word
+  the stated purpose - the dispatcher does not assume its own check is the last word
 - Structured syslog on both sides means every operation is auditable with a
   correlated request ID
-- No persistent agent on the ctrl-exec side - the CLI is stateless; the API
+- No persistent agent on the dispatcher side - the CLI is stateless; the API
   server is optional
 - Pairing is a deliberate one-time ceremony - the operator reviews and approves
   each agent before it joins the fleet
@@ -124,7 +124,7 @@ Fully functional for the primary use case. The system has:
 - Script directory restriction (`script_dirs`) for defence against allowlist
   misconfiguration
 - Parallel execution across multiple hosts
-- Auth hook for pluggable access control - both ctrl-exec-side and agent-side
+- Auth hook for pluggable access control - both dispatcher-side and agent-side
 - Token and username forwarding through the full execution pipeline to scripts
 - Full request context piped as JSON to script stdin for downstream inspection
 - Automatic cert renewal over the live mTLS connection - no operator involvement
@@ -136,7 +136,7 @@ Fully functional for the primary use case. The system has:
 - Agent capability discovery
 - Interactive pairing mode with approve/deny prompt; non-interactive via
   separate `approve`/`deny` commands
-- Unpairing (`ctrl-exec unpair`) for decommissioning agents
+- Unpairing (`ced unpair`) for decommissioning agents
 - Structured syslog throughout with correlated request IDs
 - Systemd service units for both agent and API server
 - Installer for Debian/Ubuntu (apt) and Alpine Linux (apk) with automatic
@@ -327,7 +327,7 @@ strength.
   transports differ mainly in identity.
 - *Identity*: the bridge adds **no** auth policy - it transports identity to
   ctrl-exec's existing auth hook, the single policy point. stdio inherits the
-  operator on the control host and their configured ctrl-exec credentials; HTTP
+  operator on the dispatcher host and their configured ctrl-exec credentials; HTTP
   authenticates the MCP client and maps it to a ctrl-exec `username` + `token`
   forwarded to `/run`. Scope is MCP **tools only** - no resources, prompts, or
   sampling in v1.

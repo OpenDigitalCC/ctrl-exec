@@ -25,7 +25,7 @@ Auth hooks
 : Hook implementations for common identity systems: LDAP, OIDC, token registries, time-of-day restrictions. Drop into `/etc/ctrl-exec/hooks/` or `/etc/ctrl-exec-agent/hooks/` and configure `auth_hook` in the relevant conf file.
 
 Management interfaces
-: Browser-based API UIs, client libraries, and OpenAPI collection files. Run on the control host or externally. Consume `ctrl-exec-api`.
+: Browser-based API UIs, client libraries, and OpenAPI collection files. Run on the dispatcher host or externally. Consume `ctrl-exec-api`.
 
 # Using a Plugin
 
@@ -114,7 +114,7 @@ The `arguments` block is a JSON Schema for the named inputs; `argv` maps those n
 
 # Capabilities Advertising
 
-When ctrl-exec calls `/discovery` on an agent, the agent returns its current allowlist as a capabilities response. This is how `ctrl-exec-api`'s `/openapi-live.json` endpoint knows which scripts are available on each agent at any given time. When a script has a schema sidecar, its `schema` and `schema_version` are included in the response (and surfaced in `/openapi-live.json` under `x-ctrl-exec-scripts`).
+When the dispatcher calls `/discovery` on an agent, the agent returns its current allowlist as a capabilities response. This is how `ctrl-exec-api`'s `/openapi-live.json` endpoint knows which scripts are available on each agent at any given time. When a script has a schema sidecar, its `schema` and `schema_version` are included in the response (and surfaced in `/openapi-live.json` under `x-ctrl-exec-scripts`).
 
 A script listed in `scripts.conf` that does not exist or is not executable is reported with `"executable": false`. It will fail at execution time. Run `cea self-check` to validate the allowlist before reloading.
 

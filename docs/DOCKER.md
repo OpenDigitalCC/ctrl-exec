@@ -17,7 +17,7 @@ For bare-metal or VM installation see `INSTALL.md`.
 dispatcher container
 : Runs `ctrl-exec-api` in the foreground. Exposes port 7445 (API) and
   optionally 7444 (pairing, only when pairing mode is active). The CA, registry,
-  and ctrl-exec cert are stored on a named volume so they persist across
+  and dispatcher cert are stored on a named volume so they persist across
   container restarts and image rebuilds.
 
 agent container
@@ -115,7 +115,7 @@ api_bind         = ${API_BIND:-127.0.0.1}
 api_port         = ${API_PORT:-7445}
 api_auth_default = ${API_AUTH_DEFAULT:-deny}
 EOF
-    # Only write read_timeout if set - otherwise ctrl-exec uses its own default.
+    # Only write read_timeout if set - otherwise dispatcher uses its own default.
     if [ -n "$READ_TIMEOUT" ]; then
         echo "read_timeout = $READ_TIMEOUT" >> "$CONF_FILE"
     fi
@@ -131,7 +131,7 @@ if [ ! -f "$CONF_DIR/ca.crt" ]; then
     echo "[entrypoint] First start: initialising CA..."
     ctrl-exec-dispatcher setup-ca
     ctrl-exec-dispatcher setup-ctrl-exec
-    echo "[entrypoint] CA and ctrl-exec cert created."
+    echo "[entrypoint] CA and dispatcher cert created."
 fi
 
 # Copy the example auth hook for reference if not already present.
@@ -146,7 +146,7 @@ fi
 # ctrl-exec-api logs via Sys::Syslog to the local syslog socket, which goes
 # nowhere in a container with no syslog daemon. When SYSLOG_HOST is set, run
 # rsyslog to receive that local syslog and forward it to a remote TLS syslog
-# collector. ctrl-exec uses the 'daemon' facility (daemon.info/warning/err),
+# collector. dispatcher uses the 'daemon' facility (daemon.info/warning/err),
 # so daemon.* is forwarded. Skipped entirely when SYSLOG_HOST is unset.
 if [ -n "$SYSLOG_HOST" ]; then
     SYSLOG_PORT="${SYSLOG_PORT:-6514}"
@@ -230,7 +230,7 @@ next start.
 
 `READ_TIMEOUT`
 : Maximum seconds to wait for a script to complete. Omit to use the
-  ctrl-exec default (60 seconds).
+  dispatcher default (60 seconds).
 
   ```yaml
   READ_TIMEOUT: 120
@@ -238,7 +238,7 @@ next start.
 
 `SYSLOG_HOST`
 : Hostname of a remote TLS syslog collector. When set, the entrypoint starts
-  rsyslog inside the container and forwards ctrl-exec's logs to it (see
+  rsyslog inside the container and forwards the dispatcher's logs to it (see
   *Remote syslog forwarding* below). Unset by default — the container logs
   only locally and rsyslog is not started.
 
@@ -267,7 +267,7 @@ How it works:
   `SYSLOG_PORT` on start, then launches `rsyslogd` in the background before
   `exec ctrl-exec-api`. `ctrl-exec-api` remains PID 1 and receives signals
   directly; rsyslog is an auxiliary process.
-- ctrl-exec logs on the **`daemon`** facility (`daemon.info`,
+- dispatcher logs on the **`daemon`** facility (`daemon.info`,
   `daemon.warning`, `daemon.err` — see `LOGGING.md`), so the forwarder
   selects `daemon.*`. Operations, security events, and `reqid` correlation
   fields all carry through unchanged in the structured `ACTION=…` lines.
@@ -640,7 +640,7 @@ Wait for the first-start initialisation to complete:
 ```bash
 docker logs dispatcher
 # [entrypoint] First start: initialising CA...
-# [entrypoint] CA and ctrl-exec cert created.
+# [entrypoint] CA and dispatcher cert created.
 # [entrypoint] Starting ctrl-exec-api...
 ```
 
@@ -735,7 +735,7 @@ starts.
 
 ## Encrypted Credentials
 
-Container volumes hold the CA key, ctrl-exec cert, and agent cert. For
+Container volumes hold the CA key, dispatcher cert, and agent cert. For
 production deployments these should be protected at rest.
 
 ### Docker secrets
@@ -776,7 +776,7 @@ key management.
 
 At minimum, ensure:
 
-- The host running the ctrl-exec container has restricted access
+- The host running the dispatcher container has restricted access
 - The `dispatcher-data` volume is not world-readable
 - The CA key is backed up to encrypted offline storage immediately after
   first-start initialisation
@@ -890,5 +890,5 @@ docker compose up -d dispatcher
 # Volumes are reattached - CA and registry are intact
 ```
 
-If a volume is deleted (e.g. `docker compose down -v`), the ctrl-exec loses
+If a volume is deleted (e.g. `docker compose down -v`), the dispatcher loses
 its CA and all agents must be re-paired. The CA backup covers this case.

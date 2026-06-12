@@ -49,9 +49,9 @@ To change certificate lifetime, update `cert_days` in `ctrl-exec.conf`. Existing
 
 The revocation list is checked on every incoming mTLS connection before any request is processed.
 
-## Revoking the ctrl-exec certificate
+## Revoking the dispatcher certificate
 
-If the ctrl-exec certificate is compromised or needs replacement:
+If the dispatcher certificate is compromised or needs replacement:
 
 1. Run `ced rotate-cert` to generate a new certificate and broadcast the new serial to all agents.
 2. Add the old serial to `revoked-serials` on each agent if you need to prevent any use of the old certificate.
@@ -60,7 +60,7 @@ If the ctrl-exec certificate is compromised or needs replacement:
 
 If the CA key is suspected compromised:
 
-1. Take ctrl-exec offline immediately:
+1. Take the dispatcher offline immediately:
    ```bash
    sudo systemctl stop ctrl-exec-api
    ```
@@ -76,7 +76,7 @@ If the CA key is suspected compromised:
    sudo ced setup-ctrl-exec
    ```
 
-4. Distribute the new CA certificate to all agents. This cannot be done via ctrl-exec — the agents no longer trust the new ctrl-exec certificate. Use out-of-band tooling to push `/etc/ctrl-exec/ca.crt` to `/etc/ctrl-exec-agent/ca.crt` on each agent.
+4. Distribute the new CA certificate to all agents. This cannot be done via the dispatcher — the agents no longer trust the new dispatcher certificate. Use out-of-band tooling to push `/etc/ctrl-exec/ca.crt` to `/etc/ctrl-exec-agent/ca.crt` on each agent.
 
 5. Re-pair all agents.
 
@@ -88,7 +88,7 @@ Use `ENVEXEC_ARGS_JSON` for argument inspection, not `ENVEXEC_ARGS`
 : `ENVEXEC_ARGS` is space-joined and ambiguous for arguments containing spaces or newlines. Using it for argument policy decisions can be bypassed with a carefully crafted argument.
 
 Do not log environment variables wholesale
-: Tokens are never logged by ctrl-exec or the agent. Hooks that log `env` or `printenv` output will write tokens to the audit log. Log only specific fields.
+: Tokens are never logged by the dispatcher or the agent. Hooks that log `env` or `printenv` output will write tokens to the audit log. Log only specific fields.
 
 Pass tokens via the environment, not `--token`
 : ```bash
@@ -97,7 +97,7 @@ Pass tokens via the environment, not `--token`
   Using `--token` on the command line exposes the value in `ps` output.
 
 Validate usernames only via tokens or external authentication
-: `ENVEXEC_USERNAME` is caller-supplied and not verified by ctrl-exec. Treat it as advisory metadata, not a verified identity.
+: `ENVEXEC_USERNAME` is caller-supplied and not verified by the dispatcher. Treat it as advisory metadata, not a verified identity.
 
 Use syslog for audit logging from hooks
 : Hook stdout and stderr are discarded. Write audit events to syslog:
