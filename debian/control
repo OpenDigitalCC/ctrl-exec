@@ -5,6 +5,7 @@ Maintainer: OpenDigital CC <sjm@opendigital.cc>
 Build-Depends:
  debhelper-compat (= 13),
  perl,
+ python3,
 Standards-Version: 4.7.2
 Homepage: https://github.com/OpenDigitalCC/ctrl-exec
 Rules-Requires-Root: no

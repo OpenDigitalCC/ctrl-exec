@@ -463,130 +463,14 @@ done
 
 info "Generating CycloneDX SBOM..."
 
-TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-SERIAL="urn:uuid:$(python3 -c "import uuid; print(uuid.uuid4())")"
-
-SOURCE_COMPONENTS=$(python3 - "$STAGE" "$VERSION" <<'PYEOF'
-import json, sys, os, hashlib
-
-stage, version = sys.argv[1], sys.argv[2]
-components = []
-
-def sha256(path):
-    h = hashlib.sha256()
-    with open(path, 'rb') as fh:
-        for chunk in iter(lambda: fh.read(65536), b''):
-            h.update(chunk)
-    return h.hexdigest()
-
-bin_dir = os.path.join(stage, 'bin')
-if os.path.isdir(bin_dir):
-    for name in sorted(os.listdir(bin_dir)):
-        path = os.path.join(bin_dir, name)
-        if os.path.isfile(path):
-            components.append({
-                'type': 'file', 'name': name, 'version': version,
-                'hashes': [{'alg': 'SHA-256', 'content': sha256(path)}],
-                'licenses': [{'license': {'id': 'AGPL-3.0-only'}}],
-                'purl': f'pkg:generic/opendigital/{name}@{version}'
-            })
-
-lib_dir = os.path.join(stage, 'lib')
-if os.path.isdir(lib_dir):
-    for root, dirs, files in os.walk(lib_dir):
-        dirs.sort()
-        for fname in sorted(files):
-            path = os.path.join(root, fname)
-            if fname.endswith('.pm'):
-                rel = os.path.relpath(path, lib_dir)
-                name = rel.replace(os.sep, '::').removesuffix('.pm')
-                ctype = 'library'
-            else:
-                name = fname
-                ctype = 'file'
-            components.append({
-                'type': ctype, 'name': name, 'version': version,
-                'hashes': [{'alg': 'SHA-256', 'content': sha256(path)}],
-                'licenses': [{'license': {'id': 'AGPL-3.0-only'}}],
-                'purl': f'pkg:generic/opendigital/{name}@{version}'
-            })
-
-print(json.dumps(components))
-PYEOF
-)
-
-DEPS_JSON=$(python3 -c "
-import json
-deps = [
-    {
-        'type': 'library', 'name': 'IO::Socket::SSL', 'version': 'unknown',
-        'description': 'TLS sockets. Debian: libio-socket-ssl-perl, Alpine: perl-io-socket-ssl',
-        'externalReferences': [
-            {'type': 'distribution', 'url': 'https://packages.debian.org/trixie/libio-socket-ssl-perl'},
-            {'type': 'distribution', 'url': 'https://pkgs.alpinelinux.org/package/edge/main/x86_64/perl-io-socket-ssl'},
-        ]
-    },
-    {
-        'type': 'library', 'name': 'JSON', 'version': 'unknown',
-        'description': 'JSON encode/decode. Debian: libjson-perl, Alpine: perl-json',
-        'externalReferences': [
-            {'type': 'distribution', 'url': 'https://packages.debian.org/trixie/libjson-perl'},
-            {'type': 'distribution', 'url': 'https://pkgs.alpinelinux.org/package/edge/main/x86_64/perl-json'},
-        ]
-    },
-    {
-        'type': 'library', 'name': 'LWP::UserAgent', 'version': 'unknown',
-        'description': 'HTTP client. Debian: libwww-perl, Alpine: perl-libwww',
-        'externalReferences': [
-            {'type': 'distribution', 'url': 'https://packages.debian.org/trixie/libwww-perl'},
-            {'type': 'distribution', 'url': 'https://pkgs.alpinelinux.org/package/edge/main/x86_64/perl-libwww'},
-        ]
-    },
-    {
-        'type': 'library', 'name': 'perl', 'version': 'unknown',
-        'description': 'Perl runtime and core modules. Debian: perl, Alpine: perl',
-        'externalReferences': [
-            {'type': 'distribution', 'url': 'https://packages.debian.org/trixie/perl'},
-            {'type': 'distribution', 'url': 'https://pkgs.alpinelinux.org/package/edge/main/x86_64/perl'},
-        ]
-    },
-    {
-        'type': 'library', 'name': 'openssl', 'version': 'unknown',
-        'description': 'Key, CSR, and certificate operations. Debian: openssl, Alpine: openssl',
-        'externalReferences': [
-            {'type': 'distribution', 'url': 'https://packages.debian.org/trixie/openssl'},
-            {'type': 'distribution', 'url': 'https://pkgs.alpinelinux.org/package/edge/main/x86_64/openssl'},
-        ]
-    },
-]
-print(json.dumps(deps, indent=2))
-")
-
-python3 -c "
-import json, sys
-source = json.loads(sys.argv[1])
-deps   = json.loads(sys.argv[2])
-sbom = {
-    'bomFormat': 'CycloneDX', 'specVersion': '1.6',
-    'serialNumber': '$SERIAL', 'version': 1,
-    'metadata': {
-        'timestamp': '$TIMESTAMP',
-        'tools': [{'name': 'make-release.sh', 'version': '$VERSION'}],
-        'component': {
-            'type': 'application',
-            'name': 'ctrl-exec',
-            'version': '$VERSION',
-            'description': 'Perl mTLS remote script execution system',
-            'licenses': [{'license': {'id': 'AGPL-3.0-only'}}],
-            'externalReferences': [
-                {'type': 'vcs', 'url': 'https://github.com/OpenDigitalCC/ctrl-exec'},
-            ]
-        }
-    },
-    'components': source + deps
-}
-print(json.dumps(sbom, indent=2))
-" "$SOURCE_COMPONENTS" "$DEPS_JSON" > sbom.json
+# The full-project SBOM travels in the tarball (and is committed at the repo
+# root). Per-package SBOMs are generated for each .deb by debian/rules during the
+# package build; both use tools/generate-sbom.py, so the two never drift. Read
+# from the staged, version-stamped tree so component hashes match the tarball.
+python3 tools/generate-sbom.py \
+    --scope full --version "$VERSION" \
+    --bin-dir "$STAGE/bin" --lib-dir "$STAGE/lib" \
+    --out sbom.json
 
 info "sbom.json written ($(wc -l < sbom.json) lines)"
 cp sbom.json "$STAGE/sbom.json"
