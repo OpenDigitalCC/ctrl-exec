@@ -568,6 +568,13 @@ install_agent() {
     chown root:"$AGENT_GROUP" "$SCRIPTS_DIR/ctrl-exec-demonstrator.sh"
     info "Demonstrator script installed at $SCRIPTS_DIR/ctrl-exec-demonstrator.sh"
 
+    # Install cert-rotation script - enable in scripts.conf on agents whose
+    # dispatcher rotates its certificate (seamless add-then-remove); disabled by
+    # default.
+    safe_install 750 "$SOURCE_DIR/bin/update-ctrl-exec-serial" "$SCRIPTS_DIR/update-ctrl-exec-serial"
+    chown root:"$AGENT_GROUP" "$SCRIPTS_DIR/update-ctrl-exec-serial"
+    info "Cert-rotation script installed at $SCRIPTS_DIR/update-ctrl-exec-serial"
+
     install_service_unit "$AGENT_SERVICE"
 
     if [[ "$PKG_MGR" == openwrt* ]]; then
