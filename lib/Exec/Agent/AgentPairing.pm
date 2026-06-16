@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use File::Temp qw(tempfile tempdir);
 use File::Basename qw(dirname);
+use File::Path qw(make_path);
 use Carp qw(croak);
 use Exec::Log qw();
 
@@ -73,18 +74,33 @@ sub store_certs {
     my $ca_pem            = $opts{ca_pem}             or croak "ca_pem required";
     my $key_pem           = $opts{key_pem}            or croak "key_pem required";
     my $dispatcher_serial = $opts{dispatcher_serial}  // '';
+    my $dispatcher_id     = $opts{dispatcher_id}      // '';
     my $cert_dir          = $opts{cert_dir}            // '/etc/ctrl-exec-agent';
     my $group             = $opts{group}               // 'ctrl-exec-agent';
+    # The trusted-dispatcher map lives in the agent-writable state directory, not
+    # the root-owned config dir, so the agent can update it during cert rotation
+    # (over the run channel, as the service user) without re-pairing. Secrets
+    # (key/cert/CA) stay in the root-owned config dir.
+    my $trusted_path      = $opts{trusted_path}        // '/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers';
 
     _write_file("$cert_dir/agent.crt", $cert_pem, 0640);
     _write_file("$cert_dir/agent.key", $key_pem,  0640);
     _write_file("$cert_dir/ca.crt",   $ca_pem,   0644);
 
-    # Store dispatcher cert serial for capabilities access control.
-    # The agent uses this to restrict /capabilities to the genuine ctrl-exec
-    # only, preventing lateral reconnaissance from a compromised agent peer.
+    # Record the approving dispatcher in the trusted-dispatcher map, keyed by its
+    # cert serial and carrying its stable identity. Appended, not overwritten, so
+    # an agent already paired with one dispatcher keeps trusting it when a second
+    # one pairs. The map gates /run, /ping, /result and /capabilities and drives
+    # per-call attribution. See load_trusted_dispatchers / dispatcher_trusted.
     if (length $dispatcher_serial) {
-        _write_file("$cert_dir/ctrl-exec-serial", $dispatcher_serial . "\n", 0644);
+        # Pairing runs as root; make sure the state directory exists and is owned
+        # by the service user so later in-place rewrites (cert rotation) succeed.
+        _ensure_owned_dir(dirname($trusted_path), $group);
+        add_trusted_dispatcher(
+            path   => $trusted_path,
+            serial => $dispatcher_serial,
+            id     => (length $dispatcher_id ? $dispatcher_id : $dispatcher_serial),
+        );
     }
 
     # Set group ownership so the service user can read the certs
@@ -93,7 +109,7 @@ sub store_certs {
         chown 0, $gid, "$cert_dir/agent.crt",
                        "$cert_dir/agent.key",
                        "$cert_dir/ca.crt";
-        # ctrl-exec-serial is world-readable (0644) - no group ownership needed
+        # ctrl-exec-dispatchers is world-readable (0644) - no group ownership needed
     }
     else {
         warn "store_certs: group '$group' not found - set ownership manually\n";
@@ -258,6 +274,7 @@ sub await_pairing_result {
             cert_pem          => $data->{cert},
             ca_pem            => $data->{ca},
             dispatcher_serial => $data->{dispatcher_serial} // '',
+            dispatcher_id     => $data->{dispatcher_id}     // '',
         };
     }
 
@@ -347,30 +364,128 @@ sub request_pairing {
             cert_pem          => $data->{cert},
             ca_pem            => $data->{ca},
             dispatcher_serial => $data->{dispatcher_serial} // '',
+            dispatcher_id     => $data->{dispatcher_id}     // '',
         };
     }
 
     return { ok => 0, error => $data->{reason} // 'denied' };
 }
 
-# Load the stored dispatcher cert serial from file.
-# Returns lowercase hex string, or empty string if file absent or unreadable.
-# File contains a single line written by store_certs at pairing time.
-sub load_dispatcher_serial {
+# Validate a dispatcher identity label - the stable per-dispatcher key used for
+# permission and attribution. Must start with an alphanumeric and contain only
+# letters, digits, dot, hyphen, underscore, capped at 64 chars, so it is safe in
+# a syslog line, an env var value, a map-file token, and an async run-owner tag.
+# Serials rotate; this identity does not, so per-dispatcher policy keys on it.
+sub valid_dispatcher_id {
+    my ($id) = @_;
+    return defined $id && $id =~ /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/ ? 1 : 0;
+}
+
+# Load the trusted-dispatcher map: the set of dispatcher cert serials this agent
+# accepts, each mapped to that dispatcher's stable identity. Tolerates an absent
+# file (returns {}). One entry per line: "<serial> <id>". The serial is
+# normalised to lowercase hex (serial_to_hex) so a decimal serial off the wire
+# matches a hex map entry; the id is validated. Lines beginning with # are
+# comments; malformed lines are skipped.
+#
+# Returns hashref: { '<hex-serial>' => '<id>', ... }
+sub load_trusted_dispatchers {
     my (%opts) = @_;
     my $path = $opts{path} or croak "path required";
 
-    return '' unless -f $path;
+    my %trusted;
+    return \%trusted unless -f $path;
 
     open my $fh, '<', $path
-        or do { warn "Cannot read dispatcher serial '$path': $!\n"; return ''; };
-    my $line = <$fh>;
+        or do { warn "Cannot read trusted dispatchers '$path': $!\n"; return \%trusted; };
+    while (my $line = <$fh>) {
+        chomp $line;
+        $line =~ s/#.*$//;        # strip comments
+        $line =~ s/^\s+|\s+$//g;  # strip surrounding whitespace
+        next unless length $line;
+        my ($serial, $id) = split /\s+/, $line, 2;
+        $serial = serial_to_hex($serial // '');
+        next unless length $serial;
+        next unless defined $id && valid_dispatcher_id($id);
+        $trusted{$serial} = $id;
+    }
     close $fh;
 
-    return '' unless defined $line;
-    $line =~ s/\s+//g;
-    $line = lc $line;
-    return $line =~ /^[0-9a-f]+$/ ? $line : '';
+    return \%trusted;
+}
+
+# Resolve a connecting peer's cert serial to its trusted dispatcher identity.
+# Returns the id string when the serial is trusted, or undef when it is not (or
+# when either input is empty). Normalises the serial the same way the loader
+# does, so a decimal serial from IO::Socket::SSL matches a hex map entry.
+sub dispatcher_trusted {
+    my ($peer_serial, $trusted) = @_;
+    return undef unless ref $trusted eq 'HASH';
+    my $hex = serial_to_hex($peer_serial // '');
+    return undef unless length $hex;
+    my $id = $trusted->{$hex};
+    return (defined $id && length $id) ? $id : undef;
+}
+
+# Add or update one trusted-dispatcher entry, preserving every other entry.
+# This is the append-enrolment primitive: pairing a second dispatcher adds its
+# serial without unpairing the first; re-pairing the same dispatcher (new serial
+# after rotation/re-key) adds the new serial. Writes the file atomically. Dies
+# on an unusable serial or an invalid id.
+#
+# Required opts:
+#   path   => $str
+#   serial => $str   (any form accepted by serial_to_hex)
+#   id     => $str   (must satisfy valid_dispatcher_id)
+sub add_trusted_dispatcher {
+    my (%opts) = @_;
+    my $path = $opts{path} or croak "path required";
+    my $hex  = serial_to_hex($opts{serial} // '');
+    croak "invalid dispatcher serial" unless length $hex;
+    my $id   = $opts{id};
+    croak "invalid dispatcher id '" . ($id // '') . "'"
+        unless valid_dispatcher_id($id);
+
+    my $trusted = load_trusted_dispatchers(path => $path);
+    $trusted->{$hex} = $id;
+
+    my $content = "# ctrl-exec trusted dispatchers: <serial> <id>, one per line.\n"
+                . "# Managed by pairing - do not edit by hand.\n";
+    for my $s (sort keys %$trusted) {
+        $content .= "$s $trusted->{$s}\n";
+    }
+    _write_file($path, $content, 0644);
+    return $trusted;
+}
+
+# Remove one trusted-dispatcher entry by serial, preserving every other entry.
+# This is the "remove" half of add-then-remove cert rotation: once agents have
+# adopted a dispatcher's new serial and the overlap window has passed, the old
+# serial is removed so the retired cert is no longer trusted. A no-op (returns 0)
+# if the serial is absent or the file does not exist; returns 1 when an entry was
+# removed. Writes atomically.
+#
+# Required opts:
+#   path   => $str
+#   serial => $str   (any form accepted by serial_to_hex)
+sub remove_trusted_dispatcher {
+    my (%opts) = @_;
+    my $path = $opts{path} or croak "path required";
+    my $hex  = serial_to_hex($opts{serial} // '');
+    croak "invalid dispatcher serial" unless length $hex;
+
+    return 0 unless -f $path;
+    my $trusted = load_trusted_dispatchers(path => $path);
+    return 0 unless exists $trusted->{$hex};
+    delete $trusted->{$hex};
+
+    my $content = "# ctrl-exec trusted dispatchers: <serial> <id>, one per line.\n"
+                . "# Managed by pairing - do not edit by hand.\n";
+    for my $s (sort keys %$trusted) {
+        $content .= "$s $trusted->{$s}\n";
+    }
+    _write_file($path, $content, 0644);
+    return 1;
 }
 
 # Load the revoked serials file into a hashref keyed by lowercase hex serial.
@@ -480,6 +595,21 @@ sub _run_or_die {
     my @cmd = @_;
     system(@cmd) == 0
         or croak "Command failed (@cmd): $?";
+}
+
+# Ensure a directory exists and, when run as root with the service account
+# present, is owned by it (0750) so the non-root agent can rewrite files in it
+# later. Best-effort: a missing user/group or a failed chown (e.g. non-root in
+# tests) is left to the caller's packaging to settle, not fatal here.
+sub _ensure_owned_dir {
+    my ($dir, $account) = @_;
+    make_path($dir) unless -d $dir;
+    my $uid = getpwnam($account);
+    my $gid = getgrnam($account);
+    if (defined $uid || defined $gid) {
+        chown((defined $uid ? $uid : -1), (defined $gid ? $gid : -1), $dir);
+    }
+    chmod 0750, $dir;
 }
 
 sub _slurp {

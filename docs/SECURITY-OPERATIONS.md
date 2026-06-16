@@ -149,19 +149,32 @@ the API directly - requires a lookup in the hook's own store).
 
 ## `update-ctrl-exec-serial` Security
 
-The `update-ctrl-exec-serial` script validates that its argument is a
-lowercase hex string of 8–40 characters before writing to
-`/etc/ctrl-exec-agent/ctrl-exec-serial`. Arguments that fail the hex pattern
-check or fall outside the length range are rejected with a non-zero exit and
-an error message; no file is written.
+The `update-ctrl-exec-serial` script validates that its serial argument is a
+hex string of 8–40 characters (and, when adding, that the dispatcher id is a
+well-formed token) before editing the trusted-dispatcher map at
+`/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers`. Arguments that fail the hex
+pattern check or fall outside the length range are rejected with a non-zero exit
+and an error message; the map is not changed.
 
-Despite this validation, an API caller with access to this script can still
-write a plausible-looking but incorrect hex serial, causing all subsequent
-`/run` and `/ping` operations to return 403 until the correct serial is
-restored. The auth hook should restrict invocation of `update-ctrl-exec-serial`
+Despite this validation, an API caller with access to this script can still add
+or remove a plausible-looking serial in the map. A serial is inert without a
+CA-signed certificate bearing it, so the CA trust model bounds the risk; even
+so, the auth hook should restrict invocation of `update-ctrl-exec-serial`
 to privileged tokens only. A standard operator token should not be able to call
 this script. Use a separate token issued to the dispatcher's own rotation
 machinery, and block it for all other callers in the hook.
+
+Seamless rotation (0.9.0)
+: As of 0.9.0 the agent keys dispatcher trust on the trusted-dispatcher map at
+  `/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers`, in the agent-writable state
+  directory. Cert rotation updates each reachable agent's map automatically over
+  the run channel, with no re-pairing, via add-then-remove: the broadcast adds
+  the new serial (against the stable `dispatcher_id`), the old serial stays
+  trusted through the overlap window, and after the window the dispatcher
+  broadcasts removal of the old serial (`retire_previous_serial`, logged as
+  `serial-retire`). Only an agent that was *offline* during the broadcast misses
+  the update and needs re-pairing once the overlap window expires. The script's
+  behaviour and its token-restriction guidance are unchanged.
 
 ### Call rate limiting per agent
 
@@ -282,8 +295,11 @@ a monitoring component.
 The complete alert pattern reference — covering security events, execution
 failures, rotation events, and configuration problems — is in LOGGING.md.
 
-Key security-relevant actions to alert on: `rate-block`, `serial-reject`,
-`revoked-cert`, `ip-block`, `deny` (repeated, same PEER). Key rotation
+Key security-relevant actions to alert on: `rate-block`,
+`serial-reject` (carries `PEER_SERIAL`), `result-deny` (REASON=not-owner,
+a dispatcher requesting another dispatcher's result), `revoked-cert`,
+`ip-block`, `deny` (repeated, same PEER). Run/ping/capabilities/result actions
+carry `DISPATCHER=<id>` for per-dispatcher attribution. Key rotation
 signals: `serial-stale`, `serial-broadcast-fail` (repeated for same agent),
 `cert-rotation-fail`. These are documented in full in LOGGING.md.
 
@@ -314,7 +330,10 @@ Request result access
   identity. Reqid format provides limited enumeration resistance (see reqid
   entropy below). Sensitive results should not be left in the result store;
   design scripts to minimise what they return via stdout if the results will be
-  stored.
+  stored. This limitation applies to the dispatcher-side API result store. The
+  agent-side async result store is different: as of 0.9.0 it is partitioned per
+  owner and the agent's `GET /result/<reqid>` is owner-gated, returning
+  `404 unknown` to any dispatcher other than the one that submitted the run.
 
 Rate state persistence
 : Rate limit state is held in memory and cleared on SIGHUP or agent restart.

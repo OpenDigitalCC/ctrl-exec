@@ -51,11 +51,17 @@ Each test file corresponds to one module:
 | `t/renewal.t` | `Exec::Engine` (cert renewal logic) |
 | `t/rotation.t` | `Exec::Rotation` |
 | `t/serial-normalisation.t` | `Exec::Agent::AgentPairing::serial_to_hex` |
+| `t/trusted-dispatchers.t` | Agent trusted-dispatcher map (`valid_dispatcher_id`, `load_trusted_dispatchers`, `dispatcher_trusted`, `add_trusted_dispatcher`) |
 | `t/update-ctrl-exec-serial.t` | `bin/update-ctrl-exec-serial` |
 
 The `ctrl-exec-cli.t` and `engine.t` files cover CLI argument parsing and
 dispatch logic respectively. `lock-holder.pl` is a test helper used by
 `lock.t` to hold a lock in an independent process - it is not a test file.
+
+`t/auth.t` and `t/async-runner.t` also exercise the multi-dispatcher
+identity work: `auth.t` covers the dispatcher-identity fields passed to the
+auth hook, and `async-runner.t` covers owner-partitioned result storage and
+the owner gate on `/result`.
 
 
 ## Integration Tests

@@ -46,6 +46,10 @@ my $DEFAULT_TTL      = 86400;   # seconds; results older than this are purged
 #   script      => $name     (allowlist name; the concurrency key and record tag)
 #   args        => \@args     (default [])
 #   context     => \%context  (JSON piped to the script's stdin)
+#   owner       => $id        (submitting dispatcher's stable identity; the run
+#                              is stored in this owner's namespace and the
+#                              /result owner-gate enforces it. Must be a safe
+#                              token; empty stores flat. See _record_path)
 #   runs_dir    => $path      (default /var/lib/ctrl-exec-agent/runs)
 #   stdin_timeout => $sec     (passed to Runner::run_script)
 #
@@ -62,8 +66,15 @@ sub submit {
     my $args     = $opts{args}     // [];
     my $context  = $opts{context};
     my $script   = $opts{script}   // '';
+    my $owner    = $opts{owner}    // '';
     my $runs_dir = $opts{runs_dir} // $DEFAULT_RUNS_DIR;
     my $timeout  = $opts{stdin_timeout};
+
+    # The owner (submitting dispatcher's identity) becomes a directory component
+    # under which this run is stored, so it must be a safe token. An empty owner
+    # stores flat in $runs_dir (legacy / no-dispatcher callers).
+    croak "invalid owner '$owner'"
+        if length $owner && $owner !~ /^[A-Za-z0-9][A-Za-z0-9._-]*\z/;
 
     make_path($runs_dir) unless -d $runs_dir;
 
@@ -81,10 +92,11 @@ sub submit {
 
     # Record 'running' before spawning so a fetch between spawn and completion
     # sees a pending result rather than a missing one.
-    _write_record($runs_dir, $reqid, {
+    _write_record($runs_dir, $owner, $reqid, {
         reqid   => $reqid,
         status  => 'running',
         script  => $script,
+        owner   => $owner,
         started => $started,
     });
 
@@ -92,10 +104,11 @@ sub submit {
         my $result = Exec::Agent::Runner::run_script(
             $script_path, $args, $context, $timeout,
         );
-        _write_record($runs_dir, $reqid, {
+        _write_record($runs_dir, $owner, $reqid, {
             reqid    => $reqid,
             status   => 'done',
             script   => $script,
+            owner    => $owner,
             started  => $started,
             finished => _now(),
             exit     => $result->{exit},
@@ -110,32 +123,69 @@ sub submit {
     return $spawned ? { ok => 1 } : { ok => 0, reason => 'error' };
 }
 
-# Return the stored result record for a reqid, or undef if none.
+# Return the stored result record for a reqid, or undef if none. The store is
+# partitioned by owner: a run submitted by dispatcher $owner lives under its own
+# subdirectory, so a lookup scoped to $owner can only ever see that dispatcher's
+# runs. This makes cross-dispatcher isolation structural - a different
+# dispatcher's reqid is simply not present in this owner's namespace - rather
+# than a field check after the fact. An empty/omitted $owner reads the flat
+# layout (legacy / no-dispatcher callers).
 sub result {
-    my ($reqid, $runs_dir) = @_;
+    my ($reqid, $runs_dir, $owner) = @_;
     $runs_dir //= $DEFAULT_RUNS_DIR;
-    my $file = "$runs_dir/$reqid.json";
+    my $file = _record_path($runs_dir, $owner, $reqid);
     return undef unless -f $file;
     return eval { decode_json(_slurp($file)) };
 }
 
+# True if a run record belongs to the dispatcher whose stable identity is $id.
+# The /result owner-gate uses this so a run's output is disclosed only to the
+# dispatcher that submitted it. Fails closed: a record carrying no owner (length
+# 0) is owned by nobody and matches no dispatcher. Records are never written
+# without an owner under the multi-dispatcher model, so this only rejects
+# malformed or pre-upgrade records.
+sub owned_by {
+    my ($record, $id) = @_;
+    return 0 unless ref $record eq 'HASH';
+    my $owner = $record->{owner};
+    return 0 unless defined $owner && length $owner;
+    return 0 unless defined $id    && length $id;
+    return $owner eq $id ? 1 : 0;
+}
+
 # Delete result records older than $ttl seconds (by mtime). Returns the count
-# removed. Safe to call when the dir does not exist.
+# removed. Safe to call when the dir does not exist. Records live either flat in
+# $runs_dir (legacy / no-owner) or one level down in a per-owner subdirectory;
+# both are swept. The .locks dir is skipped.
 sub purge_expired {
     my ($runs_dir, $ttl) = @_;
     $runs_dir //= $DEFAULT_RUNS_DIR;
     $ttl      //= $DEFAULT_TTL;
     return 0 unless -d $runs_dir;
     my $cutoff = time() - $ttl;
-    my $removed = 0;
-    opendir my $dh, $runs_dir or return 0;
-    while (my $entry = readdir $dh) {
-        next unless $entry =~ /^[A-Za-z0-9_-]+\.json\z/;
-        my $path = "$runs_dir/$entry";
-        next unless (stat $path)[9] < $cutoff;
-        $removed++ if unlink $path;
+
+    # The run store: $runs_dir itself (flat records) plus each per-owner subdir.
+    my @dirs = ($runs_dir);
+    if (opendir my $top, $runs_dir) {
+        while (my $e = readdir $top) {
+            next if $e eq '.' || $e eq '..' || $e eq '.locks';
+            my $sub = "$runs_dir/$e";
+            push @dirs, $sub if -d $sub;
+        }
+        closedir $top;
     }
-    closedir $dh;
+
+    my $removed = 0;
+    for my $dir (@dirs) {
+        opendir my $dh, $dir or next;
+        while (my $entry = readdir $dh) {
+            next unless $entry =~ /^[A-Za-z0-9_-]+\.json\z/;
+            my $path = "$dir/$entry";
+            next unless (stat $path)[9] < $cutoff;
+            $removed++ if unlink $path;
+        }
+        closedir $dh;
+    }
     return $removed;
 }
 
@@ -193,9 +243,19 @@ sub _now {
     return strftime('%Y-%m-%dT%H:%M:%SZ', gmtime);
 }
 
+# Path to a run record, partitioned by owner: "$runs_dir/$owner/$reqid.json"
+# when an owner is given, else flat "$runs_dir/$reqid.json". The owner is
+# validated to a safe token at submit time, so it cannot escape $runs_dir.
+sub _record_path {
+    my ($runs_dir, $owner, $reqid) = @_;
+    return (defined $owner && length $owner)
+        ? "$runs_dir/$owner/$reqid.json"
+        : "$runs_dir/$reqid.json";
+}
+
 sub _write_record {
-    my ($runs_dir, $reqid, $record) = @_;
-    my $path = "$runs_dir/$reqid.json";
+    my ($runs_dir, $owner, $reqid, $record) = @_;
+    my $path = _record_path($runs_dir, $owner, $reqid);
     my $dir  = dirname($path);
     make_path($dir) unless -d $dir;
     my ($fh, $tmp) = tempfile(DIR => $dir, SUFFIX => '.tmp', UNLINK => 0);

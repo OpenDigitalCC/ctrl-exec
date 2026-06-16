@@ -160,4 +160,24 @@ subtest '_effective_port: override beats reported beats default' => sub {
     is Exec::Pairing::_effective_port(undef, 'bad'), 7443, 'invalid reported ignored, default used';
 };
 
+subtest 'resolve_dispatcher_id' => sub {
+    is Exec::Pairing::resolve_dispatcher_id({ dispatcher_id => 'automation' }),
+        'automation', 'explicit dispatcher_id wins';
+
+    # Falls back to the host name when unset (we only assert it is a valid,
+    # non-empty token, not the exact hostname).
+    my $derived = Exec::Pairing::resolve_dispatcher_id({});
+    like $derived, qr/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/,
+        'falls back to a sanitised, valid token when unset';
+
+    is Exec::Pairing::resolve_dispatcher_id({ dispatcher_id => 'has space/slash' }),
+        'has-space-slash', 'disallowed characters become hyphens';
+
+    is Exec::Pairing::resolve_dispatcher_id({ dispatcher_id => '...weird' }),
+        'weird', 'leading non-alphanumerics are stripped';
+
+    is length(Exec::Pairing::resolve_dispatcher_id({ dispatcher_id => 'a' x 200 })),
+        64, 'capped at 64 characters';
+};
+
 done_testing;

@@ -267,6 +267,43 @@ HOOK
     ok !exists $generic->{reason},     'deny_fields: no reason disclosed when on';
 }
 
+# --- dispatcher identity reaches the hook environment ---
+{
+    my $envfile = "$tmpdir/hook-env.out";
+    my $hook = make_hook('dump-env', "env > '$envfile'\nexit 0");
+
+    my $result = Exec::Auth::check(
+        action            => 'run',
+        config            => { auth_hook => $hook },
+        script            => 'backup',
+        dispatcher        => 'automation',
+        dispatcher_serial => 'deadbeef01',
+    );
+    ok $result->{ok}, 'hook authorises and runs';
+
+    my $env = do { local $/; open my $fh, '<', $envfile or die $!; <$fh> };
+    like $env, qr/^ENVEXEC_DISPATCHER=automation$/m,
+        'ENVEXEC_DISPATCHER carries the stable identity';
+    like $env, qr/^ENVEXEC_DISPATCHER_SERIAL=deadbeef01$/m,
+        'ENVEXEC_DISPATCHER_SERIAL carries the cert serial';
+}
+
+# --- dispatcher identity defaults to empty when not supplied ---
+{
+    my $envfile = "$tmpdir/hook-env-empty.out";
+    my $hook = make_hook('dump-env-empty', "env > '$envfile'\nexit 0");
+
+    Exec::Auth::check(
+        action => 'run',
+        config => { auth_hook => $hook },
+        script => 'backup',
+    );
+
+    my $env = do { local $/; open my $fh, '<', $envfile or die $!; <$fh> };
+    like $env, qr/^ENVEXEC_DISPATCHER=$/m,
+        'ENVEXEC_DISPATCHER present but empty when no dispatcher resolved';
+}
+
 # Restore stderr
 open STDERR, '>&', $saved_stderr;
 

@@ -21,14 +21,18 @@
 
 # --- ctrl-exec certificate rotation ---
 #
-# Required for automatic ctrl-exec cert rotation. When the ctrl-exec
-# rotates its certificate, it calls this script on each agent to update
-# the stored ctrl-exec serial and reload the agent configuration.
-# Without this entry, the agent will not receive serial updates and will
-# eventually require manual re-pairing after the overlap window expires.
+# Required for automatic, seamless ctrl-exec cert rotation. When the ctrl-exec
+# rotates its certificate, it calls this script on each agent to add the new
+# cert serial to the agent's trusted-dispatcher map (keyed to the dispatcher's
+# stable identity) and reload, then - after the overlap window - to remove the
+# old serial (add-then-remove). No re-pairing is needed. Without this entry, an
+# agent will not receive serial updates and will require re-pairing after the
+# overlap window expires.
 #
 # The script is installed at /opt/ctrl-exec-scripts/update-ctrl-exec-serial
-# by the agent installer.
+# by the agent installer. It updates the trusted-dispatcher map at
+# /var/lib/ctrl-exec-agent/ctrl-exec-dispatchers (the agent-writable state
+# directory, so the agent can rewrite trusted serials in place during rotation).
 #
 # Uncomment to enable:
 # update-ctrl-exec-serial = /opt/ctrl-exec-scripts/update-ctrl-exec-serial

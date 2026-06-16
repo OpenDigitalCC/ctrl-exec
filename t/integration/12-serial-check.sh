@@ -1,19 +1,21 @@
 #!/bin/bash
 # 12-serial-check.sh
 #
-# Verifies that /run and /ping enforce the ctrl-exec serial check.
+# Verifies that /run and /ping enforce the trusted-dispatcher map check.
 #
-# The agent loads ctrl-exec-serial from /etc/ctrl-exec-agent/ctrl-exec-serial
-# (or the path configured by dispatcher_serial_path). This file holds the
-# hex serial of the legitimate ctrl-exec cert, recorded at pairing time.
+# The agent loads its trusted-dispatcher map from
+# /etc/ctrl-exec-agent/ctrl-exec-dispatchers (or the path configured by
+# trusted_dispatchers_path). Each line maps a dispatcher cert serial to that
+# dispatcher's identity, recorded at pairing time. A connecting cert is accepted
+# only if its serial is a key in the map.
 #
 # Three behaviours to confirm:
-#   1. Normal operation: ping and run succeed when serial matches
-#   2. Serial absent: ping and run return 403 when the file is removed
-#   3. /renew exemption: absent serial does not break cert renewal
+#   1. Normal operation: ping and run succeed when the peer serial is in the map
+#   2. Map absent: ping and run return 403 when the map file is removed
+#   3. /renew exemption: an absent map does not break cert renewal
 #      (covered by manual validation only - no /renew command in the CLI)
 #
-# These tests require SSH access to AGENT1 to move and restore the serial
+# These tests require SSH access to AGENT1 to move and restore the map
 # file and send SIGHUP. Set AGENT_SSH_USER if the agent is not reachable
 # as root via SSH (defaults to root).
 #
@@ -26,8 +28,10 @@ source "${_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/lib.sh"
 require_agents 1
 
 SSH_USER="${AGENT_SSH_USER:-root}"
-SERIAL_FILE="/etc/ctrl-exec-agent/ctrl-exec-serial"
-SERIAL_BAK="/etc/ctrl-exec-agent/ctrl-exec-serial.bak"
+# The trusted-dispatcher map; removing it empties the agent's trust set so every
+# /run, /ping, /result and /capabilities is rejected (serial not in the map).
+SERIAL_FILE="/etc/ctrl-exec-agent/ctrl-exec-dispatchers"
+SERIAL_BAK="/etc/ctrl-exec-agent/ctrl-exec-dispatchers.bak"
 
 # --- helpers ---
 
@@ -87,7 +91,7 @@ trap cleanup EXIT
 
 # ============================================================
 assert_agents_reachable
-describe "Serial check: ping and run succeed with correct serial"
+describe "Trusted-dispatcher map: ping and run succeed when the peer serial is in the map"
 # ============================================================
 
 run_dispatcher ping "$AGENT1" --json
@@ -110,7 +114,7 @@ EXIT=$(json_field "$OUT" "exit")
 
 # ============================================================
 assert_agents_reachable
-describe "Serial check: ping and run return 403 when serial file absent"
+describe "Trusted-dispatcher map: ping and run return 403 when the map file is absent"
 # ============================================================
 
 if ! agent_ssh_available; then
@@ -121,10 +125,10 @@ if ! agent_ssh_available; then
 else
     # Confirm serial file exists before proceeding
     if ! agent_run "[ -f '$SERIAL_FILE' ]"; then
-        skip "Serial absent: ping returns 403" \
-             "ctrl-exec-serial not present on $AGENT1 - re-pair before testing"
-        skip "Serial absent: run returns 403" \
-             "ctrl-exec-serial not present on $AGENT1 - re-pair before testing"
+        skip "Map absent: ping returns 403" \
+             "ctrl-exec-dispatchers not present on $AGENT1 - re-pair before testing"
+        skip "Map absent: run returns 403" \
+             "ctrl-exec-dispatchers not present on $AGENT1 - re-pair before testing"
     else
         # Move the serial file away and reload
         agent_run "mv '$SERIAL_FILE' '$SERIAL_BAK'"

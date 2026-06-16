@@ -711,10 +711,11 @@ Fields
 | --- | --- | --- |
 | ACTION | string | `ping` |
 | PEER | string | IP address of the connecting dispatcher |
+| DISPATCHER | string | Id of the matched trusted dispatcher |
 | REQID | hex | Request ID from the dispatcher |
 
 ```
-ACTION=ping PEER=10.0.0.1 REQID=a1b2c3d4e5f60001
+ACTION=ping PEER=10.0.0.1 DISPATCHER=ctrl-exec-primary REQID=a1b2c3d4e5f60001
 ```
 
 ### run (agent-side)
@@ -733,10 +734,11 @@ Fields
 | SCRIPT | string | Script name from the allowlist |
 | EXIT | integer | Script exit code |
 | PEER | string | IP address of the connecting dispatcher |
+| DISPATCHER | string | Id of the matched trusted dispatcher |
 | REQID | hex | Request ID from the dispatcher |
 
 ```
-ACTION=run SCRIPT=backup EXIT=0 PEER=10.0.0.1 REQID=a1b2c3d4e5f60001
+ACTION=run SCRIPT=backup EXIT=0 PEER=10.0.0.1 DISPATCHER=ctrl-exec-primary REQID=a1b2c3d4e5f60001
 ```
 
 A non-zero `EXIT` value is still logged at INFO priority — the agent
@@ -808,14 +810,40 @@ Fields
 | --- | --- | --- |
 | ACTION | string | `serial-reject` |
 | PEER | string | IP address of the connecting host |
+| PEER_SERIAL | string | Lowercase hex cert serial of the connecting peer |
 | REQID | hex | Request ID, or `(none)` if not yet read from the request body |
 
 ```
-ACTION=serial-reject PEER=10.0.0.1 REQID=(none)
+ACTION=serial-reject PEER=10.0.0.1 PEER_SERIAL=deadbeef REQID=(none)
 ```
 
 This should not occur during normal operation after a complete rotation
 broadcast. Treat as a security signal requiring investigation.
+
+### result-deny
+
+Emitted when a trusted dispatcher requests a `/result` for an async run it
+does not own. The async result store is partitioned by owner
+(`/var/lib/ctrl-exec-agent/runs/<dispatcher-id>/<reqid>.json`), so a
+dispatcher may only retrieve its own runs. The agent returns a 404 unknown
+response rather than disclosing the existence of another dispatcher's run.
+
+Priority
+: WARNING
+
+Fields
+
+| Field | Type | Description |
+| --- | --- | --- |
+| ACTION | string | `result-deny` |
+| PEER | string | IP address of the connecting dispatcher |
+| DISPATCHER | string | Id of the matched trusted dispatcher making the request |
+| REQID | hex | Request ID of the run that was requested |
+| REASON | string | `not-owner` |
+
+```
+ACTION=result-deny PEER=10.0.0.1 DISPATCHER=ctrl-exec-secondary REQID=a1b2c3d4e5f60001 REASON=not-owner
+```
 
 ### revoked-cert
 
@@ -989,8 +1017,8 @@ ACTION=capabilities-deny PEER=10.0.0.1 REASON=denied
 
 ### capabilities-no-serial
 
-Emitted when the agent has no stored dispatcher serial and the serial check
-on `/capabilities` is therefore skipped. The request proceeds but the
+Emitted when the agent has no trusted dispatchers stored and the serial
+check on `/capabilities` is therefore skipped. The request proceeds but the
 restriction is not enforced.
 
 Priority
@@ -1002,13 +1030,13 @@ Fields
 | --- | --- | --- |
 | ACTION | string | `capabilities-no-serial` |
 | PEER | string | IP address |
-| REASON | string | `no dispatcher serial stored - re-pair to enable restriction` |
+| REASON | string | `no trusted dispatchers stored - re-pair to enable restriction` |
 
 ```
-ACTION=capabilities-no-serial PEER=10.0.0.1 REASON="no dispatcher serial stored - re-pair to enable restriction"
+ACTION=capabilities-no-serial PEER=10.0.0.1 REASON="no trusted dispatchers stored - re-pair to enable restriction"
 ```
 
-Re-pair the agent to write the dispatcher serial and enable the restriction.
+Re-pair the agent to populate the trusted-dispatcher map and enable the restriction.
 
 ### capabilities (agent-side, success)
 
@@ -1023,10 +1051,11 @@ Fields
 | --- | --- | --- |
 | ACTION | string | `capabilities` |
 | PEER | string | IP address |
+| DISPATCHER | string | Id of the matched trusted dispatcher |
 | SCRIPTS | integer | Number of scripts in the allowlist response |
 
 ```
-ACTION=capabilities PEER=10.0.0.1 SCRIPTS=5
+ACTION=capabilities PEER=10.0.0.1 DISPATCHER=ctrl-exec-primary SCRIPTS=5
 ```
 
 ### pair-complete
@@ -1043,10 +1072,11 @@ Fields
 | --- | --- | --- |
 | ACTION | string | `pair-complete` |
 | STATUS | string | `approved` |
-| DISPATCHER | string | Hostname or IP of the dispatcher that was contacted |
+| DISPATCHER | string | Id of the dispatcher, as delivered at pairing |
+| DISPATCHER_HOST | string | Hostname or IP of the dispatcher that was contacted |
 
 ```
-ACTION=pair-complete STATUS=approved DISPATCHER=ctrl-exec.example.com
+ACTION=pair-complete STATUS=approved DISPATCHER=ctrl-exec-primary DISPATCHER_HOST=ctrl-exec.example.com
 ```
 
 ### pair-denied (agent-side)
@@ -1270,9 +1300,31 @@ Fields
 | ACTION | string | `serial-broadcast` |
 | HOSTS | string | Comma-separated list of agents receiving the broadcast |
 | SERIAL | string | The serial being broadcast |
+| DISPATCHER | string | Id of the dispatcher whose serial is being added |
 
 ```
-ACTION=serial-broadcast HOSTS=web-01,db-01,db-02 SERIAL=0a1b2c3d
+ACTION=serial-broadcast HOSTS=web-01,db-01,db-02 SERIAL=0a1b2c3d DISPATCHER=ctrl-exec-primary
+```
+
+### serial-retire
+
+Emitted by `retire_previous_serial` when the dispatcher removes the old
+serial from confirmed agents after the overlap window closes, completing the
+add-then-remove rotation against each agent's trusted-dispatcher map.
+
+Priority
+: INFO
+
+Fields
+
+| Field | Type | Description |
+| --- | --- | --- |
+| ACTION | string | `serial-retire` |
+| HOSTS | string | Comma-separated list of agents the previous serial is removed from |
+| SERIAL | string | The previous serial being removed |
+
+```
+ACTION=serial-retire HOSTS=web-01,db-01,db-02 SERIAL=09abcdef
 ```
 
 ### serial-confirmed
@@ -1373,7 +1425,8 @@ ACTION=rotation-state-corrupt PATH=/var/lib/ctrl-exec/rotation.json ERROR="..." 
 | CONFLICTS | string | Comma-separated `host:script` pairs in lock conflict |
 | COUNT | integer | Table capacity ceiling that triggered eviction (used in `rate-evict`) |
 | DAYS_LEFT | integer | Days remaining on the dispatcher cert (used in `cert-check`, `cert-renewal-start`) |
-| DISPATCHER | string | dispatcher hostname as contacted by agent during pairing |
+| DISPATCHER | string | Dispatcher id: the matched trusted-dispatcher identity on agent-side `run`/`ping`/`capabilities`/`result` lines, the id delivered at pairing on `pair-complete`, or the dispatcher whose serial is being added on `serial-broadcast` |
+| DISPATCHER_HOST | string | Dispatcher hostname or IP as contacted by the agent during pairing (used in `pair-complete`) |
 | ENTRY | string | Offending config entry (used in `config-warn`) |
 | ERROR | string | Error description for failure actions |
 | EXIT | integer | Script exit code |
@@ -1399,7 +1452,7 @@ ACTION=rotation-state-corrupt PATH=/var/lib/ctrl-exec/rotation.json ERROR="..." 
 | RTT | string | Round-trip time in milliseconds, e.g. `42ms` |
 | SCRIPT | string | Script name from the allowlist |
 | SCRIPTS | integer | Count of scripts in a capabilities response |
-| SERIAL | string | Lowercase hex cert serial (used in `revoked-cert`, `serial-broadcast`) |
+| SERIAL | string | Lowercase hex cert serial (used in `revoked-cert`, `serial-broadcast`, `serial-retire`) |
 | STATUS | string | State indicator: `ok`, `starting`, `approved`, `pending`, etc. |
 | TARGET | string | `host:port` of the agent as addressed by the dispatcher |
 | THRESHOLD | integer | `cert_renewal_days` value from config (used in `cert-check`) |
@@ -1411,8 +1464,8 @@ ACTION=rotation-state-corrupt PATH=/var/lib/ctrl-exec/rotation.json ERROR="..." 
 
 | Priority | Syslog level | Used for |
 | --- | --- | --- |
-| INFO | `daemon.info` | Normal operations: `start`, `run`, `ping`, `dispatch`, `lock-acquire`, `lock-release`, `renew`, `renew-complete`, `auth` pass, `pair-complete`, `pair-approve`, `pair-deny`, `pair-request`, `pair-reject`, `pairing-mode-start`, `pairing-mode-stop`, `capabilities` success, `rate-evict`, `unpair`, `api-start`, `api-stop`, `api-request`, `cert-check`, `cert-renewal-start`, `cert-rotated`, `serial-broadcast`, `serial-confirmed`, `revoked-serials-absent` |
-| WARNING | `daemon.warning` | Security and access events requiring attention: `deny`, `serial-reject`, `revoked-cert`, `tls-failure`, `ip-block`, `rate-block`, `capabilities-deny`, `capabilities-no-serial`, `pair-denied`, `pair-timeout`, `lock-conflict`, `config-warn`, `stdin-timeout`, `auth` deny, `serial-broadcast-fail`, `serial-stale` |
+| INFO | `daemon.info` | Normal operations: `start`, `run`, `ping`, `dispatch`, `lock-acquire`, `lock-release`, `renew`, `renew-complete`, `auth` pass, `pair-complete`, `pair-approve`, `pair-deny`, `pair-request`, `pair-reject`, `pairing-mode-start`, `pairing-mode-stop`, `capabilities` success, `rate-evict`, `unpair`, `api-start`, `api-stop`, `api-request`, `cert-check`, `cert-renewal-start`, `cert-rotated`, `serial-broadcast`, `serial-retire`, `serial-confirmed`, `revoked-serials-absent` |
+| WARNING | `daemon.warning` | Security and access events requiring attention: `deny`, `serial-reject`, `result-deny`, `revoked-cert`, `tls-failure`, `ip-block`, `rate-block`, `capabilities-deny`, `capabilities-no-serial`, `pair-denied`, `pair-timeout`, `lock-conflict`, `config-warn`, `stdin-timeout`, `auth` deny, `serial-broadcast-fail`, `serial-stale` |
 | ERR | `daemon.err` | Failures requiring investigation: `accept-fatal`, `renew` failure, `capabilities` error, `ping` error, `run` error, `auth` error (hook not executable), `cert-rotation-fail`, `rotation-state-corrupt`, `run-store-fail` |
 
 
@@ -1462,7 +1515,7 @@ Configuration problems
 | `ACTION=config-warn` | Invalid config entry at load time | Review `agent.conf`; fix or remove the offending entry; should not occur in a healthy deployment after initial setup |
 | `ACTION=accept-fatal` | Agent main loop exiting | Agent will stop serving; investigate and restart immediately |
 | `ACTION=auth RESULT=error REASON=hook-not-executable` | Auth hook missing or not executable | Fix hook path and permissions; all requests are failing until resolved |
-| `ACTION=capabilities-no-serial` | Agent lacks stored dispatcher serial | Re-pair agent to enable serial-based restriction on `/capabilities` |
+| `ACTION=capabilities-no-serial` | Agent has no trusted dispatchers stored | Re-pair agent to populate the trusted-dispatcher map and enable the restriction on `/capabilities` |
 | `ACTION=run-store-fail` | API result cannot be stored | Check disk space on dispatcher host; `GET /status/{reqid}` will return 404 for affected requests |
 
 Pairing events

@@ -102,7 +102,7 @@ Approve? [a/d]:
 
 Verify the codes match. Type `a` and press Enter to approve.
 
-The agent stores its signed certificate, the CA certificate, and the dispatcher serial. Pairing is complete.
+The agent stores its signed certificate and the CA certificate, and records the approving dispatcher — its certificate serial and stable id — in its trusted-dispatcher map. Pairing is complete.
 
 # Start the Agent
 

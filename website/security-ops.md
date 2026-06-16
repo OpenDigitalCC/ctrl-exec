@@ -53,8 +53,9 @@ The revocation list is checked on every incoming mTLS connection before any requ
 
 If the dispatcher certificate is compromised or needs replacement:
 
-1. Run `ced rotate-cert` to generate a new certificate and broadcast the new serial to all agents.
-2. Add the old serial to `revoked-serials` on each agent if you need to prevent any use of the old certificate.
+1. Run `ced rotate-cert` to generate a new certificate.
+2. Rotation updates each agent's trusted-dispatcher map automatically over the run channel, with no re-pairing, via add-then-remove: the dispatcher broadcasts the new serial under its stable `dispatcher_id` and each reachable agent adds it; the old serial stays trusted through the overlap window, so the dispatcher's live certificate is accepted throughout, and is removed once the window closes. Only an agent that was offline during the broadcast (later marked `serial-stale`) needs re-pairing.
+3. Add the old serial to `revoked-serials` on each agent if you need to prevent any use of the old certificate.
 
 # CA Compromise Recovery
 
@@ -144,7 +145,7 @@ exit 0
 | --- | --- |
 | `ACTION=rate-block REASON=volume` | Investigate source IP for connection flooding |
 | `ACTION=rate-block REASON=probe` | Investigate source IP for TLS probing |
-| `ACTION=serial-reject` | Check rotation broadcast — run `ced serial-status` |
+| `ACTION=serial-reject` | Connecting serial not in the agent's trusted-dispatcher map — re-pair the agent if it was offline during a rotation and is now `serial-stale`; otherwise investigate the source |
 | `ACTION=revoked-cert` | Treat as a security event — investigate source IP immediately |
 | `ACTION=ip-block` | Review `allowed_ips` — investigate unexpected sources |
 | `ACTION=deny` repeated from same PEER | Check agent allowlist — may indicate misconfiguration or probing |
@@ -156,7 +157,7 @@ exit 0
 | `ACTION=serial-stale` | Re-pair the agent |
 | `ACTION=serial-broadcast-fail` repeated for same agent | Check connectivity — agent will be marked stale after overlap window |
 | `ACTION=cert-rotation-fail` | Investigate immediately — rotation retried on next check interval |
-| All agents returning `ACTION=serial-reject` after rotation | Run `ced serial-status` and `ced rotate-cert` |
+| A reachable agent returning `ACTION=serial-reject` after rotation | Rotation updates trust automatically; an agent that was offline/missed the broadcast (see `serial-stale`) needs re-pairing — otherwise investigate the source |
 
 ## Configuration problems
 

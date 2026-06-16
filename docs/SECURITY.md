@@ -205,6 +205,12 @@ Argument inspection
   arguments containing spaces or newlines, and naive pattern-matching on it
   can be bypassed by crafted argument values.
 
+Per-dispatcher identity
+: Auth hooks receive `ENVEXEC_DISPATCHER` (the stable dispatcher id) and
+  `ENVEXEC_DISPATCHER_SERIAL` (the connecting cert serial). Per-dispatcher
+  policy must key on `ENVEXEC_DISPATCHER`, never on the serial, because
+  serials rotate while the id is stable.
+
 Token forwarding
 : Tokens are included in the JSON payload sent from the dispatcher to the
   agent, and in the JSON context piped to scripts on stdin. This supports
@@ -262,6 +268,9 @@ Agent-side hook
 /etc/ctrl-exec-agent/scripts.conf  0640  root:ctrl-exec-agent
 /etc/ctrl-exec-agent/              0750  root:ctrl-exec-agent
 
+/var/lib/ctrl-exec-agent/                    0750  ctrl-exec-agent:ctrl-exec-agent
+/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers 0644 ctrl-exec-agent  trusted-dispatcher map (public serials + ids; agent-writable for rotation)
+
 /opt/ctrl-exec-scripts/            0750  root:ctrl-exec-agent
 /opt/ctrl-exec-scripts/*.sh        0750  root:ctrl-exec-agent
 /opt/ctrl-exec-scripts/*.schema.json 0640 root:ctrl-exec-agent  schema sidecar (data, not executed)
@@ -274,7 +283,8 @@ Agent-side hook
 /var/lib/ctrl-exec/runs/*.json     0640  root:ctrl-exec
 
 /var/lib/ctrl-exec-agent/runs/     0750  ctrl-exec-agent         async result store (agent side)
-/var/lib/ctrl-exec-agent/runs/*.json 0640 ctrl-exec-agent
+/var/lib/ctrl-exec-agent/runs/<dispatcher-id>/ 0750 ctrl-exec-agent  per-owner partition
+/var/lib/ctrl-exec-agent/runs/<dispatcher-id>/*.json 0640 ctrl-exec-agent
 ```
 
 The `ctrl-exec-agent` system user has no login shell and no home directory.
@@ -338,22 +348,63 @@ Unix domain socket to deliver syslog messages - omitting it silently blocks
 all logging.
 
 
-## dispatcher serial Tracking and Cert Rotation
+## Trusted-Dispatcher Map and Cert Rotation
 
-At pairing time, the dispatcher includes its own cert serial in the approval
-payload. The agent stores this at `/etc/ctrl-exec-agent/ctrl-exec-serial`.
-On every `/run`, `/ping`, and `/capabilities` request, the agent compares the
-incoming peer cert serial against the stored value and rejects any mismatch
-with a 403. If no serial file is present, `/run` and `/ping` deny all
-requests; `/capabilities` retains a warn-and-allow path for agents that have
-not yet been re-paired after serial tracking was introduced.
+The agent no longer stores a single trusted dispatcher serial. Instead it
+stores a *trusted-dispatcher map* at
+`/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers` (path configurable via
+`trusted_dispatchers_path` in `agent.conf`, default
+`/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers`). The map lives in the
+agent-writable state directory — not under `/etc/ctrl-exec-agent`, which
+holds only secrets (the agent key, cert, and CA) — so the agent, running as
+the unprivileged service user, can rewrite trusted serials in place during
+cert rotation. Holding the map in the agent-writable state directory does not
+weaken the lateral-reconnaissance protection: a serial is inert without a
+CA-signed cert bearing it (the CA key is operator-held), and an attacker on a
+compromised peer host cannot write *this* host's map. The map holds one line per
+trusted dispatcher in the format `<hex-serial> <dispatcher-id>`; lines
+beginning with `#` are comments. The map is loaded at startup and reloaded on
+SIGHUP. This key replaces the former `dispatcher_serial_path` /
+`ctrl-exec-serial` single-serial file.
 
-`/renew` and `/renew-complete` are intentionally exempt from the serial check.
+On every `/run`, `/ping`, `/result`, and `/capabilities` request, the agent
+checks whether the connecting client cert's serial is a *key* in the map. A
+request whose peer serial is not a key is rejected with a 403. When the serial
+matches, the dispatcher *identity* recorded against that key is used for
+permission decisions and attribution. If the map is empty (an unpaired or
+legacy agent that has not yet been re-paired), `/capabilities` logs
+`capabilities-no-serial` and skips the restriction; `/run`, `/ping`, and
+`/result` still hard-deny.
+
+Each trusted dispatcher has a stable `dispatcher_id`, set via `dispatcher_id`
+in `ctrl-exec.conf` (defaulting to the dispatcher's hostname) and delivered to
+the agent at pairing. Per-dispatcher policy must key on this id, never on the
+serial: serials rotate, the id is stable.
+
+Native multi-dispatcher support
+: An agent can serve more than one dispatcher. Pairing *appends* a dispatcher
+  to the map rather than replacing the existing entry, so re-pairing to enrol
+  an additional dispatcher leaves existing dispatchers trusted. Each dispatcher
+  presents its own cert; all dispatcher certs and the agent cert chain to a
+  shared CA root. Independent per-dispatcher CAs with SNI are explicitly out of
+  scope. A dedicated single-operator agent instance remains available as
+  optional defence-in-depth, but it is not the multi-dispatcher mechanism.
+
+Async result ownership
+: Runs are stored partitioned by owner at
+  `/var/lib/ctrl-exec-agent/runs/<dispatcher-id>/<reqid>.json`. A
+  `GET /result/<reqid>` returns a run only to the dispatcher that submitted it.
+  Another dispatcher receives `404 unknown` with no disclosure of the run's
+  existence or output. The agent logs `result-deny` (REASON=not-owner) when a
+  dispatcher requests another dispatcher's result.
+
+`/renew` and `/renew-complete` are intentionally exempt from the map check.
 During cert rotation, the dispatcher presents its new cert before agents
-receive the updated serial. Applying the serial check to the renewal endpoints
+receive the updated serial. Applying the map check to the renewal endpoints
 would cause every agent to reject the serial broadcast, breaking the rotation
 mechanism. The renewal endpoints require a valid CA-signed cert (mTLS still
-applies) but do not require serial match. See Cert Rotation below.
+applies) but do not require the peer serial to be a key in the map. See Cert
+Rotation below.
 
 The window during which these endpoints are reachable by any CA-signed cert is
 the duration of the serial broadcast - on a well-connected fleet this is
@@ -376,17 +427,35 @@ Renewal trigger
 Broadcast
 : Immediately after generating the new cert, the dispatcher calls
   `update-ctrl-exec-serial` on all registered agents in parallel, passing
-  the new serial as an argument. The script writes the file and sends SIGHUP.
-  Agents that respond successfully are marked `current` in the registry.
+  the new serial and its `dispatcher_id` as arguments. The script adds the new
+  serial to the agent's trusted-dispatcher map and sends SIGHUP. Agents that
+  respond successfully are marked `current` in the registry.
+
+  Seamless rotation (0.9.0)
+  : Cert rotation updates each agent's trusted-dispatcher map automatically
+    over the run channel, with no re-pairing, via add-then-remove. On rotation
+    the dispatcher broadcasts the *new* serial together with its stable
+    `dispatcher_id`; each reachable agent *adds* it to the map against that
+    identity. The *old* serial stays trusted through the overlap window, so the
+    dispatcher's live cert — the old one before its process restarts, the new
+    one after — is accepted throughout. After the overlap window the dispatcher
+    broadcasts removal of the old serial (`retire_previous_serial`, logged as
+    `serial-retire`), so the retired cert stops being trusted. Because
+    `dispatcher_id` is stable across rotation, trust and attribution carry over;
+    the agent can rewrite its own map because the map lives in the
+    agent-writable state directory. An agent that was *offline* during the
+    broadcast misses the new serial and, once the overlap window expires, is
+    marked `stale` and does need re-pairing — rotation is seamless only for
+    agents reachable during the broadcast.
 
 Overlap window
 : Agents that were offline during the broadcast are marked `pending`. The
   dispatcher retries them on each subsequent check interval. After
   `cert_overlap_days` (default: 30, configurable) the overlap expires and
   any remaining `pending` agents are marked `stale`. A stale agent needs
-  re-pairing - it has missed the rotation window. `/run` and `/ping` deny
-  with 403 once the serial no longer matches; `/capabilities` warns but
-  allows.
+  re-pairing - it has missed the rotation window. `/run`, `/ping`, and
+  `/result` deny with 403 once the new serial is not a key in the map;
+  `/capabilities` warns but allows.
 
 `ced serial-status`
 : Shows the current and previous dispatcher serial, rotation timestamp,
@@ -407,9 +476,11 @@ dispatcher re-keying
 `update-ctrl-exec-serial` script
 : Installed by the agent installer at
   `/opt/ctrl-exec-scripts/update-ctrl-exec-serial`. Must be enabled in the
-  agent's `scripts.conf` for automatic rotation to work. Agents without this
-  entry in their allowlist will not receive serial updates and will need
-  re-pairing when the overlap window expires.
+  agent's `scripts.conf` for automatic rotation to work. The script adds the
+  broadcast serial to the agent's trusted-dispatcher map (and, at retirement,
+  removes the old one) and sends SIGHUP. Agents without this entry in their
+  allowlist will not receive serial updates and will need re-pairing when the
+  overlap window expires.
 
 ## Certificate Revocation
 
@@ -577,8 +648,9 @@ limitations, Docker-specific notes), see SECURITY-OPERATIONS.md.
 | Rogue dispatcher connecting to agent | Agent verifies dispatcher cert against CA |
 | Pairing replay or misrouting | Nonce verified before cert storage |
 | Pairing CSR injection / social engineering | 6-digit pairing code verified by operator on both sides |
-| Lateral reconnaissance via capabilities | `/capabilities` restricted to stored dispatcher serial; re-pair to activate |
-| Script execution by non-current dispatcher cert | `/run` and `/ping` restricted to stored dispatcher serial; hard deny on mismatch |
+| Lateral reconnaissance via capabilities | `/capabilities` restricted to the trusted-dispatcher map (per-dispatcher serial); hard deny on unknown serial; re-pair to activate |
+| Script execution by non-current dispatcher cert | `/run`, `/ping`, and `/result` restricted to the trusted-dispatcher map (per-dispatcher serial); hard deny on unknown serial |
+| Cross-dispatcher result disclosure | Runs partitioned per owner; `GET /result/<reqid>` owner-gated, `404 unknown` to other dispatchers (`result-deny`, REASON=not-owner) |
 | Arbitrary script execution via run | Agent-side allowlist, name pattern validation |
 | Path traversal in script name | `/^[\w-]+$/` excludes `/` and `.` |
 | Shell injection via arguments | `exec` without shell, args passed as list |

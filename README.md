@@ -26,7 +26,9 @@ work, and one or more **agent hosts** that carry it out.
   Connects to agents, sends signed requests, collects results. Manages the
   private CA, the agent registry, and the cert lifecycle. The API server
   exposes run, ping, discovery, and status endpoints with an OpenAPI spec
-  (static and live-generated). There is one dispatcher host per deployment.
+  (static and live-generated). An agent can be paired with more than one
+  dispatcher, each attributed independently; a single-dispatcher deployment is
+  the common case.
 
 `ctrl-exec-agent` (`cea`) - an agent host
 : A managed host. An mTLS HTTPS server on port 7443, one per host. Executes

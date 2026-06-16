@@ -147,6 +147,20 @@ else
     fail "ENVEXEC_SOURCE_IP is non-empty" "was empty or missing"
 fi
 
+# ============================================================
+describe "Auth context: ENVEXEC_DISPATCHER carries the calling dispatcher's identity"
+# ============================================================
+
+# The agent resolves the connecting cert serial to a trusted dispatcher identity
+# and passes it to the hook. It is non-empty whenever the caller is a trusted
+# dispatcher (which it must be to have reached the hook at all).
+DISPATCHER_ID=$(parse_field "$STATUS" "ENVEXEC_DISPATCHER")
+if [ -n "$DISPATCHER_ID" ]; then
+    pass "ENVEXEC_DISPATCHER is non-empty: $DISPATCHER_ID"
+else
+    fail "ENVEXEC_DISPATCHER is non-empty" "was empty or missing"
+fi
+
 # Record the observed ctrl-exec IP for the remainder of the test.
 DISPATCHER_IP="$SOURCE_IP"
 

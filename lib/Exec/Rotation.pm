@@ -12,6 +12,7 @@ use Carp        qw(croak);
 use Exec::CA       qw();
 use Exec::Registry qw();
 use Exec::Engine   qw();
+use Exec::Pairing  qw();
 use Exec::Log      qw();
 
 
@@ -149,6 +150,10 @@ sub broadcast_serial {
     }
 
     my $serial  = $state->{current_serial};
+    # The agent maps the broadcast serial to this dispatcher's stable identity,
+    # so a rotated serial lands under the same identity it was paired with -
+    # trust and attribution carry over without re-pairing.
+    my $dispatcher_id = Exec::Pairing::resolve_dispatcher_id($config);
     my $agents  = Exec::Registry::list_agents(
         registry_dir => $config->{registry_dir},
     );
@@ -162,17 +167,20 @@ sub broadcast_serial {
     my @hostnames = map { $_->{hostname} } @pending;
 
     Exec::Log::log_action('INFO', {
-        ACTION  => 'serial-broadcast',
-        HOSTS   => join(',', @hostnames),
-        SERIAL  => $serial,
+        ACTION     => 'serial-broadcast',
+        HOSTS      => join(',', @hostnames),
+        SERIAL     => $serial,
+        DISPATCHER => $dispatcher_id,
     });
 
-    # Run update-ctrl-exec-serial on all pending agents in parallel
+    # Run update-ctrl-exec-serial on all pending agents in parallel. The agent
+    # ADDS the new serial (keeping the old one trusted through the overlap
+    # window); retire_previous_serial removes the old one afterwards.
     my $results = eval {
         Exec::Engine::dispatch_all(
             hosts  => \@hostnames,
             script => 'update-ctrl-exec-serial',
-            args   => [$serial],
+            args   => [$serial, $dispatcher_id],
             config => $config,
             reqid  => Exec::Engine::gen_reqid(),
         );
@@ -216,6 +224,63 @@ sub broadcast_serial {
     return \@report;
 }
 
+# Retire the previous (pre-rotation) dispatcher serial once the overlap window
+# has elapsed - the "remove" half of add-then-remove rotation. Removes the old
+# serial from the trusted-dispatcher map of every agent that has adopted the new
+# one (serial_status 'current'), so the retired cert is no longer trusted. Agents
+# still 'pending' never received the new serial and keep the old one untouched.
+# Idempotent: clears previous_serial from the rotation state after one attempt so
+# it does not repeat. No-op until a rotation's overlap window has passed.
+#
+# Required opts:
+#   config => \%config
+sub retire_previous_serial {
+    my (%opts) = @_;
+    my $config = $opts{config} or croak "config required";
+
+    my $state = load_state(path => $config->{rotation_file});
+    return unless $state
+              && defined $state->{previous_serial}
+              && length $state->{previous_serial};
+
+    my $expires = _parse_iso8601($state->{overlap_expires} // '');
+    return unless defined $expires && time() > $expires;
+
+    my $old = $state->{previous_serial};
+
+    my $agents  = Exec::Registry::list_agents(registry_dir => $config->{registry_dir});
+    my @current = grep { ($_->{serial_status} // '') eq 'current' } @$agents;
+
+    if (@current) {
+        my @hostnames = map { $_->{hostname} } @current;
+        Exec::Log::log_action('INFO', {
+            ACTION => 'serial-retire',
+            HOSTS  => join(',', @hostnames),
+            SERIAL => $old,
+        });
+        eval {
+            Exec::Engine::dispatch_all(
+                hosts  => \@hostnames,
+                script => 'update-ctrl-exec-serial',
+                args   => ['--remove', $old],
+                config => $config,
+                reqid  => Exec::Engine::gen_reqid(),
+            );
+        };
+        Exec::Log::log_action('WARNING', { ACTION => 'serial-retire-error', ERROR => $@ })
+            if $@;
+    }
+
+    # Mark the previous serial retired (drop it, stamp when) so this runs once.
+    # Preserve the rest of the rotation state.
+    my %retired = %$state;
+    delete $retired{previous_serial};
+    $retired{previous_retired} = _now_iso8601();
+    _write_atomic($config->{rotation_file} // $ROTATION_FILE, encode_json(\%retired));
+
+    return scalar @current;
+}
+
 # Run the internal renewal check loop. Blocks indefinitely.
 # Called from the ctrl-exec serve loop in a separate process or thread.
 # In practice called via a forked child in bin/ctrl-exec-dispatcher.
@@ -232,6 +297,12 @@ sub run_check_loop {
 
         eval { expire_stale_agents(config => $config) };
         Exec::Log::log_action('WARNING', { ACTION => 'expire-stale-error', ERROR => $@ })
+            if $@;
+
+        # Remove the previous serial from agents that adopted the new one, once
+        # the overlap window has passed (add-then-remove rotation).
+        eval { retire_previous_serial(config => $config) };
+        Exec::Log::log_action('WARNING', { ACTION => 'serial-retire-loop-error', ERROR => $@ })
             if $@;
 
         my $result = eval { check_and_rotate(config => $config) };
@@ -329,15 +400,17 @@ sub _do_rotation {
     }));
 
     # Mark all agents as pending - they need to receive the new serial.
-    # Note on the overlap window: it governs how long the ctrl-exec keeps
-    # attempting to broadcast the new serial before declaring an agent stale.
-    # It does NOT provide a grace period for capabilities: once the ctrl-exec
-    # starts using the new cert, agents that still hold the old serial will
-    # reject /capabilities from it (serial mismatch). Run and ping are
-    # unaffected - those endpoints do not check the dispatcher serial.
-    # The expected rotation sequence is: rotate cert → broadcast serial →
-    # agents reload → capabilities restored. The overlap window only matters
-    # for agents that were offline during the broadcast.
+    # Rotation is seamless (no re-pair) via add-then-remove against the agent's
+    # trusted-dispatcher map: broadcast_serial ADDS the new serial to each agent
+    # (mapped to this dispatcher's stable identity) while the old serial stays
+    # trusted through the overlap window, so the dispatcher's live cert - old
+    # before restart, new after - is accepted throughout. retire_previous_serial
+    # REMOVES the old serial from confirmed agents once the overlap window
+    # passes. The overlap window therefore bounds how long both serials are
+    # trusted, and how long the ctrl-exec keeps retrying before declaring an
+    # agent (one offline during the broadcast) stale; a stale agent missed the
+    # rotation and must be re-paired. All endpoints (/run, /ping, /result,
+    # /capabilities) gate on the map, so a confirmed agent never sees a gap.
     my $agents = Exec::Registry::list_agents(
         registry_dir => $config->{registry_dir},
     );

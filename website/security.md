@@ -1,6 +1,6 @@
 ---
 title: Security Model
-subtitle: mTLS trust, the pairing protocol, serial-based identity, and the auth hook system.
+subtitle: mTLS trust, the pairing protocol, dispatcher identity, and the auth hook system.
 updated: 2026-03-16
 github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/SECURITY.md
 current_page: /security
@@ -16,9 +16,9 @@ When the dispatcher connects to an agent:
 
 - The agent verifies the dispatcher certificate was signed by the CA.
 - The dispatcher verifies the agent certificate was signed by the CA.
-- The agent additionally checks the dispatcher certificate serial number against the value stored at pairing time.
+- The agent additionally checks the connecting certificate's serial number against its trusted-dispatcher map, established at pairing time.
 
-The serial check means a certificate signed by the correct CA is not sufficient on its own — it must be the specific certificate the agent was paired with. A replacement certificate signed by the same CA is rejected until agents receive the new serial via `rotate-cert`.
+The serial check means a certificate signed by the correct CA is not sufficient on its own — it must be the specific certificate of a dispatcher the agent was paired with. A certificate signed by the same CA but not present in the map is rejected. An agent can trust more than one dispatcher: each entry in the map pairs a certificate serial with a stable dispatcher identity, and a connection is accepted only if its serial matches an entry.
 
 There are no passwords, no shared secrets, and no SSH keys to distribute or rotate.
 
@@ -29,22 +29,24 @@ Pairing is the ceremony by which a new agent joins the fleet. It runs on a separ
 1. The operator starts `ced pairing-mode` on the dispatcher host. This opens a listener on port 7444.
 2. On the agent host, the operator runs `ctrl-exec-agent request-pairing --dispatcher <hostname>`. The agent generates a key pair, creates a CSR, and connects to the pairing port.
 3. Both sides independently compute a 6-digit verification code from the CSR content. The operator verifies that the codes match on both terminals before approving. This prevents CSR substitution or misrouting attacks.
-4. On approval, the dispatcher signs the CSR with the CA and returns the signed certificate along with the CA certificate and the current dispatcher certificate serial. The agent stores all three.
+4. On approval, the dispatcher signs the CSR with the CA and returns the signed certificate along with the CA certificate, the current dispatcher certificate serial, and the dispatcher's stable identity. The agent stores the certificate and CA, and appends the dispatcher's serial and identity to its trusted-dispatcher map — existing entries are left in place, so an additional dispatcher can be enrolled without disturbing the agent's existing trust.
 5. The dispatcher records the agent in the registry with certificate expiry and serial tracking state.
 
 Pairing is a deliberate one-time ceremony. The operator reviews each agent before it joins the fleet. The verification code step ensures that a rogue pairing request cannot be approved by mistake.
 
 Automated pairing (`--background` flag) is available for orchestrated environments. The approval step remains explicit even in automated flows.
 
-# Certificate Serial as Agent Identity
+# Dispatcher Serial and Identity
 
-At pairing time, the agent stores the dispatcher's certificate serial number in `/etc/ctrl-exec-agent/dispatcher-serial`. On every subsequent `/run`, `/ping`, and `/capabilities` request, the agent compares the connecting certificate's serial against this stored value.
+At pairing time, the agent records the approving dispatcher in its trusted-dispatcher map at `/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers` — one line per trusted dispatcher, `<hex-serial> <dispatcher-id>`. On every subsequent `/run`, `/ping`, `/result`, and `/capabilities` request, the agent checks the connecting certificate's serial against the map.
 
-A mismatch is rejected with 403 and logged as `ACTION=serial-reject`.
+A serial not present in the map is rejected with 403 and logged as `ACTION=serial-reject`. When the serial matches, the resolved dispatcher identity drives permission decisions and attribution — the stable `dispatcher_id`, not the serial, is what per-dispatcher policy keys on, since serials rotate.
 
-This means that after any cert rotation, all agents must receive the new serial before the old certificate is retired. The `rotate-cert` command handles this: it generates a new certificate, broadcasts the new serial to all agents, and tracks per-agent confirmation in the registry. The overlap window (`cert_overlap_days`, default 30 days) is the time allowed for offline agents to reconnect and receive the update before they are marked stale.
+::: textbox
+**Seamless cert rotation.** Dispatcher certificate rotation updates each agent's trusted-dispatcher map automatically over the run channel, with no re-pairing, via add-then-remove. The dispatcher broadcasts the new serial under its stable identity (`dispatcher_id`) and each agent adds it; the old serial stays trusted through the overlap window, so the dispatcher's live certificate is accepted throughout. After the overlap window the dispatcher broadcasts removal of the old serial. Because `dispatcher_id` is stable across rotation, trust and attribution carry over.
+:::
 
-An agent that has not yet received the new serial will reject the dispatcher until it is updated. This is by design — it prevents a replacement cert from silently gaining access to agents that never consented to it.
+Because rotation is keyed on the stable `dispatcher_id`, a rotated certificate is added to the map for the dispatcher the agent already trusts — a replacement cert from an unknown identity still cannot silently gain access to agents that never consented to it.
 
 # The Auth Hook System
 

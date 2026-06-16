@@ -116,12 +116,25 @@ auth-hook       Auth hook executable (0755)
 Agent host (`/etc/ctrl-exec-agent/`)
 
 ```
-agent.key       Agent's private key (0640, root:ctrl-exec-agent)
-agent.crt       Agent's cert, signed by dispatcher CA (0640, root:ctrl-exec-agent)
-ca.crt          CA cert from ctrl-exec (0644)
-agent.conf      Port, cert paths, optional script_dirs and tags
-scripts.conf    Allowlist: name = /absolute/path
+agent.key             Agent's private key (0640, root:ctrl-exec-agent)
+agent.crt             Agent's cert, signed by dispatcher CA (0640, root:ctrl-exec-agent)
+ca.crt                CA cert from ctrl-exec (0644)
+agent.conf            Port, cert paths, optional script_dirs and tags
+scripts.conf          Allowlist: name = /absolute/path
 ```
+
+The trusted-dispatcher map (`ctrl-exec-dispatchers`) replaces the old single
+`ctrl-exec-serial` file (0.9.0). Each line maps a trusted dispatcher's cert
+serial to its `dispatcher_id`. `/run`, `/ping`, `/result`, and
+`/capabilities` are accepted only when the connecting cert's serial is a key
+in the map; the matched `dispatcher_id` drives permission and attribution.
+Pairing appends a line (one agent can serve several distinct dispatchers, each
+chaining to the shared CA root). The map now lives in the agent-writable state
+directory (`/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers`) rather than the
+root-owned config dir, because the agent (a non-root service user) must rewrite
+it in place during cert rotation. The path is configurable via
+`trusted_dispatchers_path` (formerly `dispatcher_serial_path`) and is reloaded
+on SIGHUP.
 
 Runtime directories
 
@@ -130,6 +143,17 @@ Runtime directories
 /var/lib/ctrl-exec/agents/     Agent registry ({hostname}.json, written at pairing)
 /var/lib/ctrl-exec/locks/      flock files for host:script concurrency control
 ```
+
+Agent host (`/var/lib/ctrl-exec-agent/`)
+
+```
+ctrl-exec-dispatchers               Trusted-dispatcher map: <hex-serial> <dispatcher-id>, one per line (agent-writable)
+runs/<dispatcher-id>/<reqid>.json   Async result store, partitioned by owning dispatcher
+```
+
+The async result store is partitioned by owner. `GET /result/<reqid>` returns
+a run only to the dispatcher that submitted it (owner-gate); a request from
+any other trusted dispatcher gets 404.
 
 
 ## Module Reference
@@ -284,7 +308,21 @@ Important SSL note - `SSL_no_shutdown => 1` on parent close
 
 dispatcher cert lifecycle management. Monitors the dispatcher's own cert
 expiry, rotates it when approaching expiry, and broadcasts the new serial to
-all registered agents so they can update their trusted-dispatcher serial.
+all registered agents.
+
+Seamless rotation (add-then-remove)
+: Dispatcher cert rotation updates each agent's trusted-dispatcher map
+  (`/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers`) automatically over the run
+  channel — no re-pairing. The broadcast (`broadcast_serial` →
+  `update-ctrl-exec-serial`) carries the **new** serial together with the
+  dispatcher's stable identity, and each agent **adds** it to the map; the old
+  serial is kept trusted through the overlap window so in-flight traffic on the
+  previous cert continues to be accepted. After the overlap window the
+  dispatcher broadcasts removal of the **old** serial via
+  `retire_previous_serial`, so each agent ends up trusting only the current
+  serial. The dispatcher-side registry status machinery below
+  (current/pending/stale/confirmed) is unchanged; an agent that is offline for
+  the whole broadcast and misses the update still needs re-pairing.
 
 The module is used in two ways: `check_and_rotate` is called at startup and
 by the background loop in `run_check_loop`; `rotate` is called directly by
@@ -361,10 +399,20 @@ Functions:
 : Reads rotation state to find `current_serial`. Queries the registry for
   agents with status `pending` or `unknown`. Dispatches
   `update-ctrl-exec-serial` to all of them in parallel via
-  `Exec::Engine::dispatch_all`. On success for each agent, calls
-  `Exec::Registry::update_agent_serial_status` to set status
-  `confirmed`. Returns arrayref of `{ hostname, status => 'ok'|'failed', error? }`.
-  Required: `config`.
+  `Exec::Engine::dispatch_all`, passing `[serial, dispatcher_id]` so each agent
+  **adds** the new serial to its trusted-dispatcher map under the dispatcher's
+  stable identity (the old serial stays trusted through the overlap window). On
+  success for each agent, calls `Exec::Registry::update_agent_serial_status` to
+  set status `confirmed`. Returns arrayref of
+  `{ hostname, status => 'ok'|'failed', error? }`. Required: `config`.
+
+`retire_previous_serial(%opts)`
+: Run after the overlap window closes. Reads rotation state to find
+  `previous_serial`, then dispatches `update-ctrl-exec-serial` to the
+  `confirmed` agents instructing each to **remove** that serial from its
+  trusted-dispatcher map, leaving only the current serial trusted. Logs
+  `serial-retire` per batch. Returns arrayref of
+  `{ hostname, status => 'ok'|'failed', error? }`. Required: `config`.
 
 `run_check_loop(%opts)`
 : Infinite loop. Sleeps `cert_check_interval` seconds (default 4 hours),
@@ -555,6 +603,14 @@ ENVEXEC_USERNAME    username from request (may be empty)
 ENVEXEC_TOKEN       token from request (may be empty)
 ENVEXEC_SOURCE_IP   originating IP address
 ENVEXEC_TIMESTAMP   ISO8601 UTC timestamp
+```
+
+On the agent side, the auth hook additionally receives the resolved
+dispatcher identity:
+
+```
+ENVEXEC_DISPATCHER         dispatcher_id of the connecting dispatcher
+ENVEXEC_DISPATCHER_SERIAL  the connecting cert serial (hex)
 ```
 
 `ENVEXEC_ARGS` vs `ENVEXEC_ARGS_JSON`
@@ -824,7 +880,14 @@ timestamp   ISO 8601 UTC timestamp of the request
 
 Agent-side pairing and cert renewal support. Generates key and CSR, connects
 to the dispatcher pairing port, submits the CSR and waits (up to 11 minutes)
-for the signed cert. Also handles cert-only renewal using the existing key.
+for the signed cert. Also handles cert-only renewal using the existing key,
+and loading and resolving the trusted-dispatcher map.
+
+Pairing delivers the dispatcher's serial and `dispatcher_id` and **appends**
+them to the trusted-dispatcher map (it no longer replaces a single stored
+serial). A second dispatcher paired to the same agent is added alongside the
+first, each chaining to the shared CA root, which is how one agent comes to
+serve several distinct dispatchers.
 
 The 11-minute timeout on the socket is intentionally longer than the
 dispatcher's 10-minute poll window, so the agent gets a proper denial response
@@ -862,6 +925,17 @@ Functions:
 `pairing_status(%opts)`
 : Checks cert files, reads expiry via `openssl x509 -noout -enddate`.
   Returns `{ paired => 1, expiry }` or `{ paired => 0, reason }`.
+
+`load_trusted_dispatchers(%opts)`
+: Reads the trusted-dispatcher map file (one `<hex-serial> <dispatcher-id>`
+  per line). Returns a hashref `{ '<hex-serial>' => '<dispatcher-id>', ... }`.
+  Replaces the old `load_dispatcher_serial`, which returned a single hex
+  string. Optional: `path` (default `/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers`).
+
+`dispatcher_trusted($peer_serial, $trusted)`
+: Resolves a connecting peer against the map. Returns the matched
+  `dispatcher_id` if `$peer_serial` is a key in `$trusted`, otherwise `undef`.
+  This is the per-request trust gate; callers refuse the request on `undef`.
 
 HTTP response reading
 : `request_pairing` reads headers line-by-line until the blank separator,
@@ -975,15 +1049,17 @@ sub mode_serve {
     my $config    = Exec::Agent::Config::load_config($CONFIG_PATH);
     my $allowlist = Exec::Agent::Config::load_allowlist($ALLOWLIST_PATH);
     my $revoked   = Exec::Agent::AgentPairing::load_revoked_serials(...);
-    my $disp_serial = Exec::Agent::AgentPairing::load_dispatcher_serial(...);
+    # Trusted-dispatcher map: { '<hex-serial>' => '<dispatcher-id>', ... }
+    my $trusted   = Exec::Agent::AgentPairing::load_trusted_dispatchers(
+                        path => $config->{trusted_dispatchers_path});
 
     # SIGHUP handler is top-level in mode_serve (not local $SIG{HUP}).
-    # It closes over $allowlist, $revoked, $disp_serial and reassigns them.
+    # It closes over $allowlist, $revoked, $trusted and reassigns them.
     # Changes take effect for the next accepted connection.
     $SIG{HUP} = sub {
-        $allowlist   = eval { ... };
-        $revoked     = eval { ... };
-        $disp_serial = eval { ... };
+        $allowlist = eval { ... };
+        $revoked   = eval { ... };
+        $trusted   = eval { ... };
     };
 
     my $server = IO::Socket::SSL->new(...)
@@ -1002,7 +1078,7 @@ sub mode_serve {
         if ($pid == 0) {
             $server->close(SSL_no_shutdown => 1);
             handle_connection($conn, $peer, $allowlist, $config,
-                              $revoked, $disp_serial, $peer_serial);
+                              $revoked, $trusted, $peer_serial);
             $conn->close;
             exit 0;
         }
@@ -1022,13 +1098,20 @@ sub mode_serve {
   here as handshake errors, not inside `handle_connection`.
 
 `handle_connection` signature
-: `handle_connection($conn, $peer, $allowlist, $config, $revoked, $disp_serial, $peer_serial)`
+: `handle_connection($conn, $peer, $allowlist, $config, $revoked, $trusted, $peer_serial)`
 
   All variables come from `mode_serve`'s scope and are passed explicitly - there
   is no closure over them. `$peer_serial` is a plain lowercase hex string (or
   `''`) extracted before fork. `$revoked` is a hashref keyed by hex serial.
-  `$disp_serial` is the stored dispatcher serial hex string (or `''` if not
-  yet set).
+  `$trusted` is the trusted-dispatcher map: a hashref
+  `{ '<hex-serial>' => '<dispatcher-id>', ... }` loaded from
+  `ctrl-exec-dispatchers`. Resolve the connecting peer with
+  `Exec::Agent::AgentPairing::dispatcher_trusted($peer_serial, $trusted)`,
+  which returns the matched `dispatcher_id` or `undef`; an `undef` result
+  means the serial is not a trusted dispatcher and the request is refused.
+  The resolved `dispatcher_id` drives permission, attribution
+  (`DISPATCHER=<id>` in logs, `ENVEXEC_DISPATCHER` /
+  `ENVEXEC_DISPATCHER_SERIAL` to auth hooks), and result-store ownership.
 
 Testability
 : `bin/ctrl-exec-agent` calls `main()` unconditionally — it does not use
@@ -1061,6 +1144,14 @@ sub _peer_serial {
 ```
 
 Endpoints handled in `handle_connection`:
+
+Before any endpoint below runs, the connecting cert's serial is resolved
+against the trusted-dispatcher map via `dispatcher_trusted`. `/run`, `/ping`,
+`/result`, and `/capabilities` are accepted only if the serial is a key in
+the map; the matched `dispatcher_id` is then used for permission, attribution
+(`DISPATCHER=<id>` in agent logs, `ENVEXEC_DISPATCHER` /
+`ENVEXEC_DISPATCHER_SERIAL` to the agent auth hook), and result-store
+ownership.
 
 `POST /run`
 : Extracts `script`, `args`, `reqid`, `username`, and `token` from the request
@@ -1293,7 +1384,12 @@ no shell execution
 mTLS on port 7443
 : `SSL_verify_mode => SSL_VERIFY_PEER` on both sides means both dispatcher and
   agent must present a cert signed by the CA. An agent with no cert, or a cert
-  signed by a different CA, cannot connect.
+  signed by a different CA, cannot connect. CA trust alone is not sufficient
+  for a dispatcher: above the mTLS layer, the agent additionally requires the
+  connecting cert's serial to be a key in its trusted-dispatcher map
+  (`ctrl-exec-dispatchers`) for `/run`, `/ping`, `/result`, and
+  `/capabilities`. The matched `dispatcher_id` is the identity used for
+  policy and attribution — policy keys on the id, not the serial.
 
 pairing port security
 : Port 7444 uses `SSL_VERIFY_NONE` for the client - the agent has no cert yet.

@@ -46,9 +46,12 @@ persistent connections that must be preserved across restarts.
 
 `/etc/ctrl-exec/dispatcher.crt`
 : The dispatcher's TLS certificate, signed by the CA. Its serial number is
-  the value agents store and compare on every `/run`, `/ping`, and
-  `/capabilities` request. All dispatcher instances must present the same
-  cert.
+  the value agents store as a key in their trusted-dispatcher map and check
+  on every `/run`, `/ping`, `/result`, and `/capabilities` request. All
+  instances of the same dispatcher must present the same cert. (As of 0.9.0
+  an agent's map may hold the serials of several distinct dispatchers — see
+  Native Multi-Dispatcher below. Within one dispatcher's HA set, every
+  instance still presents that dispatcher's single shared cert.)
 
 `/var/lib/ctrl-exec/agents/`
 : The agent registry. One JSON file per paired agent (e.g.
@@ -145,11 +148,12 @@ audited access controls, not in a general-purpose object bucket.
 
 ## Load Balancing
 
-Port 7443 carries mTLS connections for `/run`, `/ping`, and `/capabilities`.
-Each connection is self-contained: the agent authenticates the connecting
-cert against the CA, verifies the dispatcher serial, processes the request,
-and closes the connection. There is no session state that must be pinned to
-a specific dispatcher instance.
+Port 7443 carries mTLS connections for `/run`, `/ping`, `/result`, and
+`/capabilities`. Each connection is self-contained: the agent authenticates
+the connecting cert against the CA, checks the connecting serial is a key in
+its trusted-dispatcher map, processes the request, and closes the connection.
+There is no session state that must be pinned to a specific dispatcher
+instance.
 
 Any TCP/L4 load balancer works for port 7443:
 
@@ -173,7 +177,11 @@ Port 7444 (pairing) and port 7445 (API) do not need to be load-balanced
 in normal operation. Pairing mode runs on one node at a time. The API can
 be load-balanced but result storage in `/var/lib/ctrl-exec/runs/` must
 be on a shared path if `GET /status/{reqid}` is expected to work regardless
-of which node handled the original request.
+of which node handled the original request. (On the agent side, async results
+are partitioned by owning dispatcher under
+`/var/lib/ctrl-exec-agent/runs/<dispatcher-id>/<reqid>.json`, and
+`GET /result/<reqid>` is owner-gated — see DEVELOPER.md. That is a per-agent
+concern and is unaffected by dispatcher-side load balancing.)
 
 
 ## Active/Passive Failover
@@ -199,7 +207,8 @@ Promotion procedure:
 
 Agents reconnect transparently on their next request. There is no
 re-pairing required. The standby presents the same dispatcher cert (same
-serial) as the primary — agents see no difference.
+serial, same `dispatcher_id`) as the primary — agents see no difference, and
+the serial already in their trusted-dispatcher map continues to match.
 
 If the standby was behind in registry state (new agents paired on the
 primary after the last sync), those agents will be unknown to the newly
@@ -215,6 +224,14 @@ Multiple dispatcher instances serving port 7443 simultaneously is
 supported for `run` and `ping` operations. All instances present the same
 cert (same serial), share the same registry, and agents accept connections
 from any of them.
+
+This active/active model is several instances of **one** dispatcher sharing a
+single identity (one cert, one serial, one `dispatcher_id`) for redundancy.
+It is distinct from native multi-dispatcher (0.9.0), where **several distinct**
+dispatchers — each with its own identity, cert, and `dispatcher_id` — appear
+as separate keys in an agent's trusted-dispatcher map. The two compose: a
+single dispatcher in such a map may itself be run active/active. See Native
+Multi-Dispatcher below.
 
 Concurrency locking
 : Lock files in `/var/lib/ctrl-exec/locks/` are per-instance. An
@@ -245,12 +262,68 @@ Registry writes
   are last-write-wins — operationally harmless since the content converges.
 
 
+## Native Multi-Dispatcher
+
+Native multi-dispatcher (0.9.0) lets a single agent serve more than one
+distinct dispatcher. Each dispatcher presents its own cert, chaining to a
+shared CA root, and each appears as its own line in the agent's
+trusted-dispatcher map at `/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers` — one
+line per dispatcher, `<hex-serial> <dispatcher-id>`. The map lives in the
+agent-writable state directory (not under `/etc/ctrl-exec-agent`, which holds
+only secrets), so the agent can rewrite it in place during rotation. It
+replaces the old single `ctrl-exec-serial` file and is reloaded on SIGHUP.
+
+`/run`, `/ping`, `/result`, and `/capabilities` are accepted only if the
+connecting cert's serial is a key in the map. The matched dispatcher's
+identity (its `dispatcher_id`) then drives permission and attribution: agent
+logs carry `DISPATCHER=<id>`, auth hooks receive `ENVEXEC_DISPATCHER` and
+`ENVEXEC_DISPATCHER_SERIAL`, and the async result store is partitioned by
+owner under `/var/lib/ctrl-exec-agent/runs/<dispatcher-id>/<reqid>.json` so a
+run is returned only to the dispatcher that submitted it (others get 404).
+
+Each dispatcher has a stable `dispatcher_id`, set via `dispatcher_id` in
+`ctrl-exec.conf` and defaulting to the dispatcher's hostname. It is delivered
+to the agent at pairing time. Pairing **appends** to the map rather than
+replacing it, so pairing a second dispatcher to an agent leaves the first in
+place.
+
+This is the supported mechanism for running multiple operators of differing
+trust classes against one host. Running separate agent instances per operator
+remains possible as optional defence-in-depth, but is no longer the way to
+achieve multi-operator separation. Independent per-dispatcher CAs with SNI
+are out of scope; all dispatchers in an agent's map chain to one shared CA
+root.
+
+Relation to the HA models above
+: Active/passive and active/active concern redundant instances of **one**
+  dispatcher sharing a single identity. Native multi-dispatcher concerns
+  **several distinct** dispatcher identities trusted by one agent. They are
+  orthogonal and may be combined: any dispatcher listed in an agent's map can
+  itself be deployed active/active behind a load balancer or VIP.
+
+
 ## Cert Rotation in an HA Setup
 
-dispatcher cert rotation updates the serial stored on every agent. In an
-HA setup, all instances must present the new cert immediately after rotation
-— an instance still presenting the old cert will be rejected by agents that
-have already updated their stored serial.
+dispatcher cert rotation changes the serial agents must trust. In an HA setup
+all instances present the same cert, so they rotate together — they share one
+cert, one serial, and one `dispatcher_id`. As of 0.9.0 rotation propagates to
+each reachable agent automatically over the run channel, with no re-pairing,
+via add-then-remove against the trusted-dispatcher map (see below).
+
+Seamless rotation (0.9.0)
+: Rotation updates each agent's trusted-dispatcher map at
+  `/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers` automatically. The serial
+  broadcast (`broadcast_serial` → `update-ctrl-exec-serial`) **adds** the new
+  serial to the map against the dispatcher's stable `dispatcher_id`, while the
+  **old** serial stays trusted through the overlap window — so the live cert
+  (the old one before the instances restart, the new one after) is accepted
+  throughout. After the overlap window the dispatcher broadcasts removal of the
+  old serial (`retire_previous_serial`, logged as `serial-retire`), so the
+  retired cert stops being trusted. Because `dispatcher_id` is stable across
+  rotation, trust and attribution carry over, and the agent can rewrite its own
+  map because it lives in the agent-writable state directory. Only an agent that
+  was **offline** during the broadcast misses the new serial and, once the
+  overlap window expires, is marked `serial-stale` and needs re-pairing.
 
 Rotation procedure for HA:
 
@@ -258,11 +331,11 @@ Rotation procedure for HA:
    new cert, writes it to `/etc/ctrl-exec/dispatcher.crt` and
    `/etc/ctrl-exec/dispatcher.key`, and broadcasts the new serial to all
    agents via `update-ctrl-exec-serial`.
-2. Sync the updated `/etc/ctrl-exec/` to all other dispatcher instances
-   immediately. All instances must reload their cert before any agent
-   completes its serial update. In practice the broadcast takes seconds to
-   minutes depending on fleet size; sync should complete before that window
-   closes.
+2. Sync the updated `/etc/ctrl-exec/` to all other dispatcher instances. The
+   old serial stays trusted through the overlap window, so an instance still
+   presenting the old cert continues to be accepted while the sync and restarts
+   roll through — there is no narrow window in which an unsynced instance is
+   rejected. Complete the sync well before the overlap window expires.
 3. Reload or restart all dispatcher instances:
 
    ```bash
@@ -272,14 +345,15 @@ Rotation procedure for HA:
    `ctrl-exec-api` reads its cert at startup. There is no live cert
    reload — a restart is required.
 
-The `update-ctrl-exec-serial` script on each agent writes the new serial
-and sends SIGHUP to the agent process. After SIGHUP, the agent will reject
-connections from any dispatcher presenting the old serial. The overlap
-window (`cert_overlap_days`, default 30 days) is the time allowed for
-agents that were unreachable during the broadcast to reconnect and receive
-the update — it is not a grace period for the dispatcher instances themselves.
-All dispatcher instances must be updated before the first agent processes
-its serial update.
+The `update-ctrl-exec-serial` script on each agent adds the new serial to the
+trusted-dispatcher map and sends SIGHUP to the agent process; the agent reloads
+its map on SIGHUP and immediately trusts the rotated cert, with no re-pairing.
+The overlap window (`cert_overlap_days`, default 30 days) is the time the old
+serial remains trusted: it lets the dispatcher instances roll from the old cert
+to the new at their own pace, and it is also the window in which agents that
+were unreachable during the broadcast can reconnect and receive the update. An
+agent still offline when the window expires is marked `serial-stale` and needs
+re-pairing.
 
 
 ## What HA Does Not Solve
@@ -293,10 +367,12 @@ CA key compromise
   the CA compromise recovery procedure.
 
 Cert serial consistency
-: All instances must present the same dispatcher cert. Divergence — one
-  instance presenting an old cert — causes agents to reject that instance
-  after a rotation. The replication and reload procedure must be treated as
-  an atomic operation across the fleet.
+: All instances must converge on the new dispatcher cert during a rotation.
+  The overlap window keeps the old serial trusted while instances roll over, so
+  an instance briefly presenting the old cert is still accepted — divergence is
+  not immediately fatal. But an instance left on the old cert past the overlap
+  window, after the old serial has been retired, is rejected by every agent.
+  The replication and reload procedure must complete well within the window.
 
 Pairing queue coordination
 : Pending pairing requests in `/var/lib/ctrl-exec/pairing/` are not

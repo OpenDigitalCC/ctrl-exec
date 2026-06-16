@@ -19,10 +19,12 @@ An agent holds no state that cannot be reconstructed from its configuration file
 An agent joins the fleet through the pairing protocol. Pairing is a one-time ceremony that establishes mutual trust:
 
 - The agent receives a CA-signed certificate identifying it to the dispatcher.
-- The agent stores the dispatcher's certificate serial number, which it verifies on every subsequent connection.
+- The agent records the approving dispatcher — its certificate serial and stable id — in its trusted-dispatcher map, which it checks on every subsequent connection.
 - The dispatcher records the agent in the registry at `/var/lib/ctrl-exec/agents/`.
 
 After pairing, the agent is identified by its certificate serial. The registry entry contains the hostname, IP, pairing timestamp, certificate expiry, serial confirmation state, the dispatch fields `lookup_by` (resolve by `hostname` or `ip`) and operational `port`, and the agent's cached tags.
+
+An agent can be paired with more than one dispatcher. Re-pairing against a further dispatcher appends an entry to the trusted-dispatcher map; existing dispatchers stay trusted. Each dispatcher presents its own certificate chaining to the shared CA root and is identified by a stable `dispatcher_id`. This is the supported way to give operators of differing trust classes access to a single host — keyed per dispatcher in the auth hook and attributed in the logs — rather than running separate agent instances.
 
 Dispatch resolves a registered agent to its stored address (`lookup_by`) and `port`, so an agent on a non-default port — or one whose reported hostname does not resolve from the dispatcher host — is reachable without per-command flags. These dispatch fields can be changed without re-pairing using `ced edit-agent` (rename, address, port, lookup mode); the certificate is unaffected.
 
@@ -108,7 +110,7 @@ ctrl-exec-agent self-check
 
 ## pairing-status
 
-Shows the agent's current certificate, expiry date, and the stored dispatcher serial number.
+Shows the agent's current certificate, expiry date, and its trusted-dispatcher map — the serial and stable id of each dispatcher the agent trusts.
 
 ```bash
 ctrl-exec-agent pairing-status
@@ -122,12 +124,8 @@ No operator action is needed during normal operation. Renewal failure is logged 
 
 # Cert Serial Tracking
 
-The agent stores the dispatcher's certificate serial in `/etc/ctrl-exec-agent/dispatcher-serial`. Every incoming connection is checked against this value. A mismatch is rejected with 403 and logged as `ACTION=serial-reject`.
+The agent holds a trusted-dispatcher map at `/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers` — one line per trusted dispatcher, `<hex-serial> <dispatcher-id>`. Every incoming connection is checked against the map: a serial not present is rejected with 403 and logged as `ACTION=serial-reject`. When the serial matches, the resolved `dispatcher_id` drives permission and attribution.
 
-After a dispatcher certificate rotation (`ced rotate-cert`), all agents must receive the new serial. Agents that were offline during the broadcast will reject the dispatcher until the update is delivered. The overlap window (`cert_overlap_days`) is the time allowed for this.
+After a dispatcher certificate rotation (`ced rotate-cert`), the map is updated automatically over the run channel, with no re-pairing, via add-then-remove. The dispatcher broadcasts the new serial under its stable `dispatcher_id` and each reachable agent adds it; the old serial stays trusted through the overlap window, so the dispatcher's live certificate is accepted throughout, and the old serial is removed once the window closes. Because `dispatcher_id` is stable across rotation, trust and attribution carry over. The agent rewrites the map in place, which is why it lives in the agent-writable state directory.
 
-An agent reporting `serial-reject` consistently after a rotation should be checked with:
-
-```bash
-ced serial-status
-```
+An agent that was offline during the broadcast misses the new serial and is later marked `serial-stale`; that agent reports `serial-reject` once the old serial is retired and should be re-paired against the dispatcher's new certificate.

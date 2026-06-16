@@ -297,6 +297,97 @@ subtest 'expire_stale_agents: after overlap expires - pending agents become stal
         'current agent unaffected by expiry';
 };
 
+# ---------------------------------------------------------------------------
+# retire_previous_serial (the "remove" half of add-then-remove rotation)
+# ---------------------------------------------------------------------------
+
+subtest 'retire_previous_serial: no-op before the overlap window expires' => sub {
+    my $dir    = tempdir(CLEANUP => 1);
+    my $regDir = "$dir/agents";
+    my $rotFile = "$dir/rotation.json";
+    make_path($regDir);
+
+    my $future = strftime('%Y-%m-%dT%H:%M:%SZ', gmtime(time + 86400 * 7));
+    write_file($rotFile, encode_json({
+        current_serial  => 'abcd1234',
+        previous_serial => '0000ffff',
+        overlap_expires => $future,
+    }));
+    write_file("$regDir/agent-01.json", encode_json({
+        hostname => 'agent-01', serial_status => 'current',
+    }));
+
+    my @calls;
+    no warnings 'redefine';
+    local *Exec::Engine::dispatch_all = sub { push @calls, {@_}; return []; };
+
+    Exec::Rotation::retire_previous_serial(config => config(
+        rotation_file => $rotFile, registry_dir => $regDir));
+
+    is scalar @calls, 0, 'no removal dispatched before overlap expires';
+    is decode_json(read_file($rotFile))->{previous_serial}, '0000ffff',
+        'previous_serial preserved before overlap';
+};
+
+subtest 'retire_previous_serial: removes the old serial from current agents after overlap' => sub {
+    my $dir    = tempdir(CLEANUP => 1);
+    my $regDir = "$dir/agents";
+    my $rotFile = "$dir/rotation.json";
+    make_path($regDir);
+
+    my $past = strftime('%Y-%m-%dT%H:%M:%SZ', gmtime(time - 86400));
+    write_file($rotFile, encode_json({
+        current_serial  => 'abcd1234',
+        previous_serial => '0000ffff',
+        overlap_expires => $past,
+    }));
+    # One confirmed agent (gets the removal) and one still pending (must not).
+    write_file("$regDir/agent-01.json", encode_json({
+        hostname => 'agent-01', serial_status => 'current',
+    }));
+    write_file("$regDir/agent-02.json", encode_json({
+        hostname => 'agent-02', serial_status => 'pending',
+    }));
+
+    my @calls;
+    no warnings 'redefine';
+    local *Exec::Engine::dispatch_all = sub { push @calls, {@_}; return []; };
+
+    my $n = Exec::Rotation::retire_previous_serial(config => config(
+        rotation_file => $rotFile, registry_dir => $regDir));
+
+    is $n, 1, 'one current agent targeted';
+    is scalar @calls, 1, 'exactly one removal dispatch';
+    is $calls[0]{script}, 'update-ctrl-exec-serial', 'invokes the trust-update script';
+    is_deeply $calls[0]{args}, ['--remove', '0000ffff'], 'removes the previous serial';
+    is_deeply $calls[0]{hosts}, ['agent-01'], 'targets only the confirmed agent';
+
+    my $state = decode_json(read_file($rotFile));
+    ok !exists $state->{previous_serial}, 'previous_serial cleared after retirement';
+    ok $state->{previous_retired}, 'previous_retired timestamp stamped';
+};
+
+subtest 'retire_previous_serial: idempotent once previous_serial is cleared' => sub {
+    my $dir    = tempdir(CLEANUP => 1);
+    my $regDir = "$dir/agents";
+    my $rotFile = "$dir/rotation.json";
+    make_path($regDir);
+
+    my $past = strftime('%Y-%m-%dT%H:%M:%SZ', gmtime(time - 86400));
+    write_file($rotFile, encode_json({
+        current_serial => 'abcd1234', overlap_expires => $past,
+        previous_retired => '2025-01-01T00:00:00Z',
+    }));
+
+    my @calls;
+    no warnings 'redefine';
+    local *Exec::Engine::dispatch_all = sub { push @calls, {@_}; return []; };
+
+    Exec::Rotation::retire_previous_serial(config => config(
+        rotation_file => $rotFile, registry_dir => $regDir));
+    is scalar @calls, 0, 'no dispatch when there is no previous_serial to retire';
+};
+
 subtest 'expire_stale_agents: no rotation state file - returns without error' => sub {
     # NOTE: Rotation.pm calls load_state then dereferences the result without
     # guarding against undef ($state->{overlap_expires} on undef dies).

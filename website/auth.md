@@ -43,6 +43,10 @@ ENVEXEC_TIMESTAMP   ISO 8601 UTC timestamp
 ```
 
 ::: textbox
+On the agent side, the hook also receives `ENVEXEC_DISPATCHER` — the stable id of the authenticated dispatcher, resolved from the agent's trusted-dispatcher map — and `ENVEXEC_DISPATCHER_SERIAL`, its certificate serial. Key per-dispatcher policy on `ENVEXEC_DISPATCHER`, not the serial, which rotates. These are set only for the agent-side hook, where the connecting certificate has been authenticated.
+:::
+
+::: textbox
 Always use `ENVEXEC_ARGS_JSON` for argument inspection. `ENVEXEC_ARGS` is space-joined and ambiguous for arguments containing spaces or newlines. It is retained for simple cases only.
 :::
 
@@ -89,6 +93,23 @@ case "$ENVEXEC_TOKEN" in
         exit 0 ;;
     *)
         exit 2 ;;
+esac
+```
+
+## Example: per-dispatcher restriction
+
+On the agent side, restrict which scripts a given dispatcher may run, keyed on its stable id (an agent-side hook, where `ENVEXEC_DISPATCHER` is set):
+
+```bash
+#!/bin/bash
+case "$ENVEXEC_DISPATCHER" in
+    ced-ops)
+        exit 0 ;;
+    ced-readonly)
+        [[ "$ENVEXEC_SCRIPT" == check-* ]] || exit 3
+        exit 0 ;;
+    *)
+        exit 1 ;;
 esac
 ```
 

@@ -11,15 +11,18 @@ ca   = /etc/ctrl-exec-agent/ca.crt
 # and the port used by ctrl-exec pairing-mode on the ctrl-exec host.
 # pairing_port = 7444
 
-# ctrl-exec certificate serial (written automatically at pairing time).
-# Path to a file containing the trusted ctrl-exec cert serial number (hex).
-# The /capabilities endpoint rejects any peer whose cert serial does not match.
-# This restricts allowlist enumeration to the genuine ctrl-exec only,
-# preventing lateral reconnaissance from a compromised agent peer.
-# Written by request-pairing - do not edit manually.
-# Re-pair the agent if this file is missing or needs updating.
-# Reloaded on SIGHUP alongside the allowlist and revocation list.
-# dispatcher_serial_path = /etc/ctrl-exec-agent/ctrl-exec-serial
+# Trusted dispatchers (written automatically at pairing time).
+# Path to the map of dispatcher cert serials this agent accepts, each with the
+# dispatcher's stable identity. One entry per line: "<hex-serial> <id>".
+# Every request (/run, /ping, /result, /capabilities) is rejected unless the
+# peer's cert serial appears here; the matched identity is recorded for
+# attribution and passed to the auth hook as ENVEXEC_DISPATCHER.
+# Pairing appends to this map, so an agent can serve more than one dispatcher
+# natively - re-pair with each. It lives in the agent-writable state directory
+# (not the root-owned config dir) so cert rotation can update trusted serials in
+# place, without re-pairing. Reloaded on SIGHUP alongside the allowlist and
+# revocation list.
+# trusted_dispatchers_path = /var/lib/ctrl-exec-agent/ctrl-exec-dispatchers
 
 # Revoked certificate serials.
 # Path to a file listing revoked TLS certificate serial numbers, one per line.

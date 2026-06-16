@@ -5,6 +5,17 @@ cert = /etc/ctrl-exec/dispatcher.crt
 key  = /etc/ctrl-exec/dispatcher.key
 ca   = /etc/ctrl-exec/ca.crt
 
+# Dispatcher identity.
+# A stable label delivered to agents at pairing time and recorded by each agent
+# as the owner of the jobs this dispatcher runs. Agents key per-dispatcher
+# permission and attribution on it (it is exposed to agent auth hooks as
+# ENVEXEC_DISPATCHER), and an agent that serves several dispatchers tells them
+# apart by it. Defaults to this host's name; the installer may pre-set that.
+# Use letters, digits, '.', '-', '_' (max 64). Changing it after agents have
+# paired invalidates those pairings - the agents still hold the old identity, so
+# re-pair them to adopt the new one.
+# dispatcher_id = my-dispatcher
+
 # Auth hook - called before every run and ping request.
 # The default hook authorises everything. Replace with real logic for
 # production use. Comment out to disable auth entirely.

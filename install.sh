@@ -520,6 +520,34 @@ install_agent() {
         info "Script directory already exists: $SCRIPTS_DIR"
     fi
 
+    # Agent state directory - holds the trusted-dispatcher map and the async
+    # result store. The agent (running as $AGENT_USER) must rewrite the map in
+    # place during cert rotation, so the directory is owned by the agent user.
+    local agent_state_dir="/var/lib/ctrl-exec-agent"
+    mkdir -p "$agent_state_dir"
+    chmod 750 "$agent_state_dir"
+    chown "$AGENT_USER":"$AGENT_GROUP" "$agent_state_dir"
+
+    # Upgrade migration (0.9.0): an agent paired before the trusted-dispatcher
+    # map existed stored a single dispatcher serial in
+    # $AGENT_CONF_DIR/ctrl-exec-serial. Seed the new map from it so the agent
+    # keeps trusting its dispatcher without re-pairing. The dispatcher identity
+    # is unknown here, so a placeholder is used; the real identity is restored on
+    # the next cert-rotation broadcast or by re-pairing.
+    local old_serial_file="$AGENT_CONF_DIR/ctrl-exec-serial"
+    local new_map_file="$agent_state_dir/ctrl-exec-dispatchers"
+    if [[ -f "$old_serial_file" && ! -f "$new_map_file" ]]; then
+        local migrated_serial
+        migrated_serial=$(tr -dc '0-9a-fA-F' < "$old_serial_file" | tr 'A-F' 'a-f')
+        if [[ -n "$migrated_serial" ]]; then
+            printf '# migrated from ctrl-exec-serial on upgrade to 0.9.0\n%s dispatcher\n' \
+                "$migrated_serial" > "$new_map_file"
+            chmod 644 "$new_map_file"
+            chown "$AGENT_USER":"$AGENT_GROUP" "$new_map_file"
+            info "Migrated legacy dispatcher serial into the trusted-dispatcher map"
+        fi
+    fi
+
     # Async result store - the agent writes detached-job results here, keyed by
     # reqid, plus a .locks subdir for agent-side concurrency. The agent runs as
     # $AGENT_USER and must write it, so it is owned by the agent user (0750).

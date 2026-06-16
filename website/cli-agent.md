@@ -33,7 +33,7 @@ sudo systemctl kill --signal=HUP ctrl-exec-agent
 ctrl-exec-agent request-pairing --dispatcher <hostname> [--port <n>] [--lookup-by ip|hostname] [--background] [--timeout <s>]
 ```
 
-Generates a key pair and CSR, connects to the dispatcher pairing port, and waits for approval. On approval, stores the signed certificate, CA certificate, and dispatcher serial. The agent's configured operational port is reported in the request so dispatch can reach it without a per-command port.
+Generates a key pair and CSR, connects to the dispatcher pairing port, and waits for approval. On approval, stores the signed certificate and CA certificate, and records the approving dispatcher — its serial and stable id — in the agent's trusted-dispatcher map. The entry is appended: re-pairing against a further dispatcher leaves existing dispatchers trusted. The agent's configured operational port is reported in the request so dispatch can reach it without a per-command port.
 
 `--dispatcher <hostname>`
 : Hostname or IP of the dispatcher instance. Required.
@@ -89,16 +89,18 @@ ctrl-exec-agent self-check && \
 ctrl-exec-agent pairing-status
 ```
 
-Shows the agent's current certificate, expiry date, and the stored dispatcher serial number.
+Shows the agent's current certificate, expiry date, and its trusted-dispatcher map — the serial and stable id of each dispatcher the agent trusts.
 
 ```
 Certificate:  /etc/ctrl-exec-agent/agent.crt
 Serial:       0A:1B:2C:3D
 Expiry:       Mar 16 12:00:00 2027 GMT
-dispatcher serial: 4E:5F:6A:7B
+Trusted dispatchers:
+  4E:5F:6A:7B  ced-prod
+  8C:9D:0E:1F  ced-ops
 ```
 
-Use after a dispatcher cert rotation to confirm the agent has received the new serial.
+Use after re-pairing to confirm the approving dispatcher was recorded in the map.
 
 # Exit Codes
 

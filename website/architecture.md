@@ -23,6 +23,12 @@ current_page: /architecture
 All persistent state is files on disk. The dispatcher process holds no runtime state. Any number of dispatcher instances sharing the same state files can serve requests interchangeably.
 :::
 
+# Multiple Dispatchers
+
+An agent can serve more than one dispatcher natively. Each agent holds a trusted-dispatcher map (`/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers`) listing every dispatcher it trusts, one `<hex-serial> <dispatcher-id>` line each. Each dispatcher presents its own certificate, all chaining to a shared CA root, and is identified by a stable `dispatcher_id`.
+
+Re-pairing an agent against a further dispatcher appends an entry to the map; existing dispatchers stay trusted. This is the supported way to give several operators of differing trust classes access to one host — keyed per dispatcher through the auth hook and attributed in the logs — rather than running separate agent instances. See [Pairing](/pairing) for enrolling an additional dispatcher.
+
 # Execution Flow
 
 ![ctrl-exec request flow — from initiator to structured result](ctrl-exec-request-flow.svg)
@@ -32,7 +38,7 @@ A `ced run host-a backup-mysql` invocation proceeds as follows:
 1. `ced` reads its config and the agent registry to resolve `host-a` to an IP and port.
 2. If a dispatcher-side auth hook is configured, it is called with the full request context — script name, hosts, arguments, username, token, source IP. A non-zero exit aborts the request before any connection is made.
 3. `ced` checks the concurrency lock for `host-a:backup-mysql`. If the script is already running on that host, the request is rejected with a lock conflict.
-4. `ced` opens an mTLS connection to `host-a:7443`. Both sides verify the peer certificate against the CA. The agent additionally checks the dispatcher cert serial against the value stored at pairing time.
+4. `ced` opens an mTLS connection to `host-a:7443`. Both sides verify the peer certificate against the CA. The agent additionally checks the connecting cert's serial against its trusted-dispatcher map and resolves the matching dispatcher identity, which drives permission and attribution.
 5. `ced` sends a JSON request body containing the script name, arguments, request ID (`REQID`), username, and token.
 6. The agent validates the script name against its allowlist. If the name is not present, the agent logs `ACTION=deny` and returns 403.
 7. If an agent-side auth hook is configured, it runs after allowlist validation.
@@ -69,7 +75,7 @@ State is divided into configuration and CA material (which must be backed up), r
 : CA key and certificate, dispatcher TLS key and certificate, auth hook. The CA key is the root of trust for the deployment — back it up to encrypted offline storage. Access to the CA key allows issuing arbitrary agent certificates.
 
 `/etc/ctrl-exec-agent/`
-: Agent TLS key and certificate, CA certificate (for verifying dispatcher connections), `agent.conf`, `scripts.conf`, the stored dispatcher serial number, and an optional revocation list.
+: Agent TLS key and certificate, CA certificate (for verifying dispatcher connections), `agent.conf`, `scripts.conf`, and an optional revocation list.
 
 `/var/lib/ctrl-exec/agents/`
 : Agent registry. One JSON file per paired agent, written atomically. Contains hostname, IP, pairing timestamp, cert expiry, and serial tracking state. Must be replicated in HA deployments.
@@ -82,6 +88,12 @@ State is divided into configuration and CA material (which must be backed up), r
 
 `/var/lib/ctrl-exec/runs/`
 : Run results stored by the API server. Keyed by `REQID`, retained for 24 hours. Required on a shared path only if `GET /status/{reqid}` must work regardless of which instance handled the original request.
+
+`/var/lib/ctrl-exec-agent/`
+: Agent-writable state. Holds the trusted-dispatcher map (`ctrl-exec-dispatchers`), which the agent rewrites in place during cert rotation, so it lives here rather than in the root-owned config directory.
+
+`/var/lib/ctrl-exec-agent/runs/<dispatcher-id>/`
+: Async run results held on the agent, stored per owner as `<reqid>.json`. `GET /result/<reqid>` returns a run only to the dispatcher that submitted it; a request from any other dispatcher gets a 404 unknown.
 
 `/var/lib/ctrl-exec/pairing/`
 : Pending pairing requests. Short-lived; cleaned up within 10 minutes.

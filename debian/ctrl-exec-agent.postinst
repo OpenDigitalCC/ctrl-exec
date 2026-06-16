@@ -32,6 +32,32 @@ case "$1" in
             chown root:ctrl-exec-agent /etc/ctrl-exec-agent/scripts.conf
         fi
 
+        # Agent state directory - holds the trusted-dispatcher map and the async
+        # result store. systemd's StateDirectory also creates it at service
+        # start, but pairing can write the map before the first start, and the
+        # agent must be able to rewrite the map in place during cert rotation, so
+        # ensure it exists now owned by the service user.
+        mkdir -p /var/lib/ctrl-exec-agent
+        chmod 750 /var/lib/ctrl-exec-agent
+        chown ctrl-exec-agent:ctrl-exec-agent /var/lib/ctrl-exec-agent
+
+        # Upgrade migration (0.9.0): an agent paired before the trusted-dispatcher
+        # map existed stored a single dispatcher serial in
+        # /etc/ctrl-exec-agent/ctrl-exec-serial. Seed the new map from it so the
+        # agent keeps trusting its dispatcher without re-pairing. The dispatcher
+        # identity is unknown here, so a placeholder is used; the real identity is
+        # restored on the next cert-rotation broadcast or by re-pairing.
+        if [ -f /etc/ctrl-exec-agent/ctrl-exec-serial ] \
+           && [ ! -f /var/lib/ctrl-exec-agent/ctrl-exec-dispatchers ]; then
+            migrated_serial=$(tr -dc '0-9a-fA-F' < /etc/ctrl-exec-agent/ctrl-exec-serial | tr 'A-F' 'a-f')
+            if [ -n "$migrated_serial" ]; then
+                printf '# migrated from ctrl-exec-serial on upgrade to 0.9.0\n%s dispatcher\n' \
+                    "$migrated_serial" > /var/lib/ctrl-exec-agent/ctrl-exec-dispatchers
+                chmod 644 /var/lib/ctrl-exec-agent/ctrl-exec-dispatchers
+                chown ctrl-exec-agent:ctrl-exec-agent /var/lib/ctrl-exec-agent/ctrl-exec-dispatchers
+            fi
+        fi
+
         # Scripts directory - root owns, agent group can read/execute.
         mkdir -p /opt/ctrl-exec-scripts
         chmod 750 /opt/ctrl-exec-scripts

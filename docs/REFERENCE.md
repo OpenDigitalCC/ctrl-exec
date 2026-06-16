@@ -466,8 +466,11 @@ Writes to `/etc/ctrl-exec/`. Does not overwrite an existing CA.
 Generate the dispatcher's own key and certificate, signed by the CA.
 Run after `setup-ca`. If an existing cert is found and registered agents
 exist, the command displays the agent count and requires confirmation before
-proceeding - replacing the cert changes its serial and agents will need
-re-pairing if they miss the rotation broadcast.
+proceeding - replacing the cert changes its serial. The new serial is then
+broadcast to agents over the run channel and added to each reachable agent's
+trusted-dispatcher map automatically, so rotation is seamless for agents that
+are online; only an agent that is offline during the broadcast and misses it
+will need re-pairing.
 
 ```bash
 ced setup-ctrl-exec
@@ -528,6 +531,17 @@ Key settings:
 `cert`, `key`, `ca`
 : Paths to the dispatcher's TLS certificate, private key, and CA
   certificate. Required for all mTLS operations.
+
+`dispatcher_id`
+: Stable identity for this dispatcher. Defaults to the dispatcher
+  hostname. Delivered to each agent at pairing and recorded against the
+  dispatcher's cert serial in the agent's trusted-dispatcher map. Agent
+  permission and attribution key on this id, so it must remain stable
+  across cert rotations - set it explicitly if the hostname may change.
+
+  ```
+  dispatcher_id = ctrl-exec-primary
+  ```
 
 `read_timeout`
 : How long (in seconds) the dispatcher waits for a response from an agent
@@ -648,17 +662,27 @@ Key settings:
   revoked_serials = /etc/ctrl-exec-agent/revoked-serials
   ```
 
-`dispatcher_serial_path`
-: Path to the stored dispatcher cert serial file. Written automatically by
-  `request-pairing` - do not edit manually. The `/capabilities` endpoint
-  rejects peers whose cert serial does not match the stored value. Re-pair
-  the agent to update after a dispatcher cert rotation.
+`trusted_dispatchers_path`
+: Path to the trusted-dispatcher map. Each line maps a dispatcher cert
+  serial to a dispatcher id: `<hex-serial> <dispatcher-id>`. Written
+  automatically by `request-pairing` and updated in place during cert
+  rotation - do not edit manually. Pairing appends an entry, so an agent can
+  serve multiple dispatchers natively; re-pair to add another. The `/run`,
+  `/ping`, `/result`, and `/capabilities` endpoints reject peers whose cert
+  serial is not a key in the map; the matched dispatcher identity drives
+  permission and attribution. A dispatcher cert rotation updates the map
+  automatically over the run channel (the rotated serial is added, then the
+  old serial removed after the overlap window), so no re-pairing is needed
+  for a reachable agent.
 
-  Default: `/etc/ctrl-exec-agent/ctrl-exec-serial`. Reloaded on SIGHUP.
+  Default: `/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers`. The map lives in
+  the agent-writable state directory, not the root-owned config dir, so the
+  non-root agent service user can rewrite it in place during cert rotation.
+  Reloaded on SIGHUP.
 
 `dispatcher_cn`
 : Removed. Previously used to restrict `/capabilities` by cert CN. Replaced
-  by serial tracking via `dispatcher_serial_path`.
+  by the trusted-dispatcher map via `trusted_dispatchers_path`.
 
 `script_dirs`
 : Colon-separated list of absolute directory paths. If set, any script in
@@ -1083,6 +1107,15 @@ The same context is available as environment variables:
 `ENVEXEC_SOURCE_IP`
 : IP address of the dispatcher connection.
 
+`ENVEXEC_DISPATCHER`
+: Stable identity of the calling dispatcher, resolved from its cert serial via
+  the agent's trusted-dispatcher map. Author per-dispatcher policy against this
+  value, never the serial - serials rotate, the identity does not. Empty when no
+  dispatcher could be resolved.
+
+`ENVEXEC_DISPATCHER_SERIAL`
+: The calling dispatcher's certificate serial (hex).
+
 `ENVEXEC_TIMESTAMP`
 : ISO 8601 UTC timestamp when the hook was invoked.
 
@@ -1159,8 +1192,9 @@ ctrl-exec-agent self-ping
 ```
 
 The agent will reject the connection with a 403 serial mismatch — the
-agent's cert is not a dispatcher cert and does not match the stored
-dispatcher serial. This is the expected and correct result. `self-ping`
+agent's cert is not a dispatcher cert and the connecting cert serial is
+not in the agent's trusted-dispatcher map. This is the expected and
+correct result. `self-ping`
 treats a 403 response as a pass: it confirms that the port is listening,
 the TLS stack is functioning, and the agent is correctly enforcing serial
 policy.

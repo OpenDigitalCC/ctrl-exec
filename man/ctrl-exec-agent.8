@@ -15,8 +15,11 @@ runs on a managed host and executes only the scripts named in a per-host
 allowlist, on request from a paired control host over HTTPS with mutual
 certificate authentication. There is no shell: arguments are passed directly
 to the named program. The agent listens on port 7443 by default and reloads
-its allowlist, revocation list, and dispatcher serial on
+its allowlist, revocation list, and trusted-dispatcher map on
 .BR SIGHUP .
+The agent may be paired with more than one dispatcher: each is recorded in the
+trusted-dispatcher map and every request is attributed to the dispatcher that
+made it.
 .PP
 .B cea
 is a shortcut for
@@ -42,9 +45,11 @@ network connection is made.
 .TP
 .B self-ping
 Connect to the running agent on the loopback address over mTLS and send a
-ping. A 403 serial-mismatch response is expected and reported as success: it
-confirms the port is listening, the TLS stack works, and the agent is
-enforcing serial policy. Requires the agent to be running and paired.
+ping. A 403 serial-mismatch response is expected and reported as success: the
+agent's own cert serial is not in its trusted-dispatcher map, so the request is
+rejected - confirming the port is listening, the TLS stack works, and the agent
+is enforcing its trusted-dispatcher policy. Requires the agent to be running and
+paired.
 .SH OPTIONS
 .TP
 .BI \-\-config " path"

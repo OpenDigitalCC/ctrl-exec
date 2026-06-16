@@ -8,6 +8,7 @@ use Fcntl       qw(:flock);
 use JSON        qw(encode_json decode_json);
 use POSIX       qw(strftime);
 use Carp        qw(croak);
+use Sys::Hostname qw(hostname);
 
 use Exec::RateLimit qw();
 
@@ -51,6 +52,27 @@ sub build_rate_config {
     return \%rl;
 }
 
+# Resolve this dispatcher's stable identity, delivered to agents at pairing and
+# at cert rotation so they attribute and authorise per dispatcher. Explicit
+# ctrl-exec.conf 'dispatcher_id' wins; otherwise the host's name. Sanitised to
+# the agent's valid_dispatcher_id charset (start alphanumeric, then
+# [A-Za-z0-9._-], capped at 64) so the agent never rejects it. Because the id is
+# stable across cert rotation - it is not derived from the serial - the agent
+# maps a rotated serial to the same identity, leaving trust and attribution
+# undisturbed.
+sub resolve_dispatcher_id {
+    my ($config) = @_;
+    $config //= {};
+    my $id = $config->{dispatcher_id};
+    $id = hostname() unless defined $id && length $id;
+    $id //= '';
+    $id =~ s/[^A-Za-z0-9._-]/-/g;   # map disallowed chars to hyphen
+    $id =~ s/^[^A-Za-z0-9]+//;      # must start alphanumeric
+    $id = substr($id, 0, 64);
+    $id = 'dispatcher' unless length $id;
+    return $id;
+}
+
 # Start pairing mode - listen on port for agent CSR requests
 # Blocks until interrupted (SIGINT/SIGTERM)
 sub run_pairing_mode {
@@ -67,6 +89,9 @@ sub run_pairing_mode {
     # left open indefinitely. undef/0 means no timeout (legacy behaviour).
     my $timeout   = $opts{timeout};
     my $deadline  = ($timeout && $timeout > 0) ? time + $timeout : undef;
+    # This dispatcher's stable identity, threaded to interactive approvals so
+    # agents paired here record who paired them (see approve_request).
+    my $dispatcher_id = $opts{dispatcher_id} // '';
     # Queue directory; overridable so the listener can be exercised in tests
     # without writing under /var/lib.
     my $pairing_dir = $opts{pairing_dir} // $PAIRING_DIR;
@@ -192,7 +217,7 @@ sub run_pairing_mode {
                     _interactive_prompt($log_fn);
                 }
                 elsif ($line =~ /^a(\d+)$/) {
-                    _interactive_approve($1, $log_fn);
+                    _interactive_approve($1, $log_fn, $dispatcher_id);
                 }
                 elsif ($line =~ /^d(\d+)$/) {
                     _interactive_deny($1, $log_fn);
@@ -201,7 +226,7 @@ sub run_pairing_mode {
                     # Shorthand approve when only one request pending
                     my $reqs = list_requests();
                     if (@$reqs == 1) {
-                        _do_approve($reqs->[0]{id}, $log_fn);
+                        _do_approve($reqs->[0]{id}, $log_fn, $dispatcher_id);
                     }
                     elsif (@$reqs == 0) {
                         print "No pending requests.\n";
@@ -278,6 +303,9 @@ sub approve_request {
     my $ca_dir      = $opts{ca_dir}      // '/etc/ctrl-exec';
     my $pairing_dir = $opts{pairing_dir} // $PAIRING_DIR;
     my $log_fn      = $opts{log_fn}      // sub {};
+    # This dispatcher's stable identity, delivered to the agent so it can key
+    # permission and attribution on it (serials rotate; the identity does not).
+    my $dispatcher_id = $opts{dispatcher_id} // '';
 
     my $req_file = "$pairing_dir/$reqid.json";
     -f $req_file or croak "No pending request '$reqid'";
@@ -331,6 +359,7 @@ sub approve_request {
         ca              => $ca_pem,
         nonce           => $req->{nonce} // '',
         dispatcher_serial => $disp_serial,
+        dispatcher_id   => $dispatcher_id,
     }));
 
     # Persist agent record - source of truth for all paired agents
@@ -487,14 +516,14 @@ sub _print_queue {
 
 # Approve the Nth request in the current queue (1-based index).
 sub _interactive_approve {
-    my ($n, $log_fn) = @_;
+    my ($n, $log_fn, $dispatcher_id) = @_;
     my $reqs = list_requests();
     my $r    = $reqs->[$n - 1];
     unless ($r) {
         print "No request at position $n.\n";
         return;
     }
-    _do_approve($r->{id}, $log_fn);
+    _do_approve($r->{id}, $log_fn, $dispatcher_id);
 }
 
 # Deny the Nth request in the current queue (1-based index).
@@ -511,11 +540,12 @@ sub _interactive_deny {
 
 # Approve a request by reqid, with error handling for interactive context.
 sub _do_approve {
-    my ($reqid, $log_fn) = @_;
+    my ($reqid, $log_fn, $dispatcher_id) = @_;
     eval {
         approve_request(
-            reqid  => $reqid,
-            log_fn => $log_fn,
+            reqid         => $reqid,
+            dispatcher_id => $dispatcher_id,
+            log_fn        => $log_fn,
         );
     };
     if ($@) {

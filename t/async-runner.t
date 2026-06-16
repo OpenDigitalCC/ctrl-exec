@@ -17,15 +17,15 @@ use Exec::Agent::AsyncRunner qw();
 # Poll the result store until $reqid reaches $want status, or timeout. Polling
 # (not a fixed sleep) keeps the test deterministic regardless of scheduling.
 sub wait_for_status {
-    my ($reqid, $dir, $want, $timeout) = @_;
+    my ($reqid, $dir, $want, $timeout, $owner) = @_;
     $timeout //= 5;
     my $deadline = time + $timeout;
     while (time <= $deadline) {
-        my $r = Exec::Agent::AsyncRunner::result($reqid, $dir);
+        my $r = Exec::Agent::AsyncRunner::result($reqid, $dir, $owner);
         return $r if $r && ($r->{status} // '') eq $want;
         select undef, undef, undef, 0.02;
     }
-    return Exec::Agent::AsyncRunner::result($reqid, $dir);
+    return Exec::Agent::AsyncRunner::result($reqid, $dir, $owner);
 }
 
 sub write_script {
@@ -164,6 +164,70 @@ sub write_script {
 
     eval { Exec::Agent::AsyncRunner::submit(reqid => '../evil', script_path => '/x') };
     like $@, qr/invalid reqid/, 'submit rejects a reqid with path characters';
+}
+
+# --- owner is recorded on the run, for the /result owner-gate ---
+{
+    my $dir    = tempdir(CLEANUP => 1);
+    my $script = "$dir/who.sh";
+    write_script($script, "#!/bin/sh\necho done\n");
+    my $reqid  = 'owner0011aabb2233';
+
+    my $ok = Exec::Agent::AsyncRunner::submit(
+        reqid       => $reqid,
+        script      => 'who',
+        script_path => $script,
+        owner       => 'automation',
+        args        => [],
+        runs_dir    => $dir,
+    );
+    ok $ok->{ok}, 'submit accepts an owner';
+
+    my $rec = wait_for_status($reqid, $dir, 'done', 5, 'automation');
+    is $rec->{owner}, 'automation', 'completed record carries the submitting owner';
+
+    # The store is partitioned by owner: the record lives under the owner's
+    # namespace, not flat, and is invisible to a lookup scoped to another owner.
+    ok -f "$dir/automation/$reqid.json", 'record stored under the owner namespace';
+    ok !-f "$dir/$reqid.json",           'record not stored flat';
+    is Exec::Agent::AsyncRunner::result($reqid, $dir, 'human'), undef,
+        'another dispatcher cannot see the run (structural isolation)';
+}
+
+# --- the same reqid from two dispatchers does not collide ---
+{
+    my $dir    = tempdir(CLEANUP => 1);
+    my $script = "$dir/echo.sh";
+    write_script($script, "#!/bin/sh\necho out\n");
+    my $reqid  = 'collide00112233aa';
+
+    Exec::Agent::AsyncRunner::submit(
+        reqid => $reqid, script => 'a', script_path => $script,
+        owner => 'automation', args => [], runs_dir => $dir,
+    );
+    Exec::Agent::AsyncRunner::submit(
+        reqid => $reqid, script => 'b', script_path => $script,
+        owner => 'human', args => [], runs_dir => $dir,
+    );
+
+    my $a = wait_for_status($reqid, $dir, 'done', 5, 'automation');
+    my $b = wait_for_status($reqid, $dir, 'done', 5, 'human');
+    is $a->{script}, 'a', 'automation keeps its own run of the shared reqid';
+    is $b->{script}, 'b', 'human keeps its own run of the shared reqid';
+}
+
+# --- owned_by gate ---
+{
+    ok  Exec::Agent::AsyncRunner::owned_by({ owner => 'automation' }, 'automation'),
+        'owned_by: true when owner matches';
+    ok !Exec::Agent::AsyncRunner::owned_by({ owner => 'automation' }, 'human'),
+        'owned_by: false for a different dispatcher';
+    ok !Exec::Agent::AsyncRunner::owned_by({ owner => '' }, 'automation'),
+        'owned_by: false (fails closed) when the record has no owner';
+    ok !Exec::Agent::AsyncRunner::owned_by({ owner => 'automation' }, ''),
+        'owned_by: false for an empty caller identity';
+    ok !Exec::Agent::AsyncRunner::owned_by(undef, 'automation'),
+        'owned_by: false for a non-record';
 }
 
 done_testing;

@@ -235,7 +235,15 @@ Fail
 ## 8. Cert Rotation Broadcast
 
 Confirms that `ced rotate-cert` reaches all registered agents and that
-each agent updates its stored dispatcher serial.
+each agent updates its trusted-dispatcher map automatically.
+
+Rotation is seamless and needs no re-pairing for reachable agents. The
+automatic serial broadcast updates the trusted-dispatcher map at
+`/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers` add-then-remove: the
+dispatcher broadcasts the new serial with its stable identity and each agent
+adds it (the old serial stays trusted through the overlap window), then after
+the overlap window the dispatcher broadcasts removal of the old serial. Only
+an agent that is offline during the broadcast and misses it needs re-pairing.
 
 ```bash
 sudo ced rotate-cert
@@ -243,13 +251,14 @@ sudo ced serial-status
 ```
 
 Pass
-: All agents show `current` in `serial-status` output. `ACTION=serial-update`
-  appears in the log on each agent.
+: All agents show `current` in `serial-status` output. `ACTION=serial-confirmed`
+  appears in the log on each agent during the broadcast, and
+  `ACTION=serial-retire` once the overlap window closes.
 
 Fail
 : One or more agents remain `pending`. The agent was unreachable during the
   broadcast. Re-run `rotate-cert` after restoring connectivity. If the overlap
-  window expires, the agent requires re-pairing.
+  window expires, the offline agent requires re-pairing.
 
 
 ## 9. Revocation Takes Effect

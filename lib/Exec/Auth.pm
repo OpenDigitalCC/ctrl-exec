@@ -40,6 +40,8 @@ my %CODE_REASON = (
 #   username  => $str              (default '')
 #   token     => $str              (default '')
 #   source_ip => $str              (default '127.0.0.1')
+#   dispatcher        => $str      (calling dispatcher's stable identity, default '')
+#   dispatcher_serial => $str      (calling dispatcher's cert serial, default '')
 #
 # Returns:
 #   { ok => 1 }
@@ -56,6 +58,8 @@ sub check {
     my $token     = $opts{token}     // '';
     my $source_ip = $opts{source_ip} // '127.0.0.1';
     my $caller    = $opts{caller}    // 'api';   # 'api' | 'cli'
+    my $dispatcher        = $opts{dispatcher}        // '';
+    my $dispatcher_serial = $opts{dispatcher_serial} // '';
 
     croak "hosts must be an arrayref" unless ref $hosts eq 'ARRAY';
     croak "args must be an arrayref"  unless ref $args  eq 'ARRAY';
@@ -75,6 +79,7 @@ sub check {
                 REASON     => 'no-hook-cli',
                 AUTHACTION => $action,
                 USER       => $username || '(none)',
+                DISPATCHER => $dispatcher,
                 IP         => $source_ip,
             });
             return { ok => 1 };
@@ -88,6 +93,7 @@ sub check {
                 REASON     => 'no-hook-allow',
                 AUTHACTION => $action,
                 USER       => $username || '(none)',
+                DISPATCHER => $dispatcher,
                 IP         => $source_ip,
             });
             return { ok => 1 };
@@ -99,6 +105,7 @@ sub check {
                 REASON     => 'no-hook-deny',
                 AUTHACTION => $action,
                 USER       => $username || '(none)',
+                DISPATCHER => $dispatcher,
                 IP         => $source_ip,
             });
             return { ok => 0, reason => 'no auth hook configured', code => AUTH_DENIED };
@@ -116,13 +123,15 @@ sub check {
     }
 
     my $context = _build_context(
-        action    => $action,
-        script    => $script,
-        hosts     => $hosts,
-        args      => $args,
-        username  => $username,
-        token     => $token,
-        source_ip => $source_ip,
+        action            => $action,
+        script            => $script,
+        hosts             => $hosts,
+        args              => $args,
+        username          => $username,
+        token             => $token,
+        source_ip         => $source_ip,
+        dispatcher        => $dispatcher,
+        dispatcher_serial => $dispatcher_serial,
     );
 
     my $exit_code = _run_hook($hook, $context);
@@ -178,14 +187,16 @@ sub deny_fields {
 sub _build_context {
     my (%opts) = @_;
     return {
-        action    => $opts{action},
-        script    => $opts{script},
-        hosts     => $opts{hosts},
-        args      => $opts{args},
-        username  => $opts{username},
-        token     => $opts{token},
-        source_ip => $opts{source_ip},
-        timestamp => strftime('%Y-%m-%dT%H:%M:%SZ', gmtime),
+        action            => $opts{action},
+        script            => $opts{script},
+        hosts             => $opts{hosts},
+        args              => $opts{args},
+        username          => $opts{username},
+        token             => $opts{token},
+        source_ip         => $opts{source_ip},
+        dispatcher        => $opts{dispatcher}        // '',
+        dispatcher_serial => $opts{dispatcher_serial} // '',
+        timestamp         => strftime('%Y-%m-%dT%H:%M:%SZ', gmtime),
     };
 }
 
@@ -207,6 +218,11 @@ sub _run_hook {
     $ENV{ENVEXEC_USERNAME}  = $context->{username};
     $ENV{ENVEXEC_TOKEN}     = $context->{token};
     $ENV{ENVEXEC_SOURCE_IP} = $context->{source_ip};
+    # The calling dispatcher's stable identity (and its cert serial). Hooks
+    # author per-dispatcher policy against ENVEXEC_DISPATCHER, never the serial,
+    # which rotates. Empty when the caller did not resolve a dispatcher.
+    $ENV{ENVEXEC_DISPATCHER}        = $context->{dispatcher}        // '';
+    $ENV{ENVEXEC_DISPATCHER_SERIAL} = $context->{dispatcher_serial} // '';
     $ENV{ENVEXEC_TIMESTAMP} = $context->{timestamp};
 
     # Fork: child execs hook with JSON on stdin, parent waits.

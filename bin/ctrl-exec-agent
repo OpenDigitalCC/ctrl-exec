@@ -73,17 +73,17 @@ sub mode_serve {
         path => $revoked_path,
     );
 
-    my $disp_serial_path = $config->{dispatcher_serial_path}
-                        // '/etc/ctrl-exec-agent/ctrl-exec-serial';
-    my $disp_serial = Exec::Agent::AgentPairing::load_dispatcher_serial(
-        path => $disp_serial_path,
+    my $trusted_path = $config->{trusted_dispatchers_path}
+                    // '/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers';
+    my $trusted = Exec::Agent::AgentPairing::load_trusted_dispatchers(
+        path => $trusted_path,
     );
 
     my %rate_state;
     my $rate_config = $config->{rate_limit} // {};
 
     $SIG{HUP} = sub {
-        warn "Reloading allowlist, schemas, revocation list, and ctrl-exec serial...\n";
+        warn "Reloading allowlist, schemas, revocation list, and trusted-dispatcher map...\n";
         $allowlist = eval { Exec::Agent::Config::load_allowlist($ALLOWLIST_PATH) };
         warn "Allowlist reload failed: $@\n" if $@;
         $schemas = $allowlist
@@ -94,10 +94,10 @@ sub mode_serve {
             Exec::Agent::AgentPairing::load_revoked_serials(path => $revoked_path)
         };
         warn "Revocation list reload failed: $@\n" if $@;
-        $disp_serial = eval {
-            Exec::Agent::AgentPairing::load_dispatcher_serial(path => $disp_serial_path)
-        };
-        warn "Dispatcher serial reload failed: $@\n" if $@;
+        $trusted = eval {
+            Exec::Agent::AgentPairing::load_trusted_dispatchers(path => $trusted_path)
+        } // {};
+        warn "Trusted-dispatcher map reload failed: $@\n" if $@;
         %rate_state = ();
     };
 
@@ -210,7 +210,7 @@ MSG
         if ($pid == 0) {
             # Child: close server socket, handle connection, exit
             $server->close(SSL_no_shutdown => 1);
-            handle_connection($conn, $peer, $allowlist, $config, $revoked, $disp_serial, $peer_serial, $schemas);
+            handle_connection($conn, $peer, $allowlist, $config, $revoked, $trusted, $peer_serial, $schemas);
             $conn->close;
             exit 0;
         }
@@ -383,12 +383,14 @@ sub _store_pairing_result {
         ca_pem            => $result->{ca_pem},
         key_pem           => $key_pem,
         dispatcher_serial => $result->{dispatcher_serial} // '',
+        dispatcher_id     => $result->{dispatcher_id}     // '',
     );
 
     Exec::Log::log_action('INFO', {
-        ACTION     => 'pair-complete',
-        STATUS     => 'approved',
-        DISPATCHER => $ctrl_exec_host,
+        ACTION         => 'pair-complete',
+        STATUS         => 'approved',
+        DISPATCHER     => $result->{dispatcher_id} // '',
+        DISPATCHER_HOST => $ctrl_exec_host,
     });
 }
 
@@ -510,7 +512,7 @@ sub mode_self_ping {
 # Reads raw HTTP/1.0 request from IO::Socket::SSL, dispatches, sends response.
 
 sub handle_connection {
-    my ($conn, $peer, $allowlist, $config, $revoked, $disp_serial, $peer_serial, $schemas) = @_;
+    my ($conn, $peer, $allowlist, $config, $revoked, $trusted, $peer_serial, $schemas) = @_;
 
     # $peer_serial is extracted before fork() in the accept loop - after the
     # parent closes its copy of $conn the SSL object is invalid in the child.
@@ -564,16 +566,16 @@ sub handle_connection {
     }
 
     if ($method eq 'POST' && $path eq '/run') {
-        handle_run($conn, $body, $peer, $allowlist, $config, $disp_serial, $peer_serial);
+        handle_run($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial);
     }
     elsif ($method eq 'POST' && $path eq '/ping') {
-        handle_ping($conn, $body, $peer, $disp_serial, $peer_serial);
+        handle_ping($conn, $body, $peer, $trusted, $peer_serial);
     }
     elsif ($method eq 'GET' && $path eq '/capabilities') {
-        handle_capabilities($conn, $peer, $allowlist, $config, $disp_serial, $peer_serial, $schemas);
+        handle_capabilities($conn, $peer, $allowlist, $config, $trusted, $peer_serial, $schemas);
     }
     elsif ($method eq 'GET' && $path =~ m{^/result/([A-Za-z0-9_-]+)\z}) {
-        handle_result($conn, $1, $peer, $config, $disp_serial, $peer_serial);
+        handle_result($conn, $1, $peer, $config, $trusted, $peer_serial);
     }
     else {
         _send_raw($conn, 404, encode_json({ error => 'not found' }));
@@ -581,14 +583,16 @@ sub handle_connection {
 }
 
 sub handle_run {
-    my ($conn, $body, $peer, $allowlist, $config, $disp_serial, $peer_serial) = @_;
+    my ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial) = @_;
 
-    unless (_check_dispatcher_serial($peer_serial, $disp_serial)) {
+    my $dispatcher = Exec::Agent::AgentPairing::dispatcher_trusted($peer_serial, $trusted);
+    unless (defined $dispatcher) {
         _send_raw($conn, 403, encode_json({ error => 'serial mismatch', status => 'forbidden' }));
         Exec::Log::log_action('WARNING', {
-            ACTION => 'serial-reject',
-            PEER   => $peer,
-            REQID  => '(none)',
+            ACTION      => 'serial-reject',
+            PEER        => $peer,
+            PEER_SERIAL => $peer_serial,
+            REQID       => '(none)',
         });
         return;
     }
@@ -633,21 +637,24 @@ sub handle_run {
     # Agent auth hook - called after allowlist validation
     if ($config->{auth_hook}) {
         my $auth = Exec::Auth::check(
-            action    => 'run',
-            config    => $config,
-            script    => $name,
-            args      => $args,
-            username  => $username,
-            token     => $token,
-            source_ip => $peer,
+            action            => 'run',
+            config            => $config,
+            script            => $name,
+            args              => $args,
+            username          => $username,
+            token             => $token,
+            source_ip         => $peer,
+            dispatcher        => $dispatcher,
+            dispatcher_serial => $peer_serial,
         );
         unless ($auth->{ok}) {
             Exec::Log::log_action('WARNING', {
-                ACTION => 'deny',
-                REASON => $auth->{reason},
-                SCRIPT => $name,
-                PEER   => $peer,
-                REQID  => $reqid,
+                ACTION     => 'deny',
+                REASON     => $auth->{reason},
+                SCRIPT     => $name,
+                PEER       => $peer,
+                DISPATCHER => $dispatcher,
+                REQID      => $reqid,
             });
             _send_json($conn, {
                 script => $name,
@@ -660,13 +667,14 @@ sub handle_run {
     }
 
     my $context = {
-        script    => $name,
-        args      => $args,
-        reqid     => $reqid,
-        peer_ip   => $peer,
-        username  => $username,
-        token     => $token,
-        timestamp => POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime),
+        script     => $name,
+        args       => $args,
+        reqid      => $reqid,
+        peer_ip    => $peer,
+        username   => $username,
+        token      => $token,
+        dispatcher => $dispatcher,
+        timestamp  => POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime),
     };
 
     # Asynchronous path: start the script detached, persist its result to the
@@ -688,6 +696,7 @@ sub handle_run {
             script_path   => $script_path,
             args          => $args,
             context       => $context,
+            owner         => $dispatcher,
             runs_dir      => _async_runs_dir($config),
             stdin_timeout => $config->{stdin_timeout} // 10,
         );
@@ -714,10 +723,11 @@ sub handle_run {
         }
 
         Exec::Log::log_action('INFO', {
-            ACTION => 'run-async',
-            SCRIPT => $name,
-            PEER   => $peer,
-            REQID  => $reqid,
+            ACTION     => 'run-async',
+            SCRIPT     => $name,
+            PEER       => $peer,
+            DISPATCHER => $dispatcher,
+            REQID      => $reqid,
         });
         _send_raw($conn, 202, encode_json({
             script => $name, status => 'accepted', reqid => $reqid,
@@ -731,11 +741,12 @@ sub handle_run {
     );
 
     Exec::Log::log_action('INFO', {
-        ACTION => 'run',
-        SCRIPT => $name,
-        EXIT   => $result->{exit},
-        PEER   => $peer,
-        REQID  => $reqid,
+        ACTION     => 'run',
+        SCRIPT     => $name,
+        EXIT       => $result->{exit},
+        PEER       => $peer,
+        DISPATCHER => $dispatcher,
+        REQID      => $reqid,
     });
 
     _send_json($conn, {
@@ -748,14 +759,16 @@ sub handle_run {
 }
 
 sub handle_ping {
-    my ($conn, $body, $peer, $disp_serial, $peer_serial) = @_;
+    my ($conn, $body, $peer, $trusted, $peer_serial) = @_;
 
-    unless (_check_dispatcher_serial($peer_serial, $disp_serial)) {
+    my $dispatcher = Exec::Agent::AgentPairing::dispatcher_trusted($peer_serial, $trusted);
+    unless (defined $dispatcher) {
         _send_raw($conn, 403, encode_json({ error => 'serial mismatch', status => 'forbidden' }));
         Exec::Log::log_action('WARNING', {
-            ACTION => 'serial-reject',
-            PEER   => $peer,
-            REQID  => '(none)',
+            ACTION      => 'serial-reject',
+            PEER        => $peer,
+            PEER_SERIAL => $peer_serial,
+            REQID       => '(none)',
         });
         return;
     }
@@ -766,9 +779,10 @@ sub handle_ping {
     my $status = Exec::Agent::AgentPairing::pairing_status();
 
     Exec::Log::log_action('INFO', {
-        ACTION => 'ping',
-        PEER   => $peer,
-        REQID  => $reqid,
+        ACTION     => 'ping',
+        PEER       => $peer,
+        DISPATCHER => $dispatcher,
+        REQID      => $reqid,
     });
 
     _send_json($conn, {
@@ -781,20 +795,23 @@ sub handle_ping {
 }
 
 sub handle_capabilities {
-    my ($conn, $peer, $allowlist, $config, $disp_serial, $peer_serial, $schemas) = @_;
+    my ($conn, $peer, $allowlist, $config, $trusted, $peer_serial, $schemas) = @_;
 
     $peer_serial //= '';
+    $trusted     //= {};
     $schemas     //= {};
 
-    # Restrict /capabilities to the genuine ctrl-exec cert.
-    # The stored serial was recorded at pairing time from the ctrl-exec's
-    # own cert. Any CA-signed peer whose serial does not match is rejected -
-    # this closes lateral reconnaissance from a compromised agent peer.
+    # Restrict /capabilities to a trusted dispatcher cert.
+    # Each entry in the trusted-dispatcher map was recorded at pairing time from
+    # the dispatcher's own cert. Any CA-signed peer whose serial is not in the
+    # map is rejected - this closes lateral reconnaissance from a compromised
+    # agent peer. The resolved identity also attributes the discovery.
     #
-    # If no serial is stored (agent not yet paired, or pre-serial-tracking
-    # pairing), the check is skipped with a warning. Re-pair to enable it.
-    if (length $disp_serial) {
-        unless (_check_dispatcher_serial($peer_serial, $disp_serial)) {
+    # If the map is empty (agent not yet paired, or pre-map pairing), the check
+    # is skipped with a warning. Re-pair to enable it.
+    my $dispatcher = Exec::Agent::AgentPairing::dispatcher_trusted($peer_serial, $trusted);
+    if (%$trusted) {
+        unless (defined $dispatcher) {
             Exec::Log::log_action('WARNING', {
                 ACTION      => 'capabilities-deny',
                 PEER        => $peer,
@@ -809,8 +826,9 @@ sub handle_capabilities {
         Exec::Log::log_action('WARNING', {
             ACTION => 'capabilities-no-serial',
             PEER   => $peer,
-            REASON => 'no ctrl-exec serial stored - re-pair to enable restriction',
+            REASON => 'no trusted dispatchers stored - re-pair to enable restriction',
         });
+        $dispatcher = '';
     }
 
     # Auth hook - called after serial check, before building scripts list.
@@ -818,19 +836,22 @@ sub handle_capabilities {
     # hooks that require a token will correctly deny unauthenticated callers.
     if ($config->{auth_hook}) {
         my $auth = Exec::Auth::check(
-            action    => 'discovery',
-            config    => $config,
-            script    => '',
-            args      => [],
-            username  => '',
-            token     => '',
-            source_ip => $peer,
+            action            => 'discovery',
+            config            => $config,
+            script            => '',
+            args              => [],
+            username          => '',
+            token             => '',
+            source_ip         => $peer,
+            dispatcher        => $dispatcher,
+            dispatcher_serial => $peer_serial,
         );
         unless ($auth->{ok}) {
             Exec::Log::log_action('WARNING', {
-                ACTION => 'capabilities-deny',
-                PEER   => $peer,
-                REASON => $auth->{reason},
+                ACTION     => 'capabilities-deny',
+                PEER       => $peer,
+                DISPATCHER => $dispatcher,
+                REASON     => $auth->{reason},
             });
             _send_raw($conn, 403, encode_json({ error => 'not authorised' }));
             return;
@@ -855,9 +876,10 @@ sub handle_capabilities {
     }
 
     Exec::Log::log_action('INFO', {
-        ACTION  => 'capabilities',
-        PEER    => $peer,
-        SCRIPTS => scalar @scripts,
+        ACTION     => 'capabilities',
+        PEER       => $peer,
+        DISPATCHER => $dispatcher,
+        SCRIPTS    => scalar @scripts,
     });
 
     _send_json($conn, {
@@ -879,35 +901,55 @@ sub handle_capabilities {
 #   200 { status => 'done', exit, stdout, stderr, ... }
 #   404 { status => 'unknown' }        no record (never ran here, or TTL-purged)
 sub handle_result {
-    my ($conn, $reqid, $peer, $config, $disp_serial, $peer_serial) = @_;
+    my ($conn, $reqid, $peer, $config, $trusted, $peer_serial) = @_;
 
-    unless (_check_dispatcher_serial($peer_serial, $disp_serial)) {
+    my $dispatcher = Exec::Agent::AgentPairing::dispatcher_trusted($peer_serial, $trusted);
+    unless (defined $dispatcher) {
         _send_raw($conn, 403, encode_json({ error => 'serial mismatch', status => 'forbidden' }));
         Exec::Log::log_action('WARNING', {
-            ACTION => 'serial-reject',
-            PEER   => $peer,
-            REQID  => $reqid,
+            ACTION      => 'serial-reject',
+            PEER        => $peer,
+            PEER_SERIAL => $peer_serial,
+            REQID       => $reqid,
         });
         return;
     }
 
-    my $record = Exec::Agent::AsyncRunner::result($reqid, _async_runs_dir($config));
+    my $record = Exec::Agent::AsyncRunner::result($reqid, _async_runs_dir($config), $dispatcher);
 
     unless ($record) {
         Exec::Log::log_action('INFO', {
-            ACTION => 'result-miss',
-            PEER   => $peer,
-            REQID  => $reqid,
+            ACTION     => 'result-miss',
+            PEER       => $peer,
+            DISPATCHER => $dispatcher,
+            REQID      => $reqid,
+        });
+        _send_raw($conn, 404, encode_json({ status => 'unknown', reqid => $reqid }));
+        return;
+    }
+
+    # Owner-gate: a run's result is returned only to the dispatcher that
+    # submitted it. A trusted-but-different dispatcher is answered exactly as if
+    # the reqid were unknown - never confirming the run exists, and never
+    # disclosing another dispatcher's output.
+    unless (Exec::Agent::AsyncRunner::owned_by($record, $dispatcher)) {
+        Exec::Log::log_action('WARNING', {
+            ACTION     => 'result-deny',
+            PEER       => $peer,
+            DISPATCHER => $dispatcher,
+            REQID      => $reqid,
+            REASON     => 'not-owner',
         });
         _send_raw($conn, 404, encode_json({ status => 'unknown', reqid => $reqid }));
         return;
     }
 
     Exec::Log::log_action('INFO', {
-        ACTION => 'result',
-        PEER   => $peer,
-        REQID  => $reqid,
-        STATUS => $record->{status} // 'unknown',
+        ACTION     => 'result',
+        PEER       => $peer,
+        DISPATCHER => $dispatcher,
+        REQID      => $reqid,
+        STATUS     => $record->{status} // 'unknown',
     });
     _send_json($conn, $record);
 }
@@ -917,16 +959,6 @@ sub handle_result {
 sub _async_runs_dir {
     my ($config) = @_;
     return $config->{async_runs_dir} // '/var/lib/ctrl-exec-agent/runs';
-}
-
-# Verify that the peer cert serial matches the stored ctrl-exec serial.
-# Returns 1 if matched, 0 if not. Does not log - caller logs on failure.
-# Both arguments must be non-empty lowercase hex strings to return 1.
-sub _check_dispatcher_serial {
-    my ($peer_serial, $disp_serial) = @_;
-    return 0 unless length($disp_serial  // '');
-    return 0 unless length($peer_serial  // '');
-    return $peer_serial eq $disp_serial ? 1 : 0;
 }
 
 # Extract the peer certificate serial number from an IO::Socket::SSL

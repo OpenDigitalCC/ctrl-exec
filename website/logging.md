@@ -76,6 +76,7 @@ In containers, rsyslog runs inside the image and is configured from `SYSLOG_HOST
 | `cert-rotation-fail` | ERR | `ERROR` | Rotation failed |
 | `serial-broadcast` | INFO | `HOSTS`, `SERIAL` | Serial broadcast begins |
 | `serial-confirmed` | INFO | `AGENT` | Agent confirmed new serial |
+| `serial-retire` | INFO | `AGENT`, `OLD_SERIAL` | Old serial removed from a confirmed agent after the overlap window |
 | `serial-broadcast-fail` | WARNING | `AGENT`, `ERROR` | Agent unreachable during broadcast |
 | `serial-stale` | WARNING | `AGENT`, `REASON` | Overlap window expired without confirmation |
 
@@ -93,11 +94,11 @@ In containers, rsyslog runs inside the image and is configured from `SYSLOG_HOST
 | Action | Priority | Key Fields | When |
 | --- | --- | --- | --- |
 | `start` | INFO | `PORT` | Agent listening |
-| `ping` | INFO | `PEER`, `REQID` | Ping processed |
-| `run` | INFO | `SCRIPT`, `EXIT`, `PEER`, `REQID` | Script completed — non-zero EXIT is still INFO |
+| `ping` | INFO | `PEER`, `DISPATCHER`, `REQID` | Ping processed |
+| `run` | INFO | `SCRIPT`, `EXIT`, `PEER`, `DISPATCHER`, `REQID` | Script completed — non-zero EXIT is still INFO |
 | `deny` | WARNING | `SCRIPT`, `PEER`, `REQID`, `REASON?` | Script not in allowlist, or hook denied |
 | `auth` | INFO/WARNING/ERR | `RESULT`, `AUTHACTION`, `USER`, `IP` | Agent hook result |
-| `serial-reject` | WARNING | `PEER`, `REQID` | dispatcher serial mismatch |
+| `serial-reject` | WARNING | `PEER`, `PEER_SERIAL`, `REQID` | Connecting serial not in the trusted-dispatcher map (on `/run`, `/ping`, `/result`, `/capabilities`) |
 | `revoked-cert` | WARNING | `PEER`, `SERIAL` | Revoked cert presented |
 | `tls-failure` | WARNING | `PEER`, `REASON` | TLS handshake failed |
 | `ip-block` | WARNING | `PEER` | Source IP not in `allowed_ips` |
@@ -134,6 +135,9 @@ In containers, rsyslog runs inside the image and is configured from `SYSLOG_HOST
 
 `DAYS_LEFT`
 : Days of certificate validity remaining at the time of a cert check.
+
+`DISPATCHER`
+: Stable identity (`dispatcher_id`) of the dispatcher whose certificate authenticated the request, resolved from the agent's trusted-dispatcher map. Present on agent `run`, `ping`, `capabilities`, and `result` events.
 
 `ERROR`
 : Error message. Quoted if it contains spaces.
@@ -173,6 +177,9 @@ In containers, rsyslog runs inside the image and is configured from `SYSLOG_HOST
 
 `PEER`
 : IP address of the connecting peer.
+
+`PEER_SERIAL`
+: Certificate serial number presented by the connecting peer. Logged on `serial-reject` to identify the untrusted certificate.
 
 `PORT`
 : Listening port.
@@ -218,7 +225,7 @@ In containers, rsyslog runs inside the image and is configured from `SYSLOG_HOST
 | --- | --- |
 | `ACTION=rate-block REASON=volume` | Investigate source IP for connection flooding |
 | `ACTION=rate-block REASON=probe` | Investigate source IP for TLS probing |
-| `ACTION=serial-reject` | Check rotation broadcast status — run `ced serial-status` |
+| `ACTION=serial-reject` | Connecting serial not in the agent's trusted-dispatcher map — re-pair the agent if it was offline during a rotation and is now `serial-stale`; otherwise investigate the source |
 | `ACTION=revoked-cert` | Treat as a security event — investigate source IP immediately |
 | `ACTION=ip-block` | Review `allowed_ips` config — investigate unexpected sources |
 | `ACTION=deny` repeated from same PEER | Check agent allowlist — may indicate misconfiguration or probing |
@@ -230,7 +237,8 @@ In containers, rsyslog runs inside the image and is configured from `SYSLOG_HOST
 | `ACTION=serial-stale` | Re-pair the agent |
 | `ACTION=serial-broadcast-fail` repeated for same agent | Check connectivity — agent will be marked stale after overlap window expires |
 | `ACTION=cert-rotation-fail` | Investigate immediately — rotation retried on next check interval |
-| All agents returning `ACTION=serial-reject` after rotation | Run `ced serial-status` and `ced rotate-cert` |
+| A reachable agent returning `ACTION=serial-reject` after rotation | Rotation updates trust automatically over the run channel; an agent that was offline and missed the broadcast (later marked `serial-stale`) needs re-pairing — otherwise investigate the source |
+| `ACTION=serial-retire` | Informational — the dispatcher removed the old serial from confirmed agents after the overlap window. No action needed |
 
 ## Configuration Problems
 

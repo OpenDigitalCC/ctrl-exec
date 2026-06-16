@@ -11,6 +11,7 @@ current_page: /config
 | Key | Default | Description |
 | --- | --- | --- |
 | `port` | `7443` | mTLS port agents connect to |
+| `dispatcher_id` | hostname | Stable identity for this dispatcher, delivered to agents at pairing. Agents key per-dispatcher policy and attribution on this id rather than the certificate serial, which rotates. Defaults to the dispatcher's hostname. |
 | `cert` | — | Path to the dispatcher TLS certificate |
 | `key` | — | Path to the dispatcher private key |
 | `ca` | — | Path to the CA certificate |
@@ -41,7 +42,7 @@ current_page: /config
 | `auth_hook` | — | Path to the agent-side auth hook executable. Optional. |
 | `script_dirs` | — | Colon-separated list of approved script directories. If set, only scripts under these directories are permitted regardless of the allowlist. |
 | `revoked_serials` | `/etc/ctrl-exec-agent/revoked-serials` | Path to the certificate serial revocation list |
-| `dispatcher_serial_path` | `/etc/ctrl-exec-agent/dispatcher-serial` | Path to the stored dispatcher serial number |
+| `trusted_dispatchers_path` | `/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers` | Path to the trusted-dispatcher map — one `<hex-serial> <dispatcher-id>` line per trusted dispatcher. The agent rewrites this map in place during cert rotation, so it lives in the agent-writable state directory. Reloaded on SIGHUP. |
 | `allowed_ips` | — | Comma-separated IP addresses or CIDR prefixes permitted to connect. All IPs permitted if unset. |
 | `rate_limit_volume` | `10/60/300` | Volume threshold: `limit/window_seconds/block_seconds` |
 | `rate_limit_probe` | `3/600/3600` | Probe threshold (TLS failures): `limit/window_seconds/block_seconds` |
@@ -87,6 +88,8 @@ These variables are passed to auth hooks by the dispatcher and by the agent. The
 | `ENVEXEC_TOKEN` | string | Auth token from the request |
 | `ENVEXEC_SOURCE_IP` | string | `127.0.0.1` for CLI callers; caller IP for API callers |
 | `ENVEXEC_TIMESTAMP` | string | ISO 8601 UTC timestamp of the request |
+| `ENVEXEC_DISPATCHER` | string | Stable id of the authenticated dispatcher, resolved from the agent's trusted-dispatcher map. Per-dispatcher policy keys on this. Agent-side hooks only. |
+| `ENVEXEC_DISPATCHER_SERIAL` | string | Certificate serial of the authenticated dispatcher. Agent-side hooks only. |
 
 # Docker Environment Variable
 

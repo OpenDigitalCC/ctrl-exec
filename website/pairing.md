@@ -25,9 +25,9 @@ Pairing runs on a separate port (7444 by default) using server-TLS only. The age
 5. On approval, the dispatcher signs the CSR with the CA and returns to the agent:
    - The signed agent certificate
    - The CA certificate
-   - The current dispatcher certificate serial number
+   - The current dispatcher certificate serial number and the dispatcher's stable id
 
-6. The agent stores all three files. It is now ready to serve requests.
+6. The agent stores the certificate and CA, and appends the dispatcher's serial and id to its trusted-dispatcher map (`/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers`). Existing entries are left in place. It is now ready to serve requests.
 
 7. The dispatcher writes a registry entry for the agent: hostname, IP, pairing timestamp, certificate expiry, and serial tracking state.
 
@@ -37,10 +37,18 @@ Verification code
 : The 6-digit code is derived from the CSR content on both sides independently. An attacker who intercepts the connection and substitutes a different CSR would produce a different code. The operator's comparison step catches this. The code is not transmitted over the network — it is computed locally from what each side received or generated.
 
 Serial pinning
-: After pairing, the agent stores the dispatcher's certificate serial number. Every subsequent connection from the dispatcher is checked against this value. A valid CA-signed certificate with a different serial is rejected. This means that cert rotation is a first-class operation — a new dispatcher cert requires all agents to receive the updated serial.
+: After pairing, the agent records the dispatcher's certificate serial and stable id in its trusted-dispatcher map. Every subsequent connection is checked against the map. A valid CA-signed certificate whose serial is not in the map is rejected. Dispatcher certificate rotation updates the map automatically over the run channel, with no re-pairing, via add-then-remove: the dispatcher broadcasts the new serial under its stable `dispatcher_id` and each agent adds it; the old serial stays trusted through the overlap window, so the dispatcher's live certificate is accepted throughout, and the old serial is removed once the window closes. Because `dispatcher_id` is stable across rotation, trust and attribution carry over.
 
 One-time ceremony
 : Pairing mode must be explicitly started and runs until stopped. It does not run continuously. The pairing queue has a maximum size (`pairing_max_queue`, default 10) — requests beyond this are refused until the queue drains.
+
+# Enrolling an Additional Dispatcher
+
+An agent can serve more than one dispatcher natively. Pairing appends to the agent's trusted-dispatcher map rather than replacing it, so re-pairing the agent against a further dispatcher enrols that dispatcher while leaving existing ones trusted.
+
+Each dispatcher presents its own certificate, all chaining to a shared CA root, and is identified by a stable `dispatcher_id`. The agent records one `<hex-serial> <dispatcher-id>` line per dispatcher and resolves the matching id on every connection, which drives permission and attribution.
+
+This is the supported way to give several operators of differing trust classes access to a single host — keyed per dispatcher in the auth hook (`ENVEXEC_DISPATCHER`) and attributed in the agent logs (`DISPATCHER`) — rather than running separate agent instances. To enrol an additional dispatcher, run `request-pairing` against it from the agent and approve as normal; the existing dispatchers stay in the map.
 
 # Running Pairing Mode
 

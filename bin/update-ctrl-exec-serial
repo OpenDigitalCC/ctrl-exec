@@ -1,31 +1,36 @@
 #!/bin/bash
-# update-ctrl-exec-serial - Update stored ctrl-exec certificate serial
+# update-ctrl-exec-serial - update this agent's trusted-dispatcher map during
+# dispatcher certificate rotation, without re-pairing.
 #
-# Called by the ctrl-exec during certificate rotation to push the new
-# serial to this agent. The agent uses the stored serial to restrict
-# /capabilities queries to the genuine ctrl-exec only.
+# Called on the agent by the dispatcher over the run channel as part of
+# add-then-remove cert rotation:
+#   - When a dispatcher rotates its cert, it broadcasts the NEW serial together
+#     with its stable identity; the agent ADDS that serial to the map, keeping
+#     the old one trusted during the overlap window.
+#   - After the overlap window, the dispatcher broadcasts a removal of the OLD
+#     serial; the agent REMOVES it. The retired cert is then no longer trusted.
 #
-# Usage: update-ctrl-exec-serial <hex-serial>
+# Because the agent maps the serial to the dispatcher's stable identity (which
+# does not change across rotation), trust and attribution are undisturbed.
 #
-# The serial is written to the configured ctrl-exec-serial file and the
-# agent is sent SIGHUP to reload without restarting.
+# Usage:
+#   update-ctrl-exec-serial <serial> <dispatcher-id>   # trust <serial> as <dispatcher-id>
+#   update-ctrl-exec-serial --remove <serial>          # stop trusting <serial>
 #
-# TRUST REQUIREMENT: This script performs a privileged operation - it
-# overwrites the stored ctrl-exec serial, which controls which ctrl-exec
-# cert is trusted for /capabilities. It should only be added to the agent
-# scripts.conf allowlist on agents where ctrl-exec cert rotation is in use.
-# Any caller able to invoke this script via the run mechanism already holds a
-# valid mTLS cert signed by the CA; the risk is bounded by the CA trust model.
-# Do not add this to allowlists as a convenience on agents where rotation is
-# not configured.
+# The map lives in the agent-writable state directory so this script (run as the
+# agent service user over the run channel) can update trust without root. One
+# entry per line: "<hex-serial> <dispatcher-id>". Other dispatchers' entries and
+# comment lines are preserved. After editing, the agent is sent SIGHUP to reload.
 #
-# This script is called via the ctrl-exec-dispatcher run mechanism and is
-# authenticated by the existing mTLS trust. It should be in scripts.conf
-# on every agent that participates in automatic cert rotation.
+# TRUST REQUIREMENT: this changes which dispatcher certs the agent trusts. It
+# should only be in scripts.conf on agents whose dispatcher uses cert rotation.
+# Any caller able to invoke it already holds a valid mTLS cert signed by the CA;
+# the risk is bounded by the CA trust model (a serial is inert without a
+# CA-signed cert bearing it).
 #
 # Exit codes:
 #   0   success
-#   1   usage error
+#   1   usage / validation error
 #   2   write failed
 #   3   reload failed
 
@@ -33,59 +38,92 @@ set -euo pipefail
 
 # Paths default to the standard install locations; both can be overridden via
 # the environment for non-standard installations and for testing.
-SERIAL_FILE="${ENVEXEC_SERIAL_FILE:-/etc/ctrl-exec-agent/ctrl-exec-serial}"
+TRUSTED_FILE="${ENVEXEC_TRUSTED_FILE:-/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers}"
 AGENT_PID_FILE="${ENVEXEC_AGENT_PIDFILE:-/run/ctrl-exec-agent.pid}"
 
-# --- argument validation ---
+usage() {
+    echo "Usage: update-ctrl-exec-serial <serial> <dispatcher-id>" >&2
+    echo "       update-ctrl-exec-serial --remove <serial>" >&2
+}
 
-if [ $# -ne 1 ]; then
-    echo "Usage: update-ctrl-exec-serial <hex-serial>" >&2
+# --- parse arguments ---
+
+MODE=""
+SERIAL=""
+DISPATCHER_ID=""
+
+if [ "${1:-}" = "--remove" ]; then
+    if [ $# -ne 2 ]; then usage; exit 1; fi
+    MODE="remove"
+    SERIAL="$2"
+elif [ $# -eq 2 ]; then
+    MODE="add"
+    SERIAL="$1"
+    DISPATCHER_ID="$2"
+else
+    usage
     exit 1
 fi
 
-NEW_SERIAL="$1"
+# --- validate serial ---
 
-# Validate: must be a non-empty hex string
-if ! echo "$NEW_SERIAL" | grep -qE '^[0-9a-fA-F]+$'; then
+if ! printf '%s' "$SERIAL" | grep -qE '^[0-9a-fA-F]+$'; then
     echo "Invalid serial format: must be hex string" >&2
     exit 1
 fi
-
-# Validate: length must be 8–40 hex characters (4–20 octets, per RFC 5280)
-SERIAL_LEN="${#NEW_SERIAL}"
+SERIAL_LEN="${#SERIAL}"
 if [ "$SERIAL_LEN" -lt 8 ] || [ "$SERIAL_LEN" -gt 40 ]; then
-    echo "Invalid serial length: expected 8–40 hex characters, got $SERIAL_LEN" >&2
+    echo "Invalid serial length: expected 8-40 hex characters, got $SERIAL_LEN" >&2
     exit 1
 fi
+# Normalise to lowercase - matches how the agent stores and compares serials.
+SERIAL="${SERIAL,,}"
 
-# Normalise to lowercase
-NEW_SERIAL="${NEW_SERIAL,,}"
+# --- validate dispatcher id (add only) ---
 
-# --- write serial file ---
+if [ "$MODE" = "add" ]; then
+    if ! printf '%s' "$DISPATCHER_ID" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'; then
+        echo "Invalid dispatcher id: must start alphanumeric, then [A-Za-z0-9._-], max 64" >&2
+        exit 1
+    fi
+fi
 
-SERIAL_DIR="$(dirname "$SERIAL_FILE")"
-if [ ! -d "$SERIAL_DIR" ]; then
-    echo "Serial directory '$SERIAL_DIR' does not exist" >&2
+# --- edit the map atomically ---
+
+TRUSTED_DIR="$(dirname "$TRUSTED_FILE")"
+if [ ! -d "$TRUSTED_DIR" ]; then
+    echo "Trusted-dispatcher map directory '$TRUSTED_DIR' does not exist" >&2
     exit 2
 fi
 
-# Write atomically via temp file in the same directory. Any failure here is a
-# write failure (exit 2, per the documented codes) - wrap the sequence so that
-# 'set -e' does not surface mktemp's own exit status (1) instead.
+# Build the new content in a temp file: every existing line except the one for
+# this serial (comments and other dispatchers preserved), then for 'add' the new
+# entry. Any failure in this block is a write failure (exit 2).
 if ! {
-    TMP_FILE=$(mktemp "$SERIAL_DIR/.ctrl-exec-serial.XXXXXX") &&
-    echo "$NEW_SERIAL" > "$TMP_FILE" &&
+    TMP_FILE=$(mktemp "$TRUSTED_DIR/.ctrl-exec-dispatchers.XXXXXX") &&
+    if [ -f "$TRUSTED_FILE" ]; then
+        awk -v s="$SERIAL" '
+            /^[[:space:]]*#/  { print; next }   # comments
+            /^[[:space:]]*$/  { print; next }   # blank lines
+            { if (tolower($1) != s) print }     # other dispatchers
+        ' "$TRUSTED_FILE" > "$TMP_FILE"
+    else
+        : > "$TMP_FILE"
+    fi &&
+    if [ "$MODE" = "add" ]; then
+        printf '%s %s\n' "$SERIAL" "$DISPATCHER_ID" >> "$TMP_FILE"
+    fi &&
     chmod 0644 "$TMP_FILE" &&
-    mv "$TMP_FILE" "$SERIAL_FILE"
+    mv "$TMP_FILE" "$TRUSTED_FILE"
 }; then
-    echo "Failed to write serial file '$SERIAL_FILE'" >&2
+    echo "Failed to update trusted-dispatcher map '$TRUSTED_FILE'" >&2
     [ -n "${TMP_FILE:-}" ] && rm -f "$TMP_FILE" 2>/dev/null
     exit 2
 fi
 
 # --- reload agent ---
-# Send SIGHUP to reload the serial file without restarting.
-# Try pidfile first, then pidof as fallback.
+# Send SIGHUP to reload the map without restarting. Try pidfile first, then
+# pidof as fallback.
 
 AGENT_PID=""
 if [ -f "$AGENT_PID_FILE" ]; then
@@ -97,14 +135,18 @@ fi
 
 if [ -n "$AGENT_PID" ]; then
     if kill -HUP "$AGENT_PID" 2>/dev/null; then
-        echo "Serial updated to ${NEW_SERIAL}. Agent reloaded (pid $AGENT_PID)."
+        if [ "$MODE" = "add" ]; then
+            echo "Trusted serial ${SERIAL} (${DISPATCHER_ID}) added. Agent reloaded (pid $AGENT_PID)."
+        else
+            echo "Serial ${SERIAL} removed from trust. Agent reloaded (pid $AGENT_PID)."
+        fi
         exit 0
     else
-        echo "Serial written but SIGHUP to pid $AGENT_PID failed." >&2
+        echo "Map updated but SIGHUP to pid $AGENT_PID failed." >&2
         echo "Reload manually: kill -HUP \$(pidof ctrl-exec-agent)" >&2
         exit 3
     fi
 else
-    echo "Serial written but agent process not found - reload manually." >&2
+    echo "Map updated but agent process not found - reload manually." >&2
     exit 3
 fi
