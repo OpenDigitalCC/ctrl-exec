@@ -42,7 +42,10 @@ sub check_and_rotate {
 
     my $renewal_days = $config->{cert_renewal_days} // $DEFAULT_RENEWAL_DAYS;
     my $ca_dir       = $config->{ca_dir}            // $CA_DIR;
-    my $disp_crt     = "$ca_dir/dispatcher.crt";
+    # The cert this dispatcher serves with (ctrl-exec.conf 'cert') is the single
+    # source of truth - never a hardcoded name.
+    my $disp_crt     = $config->{cert}
+        or return { rotated => 0, error => "no 'cert' configured" };
 
     unless (-f $disp_crt) {
         return { rotated => 0, error => "dispatcher cert not found at $disp_crt" };
@@ -349,7 +352,12 @@ sub _do_rotation {
     my $ca_dir      = $config->{ca_dir}         // $CA_DIR;
     my $cert_days   = $config->{cert_days}       // $DEFAULT_CERT_DAYS;
     my $overlap_days = $config->{cert_overlap_days} // $DEFAULT_OVERLAP_DAYS;
-    my $disp_crt    = "$ca_dir/dispatcher.crt";
+    # Re-key the cert this dispatcher actually serves with (ctrl-exec.conf
+    # 'cert'/'key'), so the new serial is the one agents will see on connect.
+    my $disp_crt    = $config->{cert}
+        or return { rotated => 0, error => "no 'cert' configured" };
+    my $disp_key    = $config->{key}
+        or return { rotated => 0, error => "no 'key' configured" };
 
     # Read old serial before overwriting
     my $old_serial = '';
@@ -367,6 +375,8 @@ sub _do_rotation {
     eval {
         Exec::CA::generate_dispatcher_cert(
             ca_dir => $ca_dir,
+            cert   => $disp_crt,
+            key    => $disp_key,
             days   => $cert_days,
             force  => 1,
         );

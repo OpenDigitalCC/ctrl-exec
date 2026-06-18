@@ -25,8 +25,11 @@ made it.
 is a shortcut for
 .BR ctrl-exec-agent .
 .SH MODES
-The first non-option argument selects a mode; the default is
-.BR serve .
+The first non-option argument selects a mode. Invoked with no mode,
+.B ctrl-exec-agent
+prints this usage summary and exits; to run the server pass
+.B serve
+explicitly.
 .TP
 .B serve
 Start the agent server in the foreground.
@@ -81,6 +84,9 @@ background. For orchestrated installations.
 .TP
 .BI \-\-timeout " n"
 Seconds to wait for approval in background mode (default 30, max 600).
+.TP
+.B \-\-version
+Print the version and exit.
 .SH FILES
 .TP
 .I /etc/ctrl-exec-agent/agent.conf

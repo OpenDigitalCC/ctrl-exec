@@ -211,10 +211,18 @@ SKIP: {
 
     subtest 'days validation: generate_dispatcher_cert rejects days => 0' => sub {
         eval {
-            Exec::CA::generate_dispatcher_cert(ca_dir => $ca_dir, days => 0);
+            Exec::CA::generate_dispatcher_cert(
+                ca_dir => $ca_dir, cert => "$ca_dir/x.crt", key => "$ca_dir/x.key",
+                days => 0);
         };
         like $@, qr/days must be a positive integer/,
             'generate_dispatcher_cert: days=0 croaks';
+    };
+
+    subtest 'generate_dispatcher_cert requires explicit cert/key paths' => sub {
+        eval { Exec::CA::generate_dispatcher_cert(ca_dir => $ca_dir, days => 1) };
+        like $@, qr/cert path required/,
+            'no cert path croaks - there is no hardcoded dispatcher.crt default';
     };
 
     subtest 'days validation: generate_dispatcher_cert accepts days => 1' => sub {
@@ -226,7 +234,8 @@ SKIP: {
         }
         eval {
             Exec::CA::generate_dispatcher_cert(
-                ca_dir => $d, days => 1, bits => 2048
+                ca_dir => $d, cert => "$d/dispatcher.crt", key => "$d/dispatcher.key",
+                days => 1, bits => 2048
             );
         };
         is $@, '', 'generate_dispatcher_cert: days=1 does not croak';

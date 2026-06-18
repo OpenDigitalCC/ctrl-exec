@@ -69,6 +69,29 @@ sub _validate_config {
         delete $config->{script_dirs};   # absent = no restriction
     }
 
+    # Parse writable_paths from colon-separated string into arrayref. These are
+    # the paths scripts must be able to write to under the systemd sandbox;
+    # 'ctrl-exec-agent apply-config' renders them into a unit drop-in as
+    # ReadWritePaths (the agent process cannot relax the sandbox itself). The
+    # serve path also test-writes them at startup and warns on any that are
+    # read-only, flagging config that has not been applied. Absent = none.
+    if (defined $config->{writable_paths} && length $config->{writable_paths}) {
+        $config->{writable_paths} = [
+            grep { length $_ } split /:/, $config->{writable_paths}
+        ];
+    }
+    else {
+        delete $config->{writable_paths};
+    }
+
+    # Validate the sandbox level. Absent = strict (the shipped unit default).
+    if (defined $config->{sandbox}) {
+        my $lvl = lc $config->{sandbox};
+        croak "sandbox must be one of strict|moderate|off in '$path'"
+            unless $lvl =~ /^(?:strict|moderate|off)$/;
+        $config->{sandbox} = $lvl;
+    }
+
     # Parse allowed_ips from comma-separated string into arrayref.
     # Validate CIDR prefix lengths at load time; reject invalid entries with a
     # warning so ip_allowed only ever sees well-formed entries.

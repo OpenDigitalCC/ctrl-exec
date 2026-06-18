@@ -38,9 +38,19 @@ sub main {
         'background'    => \$opts{background},
         'timeout=i'     => \$opts{timeout},
         'lookup-by=s'   => \$opts{lookup_by},
+        'version'       => sub { print "ctrl-exec-agent $VERSION\n"; exit 0; },
     ) or die usage();
 
-    $mode = shift @ARGV // 'serve';
+    $mode = shift @ARGV;
+
+    # No mode given: print help and exit rather than silently launching the
+    # server. A bare invocation that blocks in the accept loop with no terminal
+    # output looks hung; 'serve' must be requested explicitly. The init and
+    # systemd units invoke 'ctrl-exec-agent serve'.
+    unless (defined $mode) {
+        print usage();
+        return;
+    }
 
     Exec::Log::init('ctrl-exec-agent');
 
@@ -50,6 +60,7 @@ sub main {
         'pairing-status'  => \&mode_pairing_status,
         'self-check'      => \&mode_self_check,
         'self-ping'       => \&mode_self_ping,
+        'apply-config'    => \&mode_apply_config,
     );
 
     my $handler = $dispatch{$mode}
@@ -126,8 +137,17 @@ this agent with its dispatcher, as root, with:
 then approve the request on the dispatcher. Once pairing completes, start the
 agent again. Run 'ctrl-exec-agent pairing-status' to check pairing state.
 MSG
-        exit 1;
+        # Exit EX_CONFIG (78), not 1: "not paired" is a configuration state that
+        # restarting cannot fix. The systemd unit lists 78 in
+        # RestartPreventExitStatus, so an enabled-but-unpaired agent fails once
+        # with the message above instead of respawning every RestartSec forever.
+        # A genuine crash still exits non-78 and is restarted as normal.
+        exit 78;
     }
+
+    # Warn early if agent.conf declares writable_paths the sandbox has not been
+    # updated to grant - cheaper to learn at startup than mid-run as EROFS.
+    _check_writable_paths($config);
 
     require IO::Socket::SSL;
     require Exec::TLS;
@@ -249,7 +269,15 @@ sub mode_request_pairing {
     die "Cannot write to '$cert_dir' - re-run as root or with sudo\n"
         unless -w $cert_dir;
 
-    my $host = hostname();
+    my $host = _fqdn();
+    unless ($host =~ /\./) {
+        warn <<"WARN";
+Warning: could not determine a fully-qualified domain name for this host;
+registering the short name '$host'. A dispatcher on a different network or
+subdomain may be unable to resolve it. Configure a domain (FQDN) on this host,
+or pair with --lookup-by ip so the dispatcher reaches this agent by address.
+WARN
+    }
 
     # Report the agent's configured operational port so the dispatcher can
     # store it and reach this agent without a per-command --port. Read the
@@ -373,6 +401,7 @@ sub mode_request_pairing {
 
     _store_pairing_result($result, $pair->{key_pem}, $ctrl_exec_host);
     print "Pairing complete. Certificates stored.\n";
+    _print_start_instructions();
 }
 
 sub _store_pairing_result {
@@ -749,13 +778,38 @@ sub handle_run {
         REQID      => $reqid,
     });
 
-    _send_json($conn, {
+    my %payload = (
         script => $name,
         exit   => $result->{exit},
         stdout => $result->{stdout},
         stderr => $result->{stderr},
         reqid  => $reqid,
-    });
+    );
+    if (my $hint = _sandbox_write_hint($result->{stderr})) {
+        $payload{hint} = $hint;
+    }
+    _send_json($conn, \%payload);
+}
+
+# A script that fails to write because the systemd sandbox (ProtectSystem=strict)
+# has made the target path read-only gets EROFS, which tools report as
+# "Read-only file system" - indistinguishable, at a glance, from a disk fault or
+# a permissions problem, when it is neither. When a script's stderr carries that
+# signature, return an operator hint naming the real cause and the fix, attached
+# as a separate 'hint' field so the script's own stderr is never altered.
+# Returns undef when no such signature is present.
+sub _sandbox_write_hint {
+    my ($stderr) = @_;
+    return undef unless defined $stderr
+        && $stderr =~ /read-only file system|\bEROFS\b/i;
+    return
+        "A write was refused with 'read-only file system'. This is the agent's "
+      . "systemd sandbox, not file ownership or a full disk: paths outside the "
+      . "agent's state directory are read-only to scripts by design. To allow "
+      . "it, add the path to 'writable_paths' (or loosen 'sandbox') in "
+      . "agent.conf, run 'ctrl-exec-agent apply-config' as root, and restart the "
+      . "agent. See 'Granting scripts a writable path' in "
+      . "docs/SECURITY-OPERATIONS.md.";
 }
 
 sub handle_ping {
@@ -787,7 +841,7 @@ sub handle_ping {
 
     _send_json($conn, {
         status  => 'ok',
-        host    => hostname(),
+        host    => _fqdn(),
         version => $VERSION,
         expiry  => $status->{expiry} // 'unknown',
         reqid   => $reqid,
@@ -884,7 +938,7 @@ sub handle_capabilities {
 
     _send_json($conn, {
         status  => 'ok',
-        host    => hostname(),
+        host    => _fqdn(),
         version => $VERSION,
         scripts => \@scripts,
         tags    => $config->{tags} // {},
@@ -951,6 +1005,11 @@ sub handle_result {
         REQID      => $reqid,
         STATUS     => $record->{status} // 'unknown',
     });
+    if (ref $record eq 'HASH') {
+        if (my $hint = _sandbox_write_hint($record->{stderr})) {
+            $record->{hint} = $hint;
+        }
+    }
     _send_json($conn, $record);
 }
 
@@ -1042,17 +1101,143 @@ sub _preflight_dispatcher {
       . "  sudo ctrl-exec pairing-mode\n";
 }
 
+# apply-config: render the systemd sandbox drop-in from agent.conf and reload
+# systemd. agent.conf is the single source of truth for the sandbox level and
+# the paths scripts may write to; the agent process cannot relax its own kernel
+# mount namespace, so the policy is applied here, at the unit level, taking
+# effect on the next restart. Root-only (writes under /etc/systemd/system).
+sub mode_apply_config {
+    require Exec::Agent::Sandbox;
+    require File::Path;
+
+    unless (-d '/run/systemd/system') {
+        die "apply-config manages the systemd sandbox, but systemd is not the "
+          . "init here. On OpenWrt/procd, adjust the procd jail instead.\n";
+    }
+    unless ($> == 0) {
+        die "apply-config must run as root - it writes "
+          . "$Exec::Agent::Sandbox::DROPIN_PATH and reloads systemd.\n";
+    }
+
+    my $config = eval { Exec::Agent::Config::load_config($CONFIG_PATH) };
+    if ($@) { print STDERR "Config error: $@"; exit 1; }
+
+    my $text = eval { Exec::Agent::Sandbox::render_dropin($config) };
+    if ($@) { print STDERR "Config error: $@"; exit 1; }
+
+    my $path = $Exec::Agent::Sandbox::DROPIN_PATH;
+    File::Path::make_path($Exec::Agent::Sandbox::DROPIN_DIR)
+        unless -d $Exec::Agent::Sandbox::DROPIN_DIR;
+    open my $fh, '>', $path or die "Cannot write $path: $!\n";
+    print $fh $text;
+    close $fh;
+    chmod 0644, $path;
+
+    print "Wrote $path:\n\n$text\n";
+
+    my $rc = system('systemctl', 'daemon-reload');
+    warn "Warning: 'systemctl daemon-reload' exited $rc\n" if $rc != 0;
+
+    print "Restart the agent to apply it (detached async jobs survive - "
+        . "KillMode=process):\n";
+    print "    systemctl restart ctrl-exec-agent\n";
+}
+
+# At serve start, verify each declared writable_paths entry is actually writable.
+# Perl's -w reflects only DAC mode bits, not a read-only mount, so probe with a
+# real mkdir (the operation scripts most often perform). A read-only result means
+# the systemd sandbox has not been updated to match agent.conf - warn so the
+# operator runs apply-config and restarts, rather than discovering it mid-run.
+sub _check_writable_paths {
+    my ($config) = @_;
+    my $paths = $config->{writable_paths};
+    return unless ref $paths eq 'ARRAY';
+    for my $p (@$paths) {
+        unless (-d $p) {
+            warn "writable_paths: '$p' is not an existing directory - create it "
+               . "before scripts write there.\n";
+            next;
+        }
+        my $probe = "$p/.ctrl-exec-write-probe.$$";
+        if (mkdir $probe) { rmdir $probe; next; }
+        warn "writable_paths: '$p' is read-only to the agent ($!) - the systemd "
+           . "sandbox does not match agent.conf. Run 'ctrl-exec-agent "
+           . "apply-config' as root and restart the agent.\n";
+    }
+}
+
+# The agent's fully-qualified hostname. This is the value reported at pairing -
+# which becomes the dispatcher's registry key and, under lookup_by=hostname, the
+# address it connects back on - and the self-reported host in run/capabilities
+# responses. A bare short hostname (what Sys::Hostname::hostname returns on most
+# hosts) does not resolve across subdomains, so a dispatcher on a different
+# network cannot reach the agent by it; an FQDN also stays consistent if the
+# dispatcher itself moves. Prefer Net::Domain::hostfqdn(); fall back to the short
+# name only when no domain is configured. Memoised - the name does not change
+# while the process runs, and the serve path calls this per request.
+my $FQDN;
+sub _fqdn {
+    return $FQDN if defined $FQDN;
+    my $f = eval { require Net::Domain; Net::Domain::hostfqdn() };
+    $FQDN = (defined $f && length $f && $f =~ /\./) ? $f : hostname();
+    return $FQDN;
+}
+
+# After a successful interactive pairing the agent has an identity but is not
+# running yet: installation deliberately does not enable or start it (it cannot
+# serve until paired). Tell the operator how to bring it up - enabling as well as
+# starting, so it also survives a reboot - rather than leaving them to discover
+# the agent still is not serving.
+sub _print_start_instructions {
+    # A running agent loads its certificate and trusted-dispatcher map once, at
+    # startup (the map also refreshes on SIGHUP, but the certificate does not).
+    # Pairing here just wrote new files on disk; if the agent is already running
+    # - i.e. this was a re-pair - it must be restarted to adopt the new identity
+    # and to trust the dispatcher's current serial. Skipping this is the classic
+    # cause of a post-re-pair "serial mismatch": the new serial is on disk but the
+    # live process is still matching against the map it loaded at startup.
+    my $running = -d '/run/systemd/system'
+        && system('systemctl', 'is-active', '--quiet', 'ctrl-exec-agent') == 0;
+
+    if ($running) {
+        print "\nThis agent is already running. Restart it so the new certificate"
+            . " and the\ndispatcher's current serial take effect (a re-pair changes"
+            . " both):\n\n";
+        print "    sudo systemctl restart ctrl-exec-agent\n";
+        print "\nWithout this restart the running agent keeps matching against the"
+            . " trusted-\ndispatcher map it loaded at startup, and requests are"
+            . " rejected as a serial\nmismatch.\n";
+    }
+    else {
+        print "\nThe agent is paired but not running yet. Enable and start it:\n\n";
+        if (-d '/run/systemd/system') {
+            print "    sudo systemctl enable --now ctrl-exec-agent\n";
+        }
+        elsif (-e '/etc/init.d/ctrl-exec-agent') {
+            print "    /etc/init.d/ctrl-exec-agent enable\n";
+            print "    /etc/init.d/ctrl-exec-agent start\n";
+        }
+        else {
+            print "    sudo ctrl-exec-agent serve\n";
+        }
+    }
+    print "\nThen verify with: ctrl-exec-agent self-ping\n";
+}
+
 sub usage {
     return <<'END';
 Usage: ctrl-exec-agent <mode> [options]
 
 Modes:
-  serve                          Start the agent server (default)
+  serve                          Start the agent server
   request-pairing --dispatcher <host>
                                  Request pairing with the ctrl-exec dispatcher host
   pairing-status                 Show pairing/cert status
   self-check                     Validate local config and certs
   self-ping                      Connect to self on port 7443, verify mTLS and pairing
+  apply-config                   Render the systemd sandbox drop-in (filesystem
+                                 protection level + writable_paths) from
+                                 agent.conf and reload systemd (root; restart to apply)
 
 Options:
   --config <path>                Path to agent.conf
@@ -1065,5 +1250,6 @@ Options:
                                  for approval (for orchestrated installations)
   --timeout <n>                  Seconds to wait for approval in background
                                  mode (default 30, max 600)
+  --version                      Print version and exit
 END
 }

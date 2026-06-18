@@ -42,6 +42,7 @@ sub main {
         'tags=s'      => \$opts{tags},
         'async'       => \$opts{async},
         'timeout=i'   => \$opts{timeout},
+        'version'     => sub { print "ctrl-exec-dispatcher $VERSION\n"; exit 0; },
     ) or die usage();
 
     my $mode = shift @ARGV // die usage();
@@ -532,16 +533,23 @@ sub mode_list_requests {
         print "No pending pairing requests.\n";
         return;
     }
-    printf "%-10s  %-30s  %-16s  %-8s  %s\n", 'ID', 'HOSTNAME', 'IP', 'CODE', 'RECEIVED';
-    printf "%s\n", '-' x 85;
+    printf "%-10s  %-24s  %-16s  %-28s  %s\n",
+        'ID', 'HOSTNAME', 'SOURCE IP', 'REVERSE DNS', 'CODE';
+    printf "%s\n", '-' x 92;
     for my $r (@$requests) {
-        printf "%-10s  %-30s  %-16s  %-8s  %s\n",
-            $r->{id}       // '?',
-            $r->{hostname} // '?',
-            $r->{ip}       // '?',
-            $r->{code}     // '??????',
-            $r->{received} // '?';
+        my $rev = length($r->{reverse_dns} // '')
+            ? $r->{reverse_dns} . ($r->{reverse_confirmed} ? ' (ok)' : ' (?)')
+            : '-';
+        printf "%-10s  %-24s  %-16s  %-28s  %s\n",
+            $r->{id}        // '?',
+            $r->{hostname}  // '?',
+            $r->{source_ip} // $r->{ip} // '?',
+            $rev,
+            $r->{code}      // '??????';
     }
+    print "\nReverse DNS is how this dispatcher resolves each agent's IP; "
+        . "(ok) = forward-confirmed.\n"
+        . "Approve shows the exact edit-agent command if a name will not resolve here.\n";
 }
 
 sub mode_approve {
@@ -564,14 +572,16 @@ sub mode_approve {
         die "--ip must be an IPv4 or IPv6 address\n";
     }
 
+    my $config = eval { _load_config() } // {};
     Exec::Pairing::approve_request(
-        reqid         => $reqid,
-        ca_dir        => '/etc/ctrl-exec',
-        lookup_by     => $lookup_by,
-        ip            => $ip,
-        port          => $agent_port,
-        dispatcher_id => _resolve_dispatcher_id(eval { _load_config() } // {}),
-        log_fn        => sub { Exec::Log::log_action('INFO', $_[0]) },
+        reqid           => $reqid,
+        ca_dir          => '/etc/ctrl-exec',
+        lookup_by       => $lookup_by,
+        ip              => $ip,
+        port            => $agent_port,
+        dispatcher_id   => _resolve_dispatcher_id($config),
+        dispatcher_cert => $config->{cert},
+        log_fn          => sub { Exec::Log::log_action('INFO', $_[0]) },
     );
 }
 
@@ -595,7 +605,13 @@ sub mode_setup_ca {
 
 sub mode_setup_dispatcher {
     my $ca_dir   = '/etc/ctrl-exec';
-    my $disp_crt = "$ca_dir/dispatcher.crt";
+    # The cert/key paths are whatever ctrl-exec.conf declares - the one place
+    # that names the dispatcher's identity files. Create them there so the cert
+    # the dispatcher serves, and the one approve/rotate read the serial from, are
+    # always the same file.
+    my $config   = _load_config();
+    my $disp_crt = $config->{cert};
+    my $disp_key = $config->{key};
 
     if (-f $disp_crt) {
         # Replacing the dispatcher cert changes its serial. Every paired agent
@@ -626,13 +642,15 @@ sub mode_setup_dispatcher {
     print "Generating dispatcher certificate...\n";
     my $result = Exec::CA::generate_dispatcher_cert(
         ca_dir => $ca_dir,
+        cert   => $disp_crt,
+        key    => $disp_key,
         force  => 1,
     );
     print "dispatcher cert created:\n";
     print "  Key:  $result->{key}\n";
     print "  Cert: $result->{cert}\n";
     print "Run 'ctrl-exec-dispatcher pairing-mode' to re-pair agents as needed.\n"
-        if -f "$ca_dir/dispatcher.crt";
+        if -f $disp_crt;
 }
 
 sub mode_rotate_cert {
@@ -1051,6 +1069,7 @@ Options:
   --port <n>                 Override default port (7443)
   --username <name>          Username for auth hook (default: $USER)
   --token <token>            Auth token (default: $ENVEXEC_TOKEN env var)
+  --version                  Print version and exit
 
 END
 }

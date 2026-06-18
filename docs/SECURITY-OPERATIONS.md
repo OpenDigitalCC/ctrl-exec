@@ -146,6 +146,60 @@ reqid. A hook that restricts this must infer the original caller from the
 token and compare it to the stored result's caller context (not provided by
 the API directly - requires a lookup in the hook's own store).
 
+## Granting scripts a writable path
+
+The agent runs under a systemd sandbox (`ProtectSystem=strict`), which mounts the
+whole filesystem read-only for the agent process except its state directory
+(`/var/lib/ctrl-exec-agent`). A managed script that writes anywhere else - say a
+cert-deploy script writing to `/srv/certificates` - fails with:
+
+```
+mkdir: cannot create directory '/srv/certificates/project.im': Read-only file system
+```
+
+This is **not** a permissions or disk problem (the error would be "Permission
+denied" or "No space left" respectively). It is the sandbox: the path is
+read-only to the agent regardless of its ownership. The run result carries a
+`hint` field naming this cause.
+
+The sandbox is enforced by a mount namespace systemd sets up **before** the agent
+starts; the agent runs with no capabilities and `NoNewPrivileges=yes`, so it
+cannot make a path writable at runtime. Writable paths are therefore granted at
+the unit level - but you manage that from **`agent.conf`**, not by hand-editing
+units. Two settings control it:
+
+- `sandbox = strict | moderate | off` - how much of the filesystem is read-only.
+  `strict` (default) locks everything except the agent state dir; `moderate`
+  (`ProtectSystem=full`) leaves `/srv`, `/var`, `/home`, `/opt` writable while
+  keeping `/usr`, `/boot`, `/etc` protected; `off` removes filesystem protection.
+- `writable_paths = /srv/certificates:/var/log/myapp` - specific directories to
+  open under `strict` (rendered as systemd `ReadWritePaths`).
+
+After changing either, apply it (as root) and restart:
+
+```
+sudo ctrl-exec-agent apply-config        # renders the drop-in, reloads systemd
+sudo systemctl restart ctrl-exec-agent   # the namespace change needs a restart
+```
+
+`apply-config` writes a generated drop-in at
+`/etc/systemd/system/ctrl-exec-agent.service.d/50-ctrl-exec-sandbox.conf` - so
+the policy survives package upgrades and lives beside the rest of the config.
+The drop-in only adjusts `ProtectSystem`/`ProtectHome`/`ReadWritePaths`; every
+other hardening directive in the shipped unit is untouched.
+
+Caveats:
+
+- A `writable_paths` directory **must already exist** when the unit starts;
+  systemd bind-mounts each entry, and a missing path makes the service fail to
+  start. Scripts can create entries *under* a granted path, not the path itself.
+  The agent test-writes each `writable_paths` entry at startup and logs a warning
+  for any that are read-only (i.e. `apply-config`/restart has not been run).
+- Scope `writable_paths` tightly (`/srv/certificates`, not `/srv` or `/`), or
+  prefer `sandbox = moderate` if scripts legitimately write across many
+  operational paths.
+- Apply the same `agent.conf` to every agent that runs the write-bearing script.
+
 
 ## `update-ctrl-exec-serial` Security
 

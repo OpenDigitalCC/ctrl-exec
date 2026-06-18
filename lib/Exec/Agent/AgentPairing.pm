@@ -570,8 +570,17 @@ sub serial_to_hex {
         return lc( Math::BigInt->new($serial)->as_hex =~ s/^0x//r );
     }
 
-    # If it contains only valid hex characters it is already hex.
+    # If it contains only valid hex characters it is already hex. Strip any
+    # insignificant leading zeros first so a value carrying a leading 00 byte -
+    # a serial migrated from an older single-serial file, or a hand-edited map
+    # entry - canonicalises to the same key the live readers produce. Both
+    # `openssl x509 -serial` and Net::SSLeay::P_ASN1_INTEGER_get_hex emit minimal
+    # hex with no leading zero, so without this strip '00aabb...' (stored) never
+    # matches a live 'aabb...' and every request from that dispatcher is rejected
+    # as a serial mismatch. (The colon-separated branch above already strips its
+    # leading 00 byte; this keeps the plain-hex branch consistent with it.)
     if ($serial =~ /\A[0-9a-f]+\z/) {
+        $serial =~ s/\A0+(?=[0-9a-f])//;
         return $serial;
     }
 

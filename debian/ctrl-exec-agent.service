@@ -13,6 +13,10 @@ ExecStart=/usr/bin/ctrl-exec-agent serve
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
+# 78 = EX_CONFIG, the exit code the serve pre-flight uses when the agent is not
+# paired yet (no cert/key/CA). Restarting cannot fix that, so do not respawn on
+# it: the unit fails once with the "not paired" message instead of looping.
+RestartPreventExitStatus=78
 
 # Give the process time to shut down cleanly
 TimeoutStopSec=10

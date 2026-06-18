@@ -66,18 +66,27 @@ sub generate_dispatcher_cert {
     croak "days must be a positive integer"
         unless defined $days && $days =~ /^\d+$/ && $days > 0;
 
+    # The dispatcher cert/key paths are the caller's to specify - they are the
+    # single source of truth (ctrl-exec.conf 'cert'/'key'), the same files the
+    # dispatcher serves with and that approve/rotate read the serial from. There
+    # is deliberately no default name here: a hardcoded 'dispatcher.crt' is what
+    # let setup/rotate target a different file than the one served, producing a
+    # permanent "serial mismatch".
+    my $disp_crt = $opts{cert} or croak "cert path required";
+    my $disp_key = $opts{key}  or croak "key path required";
+
     my $ca_key   = "$ca_dir/ca.key";
     my $ca_cert  = "$ca_dir/ca.crt";
     my $serial   = "$ca_dir/ca.serial";
-    my $disp_key = "$ca_dir/dispatcher.key";
-    my $disp_csr = "$ca_dir/dispatcher.csr";
-    my $disp_crt = "$ca_dir/dispatcher.crt";
 
     croak "CA key not found at '$ca_key' - run setup-ca first" unless -f $ca_key;
 
     if (-f $disp_crt && !$force) {
         croak "dispatcher cert already exists at '$disp_crt'. Use force => 1 to overwrite.";
     }
+
+    # The CSR is a throwaway intermediate; a temp file leaves nothing behind.
+    my (undef, $disp_csr) = tempfile('disp-XXXXXX', SUFFIX => '.csr', TMPDIR => 1, UNLINK => 1);
 
     _run_or_die('openssl', 'genrsa', '-out', $disp_key, $bits);
     chmod 0600, $disp_key;

@@ -32,6 +32,7 @@ use FindBin qw($Bin);
 use lib "$Bin/../lib";
 
 use Exec::Rotation qw();
+use Exec::CA       qw();
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -484,6 +485,8 @@ subtest '_do_rotation: creates rotation state file with correct fields' => sub {
     my $result = eval {
         Exec::Rotation::_do_rotation(config => config(
             ca_dir        => $caDir,
+            cert          => $cert,
+            key           => "$caDir/dispatcher.key",
             rotation_file => $rotFile,
             registry_dir  => $regDir,
         ))
@@ -538,6 +541,8 @@ subtest '_do_rotation: registered agents marked pending after rotation' => sub {
     my $result = eval {
         Exec::Rotation::_do_rotation(config => config(
             ca_dir        => $caDir,
+            cert          => $cert,
+            key           => "$caDir/dispatcher.key",
             rotation_file => $rotFile,
             registry_dir  => $regDir,
         ))
@@ -572,6 +577,8 @@ subtest '_do_rotation: no prior cert - previous_serial is empty string' => sub {
     my $result = eval {
         Exec::Rotation::_do_rotation(config => config(
             ca_dir        => $caDir,
+            cert          => "$caDir/dispatcher.crt",
+            key           => "$caDir/dispatcher.key",
             rotation_file => $rotFile,
             registry_dir  => $regDir,
         ))
@@ -590,6 +597,49 @@ subtest '_do_rotation: no prior cert - previous_serial is empty string' => sub {
     else {
         pass 'rotation ran (state file location may be overridden)';
     }
+};
+
+subtest 'rotation re-keys the CONFIGURED cert, not a hardcoded dispatcher.crt' => sub {
+    plan skip_all => 'openssl not available'
+        unless system('openssl version >/dev/null 2>&1') == 0;
+
+    my $dir     = tempdir(CLEANUP => 1);
+    my $caDir   = "$dir/ca";
+    my $regDir  = "$dir/agents";
+    my $rotFile = "$dir/rotation.json";
+    make_path($caDir, $regDir);
+
+    # A deployment whose served cert is NOT named dispatcher.crt (the exact case
+    # that broke pairing). Rotation must re-key this file and surface its serial.
+    my $cert = "$caDir/ctrl-exec.crt";
+    my $key  = "$caDir/ctrl-exec.key";
+    eval {
+        Exec::CA::generate_ca(ca_dir => $caDir, bits => 2048);
+        Exec::CA::generate_dispatcher_cert(
+            ca_dir => $caDir, cert => $cert, key => $key, bits => 2048);
+    };
+    plan skip_all => "could not set up CA: $@" if $@;
+
+    my $old_serial = Exec::Rotation::_read_cert_serial($cert);
+
+    my $result = Exec::Rotation::_do_rotation(config => config(
+        ca_dir        => $caDir,
+        cert          => $cert,
+        key           => $key,
+        cert_days     => 825,
+        rotation_file => $rotFile,
+        registry_dir  => $regDir,
+    ));
+
+    ok $result->{rotated}, 'rotation performed against the configured cert';
+    ok -f $cert, 'the configured cert (ctrl-exec.crt) was re-keyed in place';
+    ok ! -e "$caDir/dispatcher.crt", 'no stray dispatcher.crt was created';
+    my $new_serial = Exec::Rotation::_read_cert_serial($cert);
+    isnt $new_serial, $old_serial, 'served cert now carries a new serial';
+    is $result->{old_serial}, $old_serial,
+        'rotation reports the served cert old serial';
+    is $result->{serial}, $new_serial,
+        'rotation reports the served cert new serial';
 };
 
 done_testing;

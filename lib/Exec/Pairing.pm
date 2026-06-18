@@ -9,6 +9,8 @@ use JSON        qw(encode_json decode_json);
 use POSIX       qw(strftime);
 use Carp        qw(croak);
 use Sys::Hostname qw(hostname);
+use Socket      qw(getaddrinfo getnameinfo
+                   AI_NUMERICHOST NI_NAMEREQD NI_NUMERICHOST NIx_NOSERV);
 
 use Exec::RateLimit qw();
 
@@ -217,7 +219,7 @@ sub run_pairing_mode {
                     _interactive_prompt($log_fn);
                 }
                 elsif ($line =~ /^a(\d+)$/) {
-                    _interactive_approve($1, $log_fn, $dispatcher_id);
+                    _interactive_approve($1, $log_fn, $dispatcher_id, $cert);
                 }
                 elsif ($line =~ /^d(\d+)$/) {
                     _interactive_deny($1, $log_fn);
@@ -226,7 +228,7 @@ sub run_pairing_mode {
                     # Shorthand approve when only one request pending
                     my $reqs = list_requests();
                     if (@$reqs == 1) {
-                        _do_approve($reqs->[0]{id}, $log_fn, $dispatcher_id);
+                        _do_approve($reqs->[0]{id}, $log_fn, $dispatcher_id, $cert);
                     }
                     elsif (@$reqs == 0) {
                         print "No pending requests.\n";
@@ -306,6 +308,14 @@ sub approve_request {
     # This dispatcher's stable identity, delivered to the agent so it can key
     # permission and attribution on it (serials rotate; the identity does not).
     my $dispatcher_id = $opts{dispatcher_id} // '';
+    # The cert this dispatcher actually presents to agents (ctrl-exec.conf
+    # 'cert'). Its serial is what the agent records and checks on every request,
+    # so it MUST be read from the same file the dispatcher serves with - never a
+    # hardcoded name. Required: callers pass $config->{cert}. A wrong/missing
+    # path yields an empty serial, no trust entry, and a permanent "serial
+    # mismatch", which the empty-serial warning below flags at approve time.
+    my $dispatcher_cert = $opts{dispatcher_cert}
+        or croak "dispatcher_cert required (the served cert path, ctrl-exec.conf 'cert')";
 
     my $req_file = "$pairing_dir/$reqid.json";
     -f $req_file or croak "No pending request '$reqid'";
@@ -339,13 +349,25 @@ sub approve_request {
 
     # Read the dispatcher cert serial so the agent can store it and use it
     # to restrict /capabilities to the genuine ctrl-exec only.
-    my $disp_cert = "$ca_dir/dispatcher.crt";
+    my $disp_cert = $dispatcher_cert;
     my $disp_serial = '';
     if (-f $disp_cert) {
         my $out = `openssl x509 -noout -serial -in \Q$disp_cert\E 2>/dev/null`;
         if (defined $out && $out =~ /serial=([0-9A-Fa-f]+)/) {
             $disp_serial = lc $1;
         }
+    }
+    # An empty serial means the agent is paired but trusts no serial for this
+    # dispatcher, so it rejects every subsequent request as a "serial mismatch".
+    # That is almost always a wrong/missing 'cert' path - surface it now, at the
+    # one moment the operator can fix it, rather than leaving a silent failure.
+    unless (length $disp_serial) {
+        warn "WARNING: could not read this dispatcher's cert serial from "
+           . "'$disp_cert'.\n"
+           . "  The agent will trust no serial for this dispatcher and will "
+           . "reject every\n  request as a 'serial mismatch'. Check the 'cert' "
+           . "setting in ctrl-exec.conf\n  points to the cert this dispatcher "
+           . "serves with, then re-pair.\n";
     }
 
     # Extract cert expiry for the registry record
@@ -365,6 +387,7 @@ sub approve_request {
     # Persist agent record - source of truth for all paired agents
     require Exec::Registry;
     Exec::Registry::register_agent(
+        registry_dir      => $opts{registry_dir},
         hostname          => $req->{hostname},
         ip                => $ip,
         paired            => strftime('%Y-%m-%dT%H:%M:%SZ', gmtime),
@@ -380,7 +403,26 @@ sub approve_request {
     );
 
     $log_fn->({ ACTION => 'pair-approve', AGENT => $req->{hostname}, REQID => $reqid });
-    print "Approved '$req->{hostname}' ($reqid). Cert delivered on next poll.\n";
+
+    # Report exactly what was registered and how the dispatcher will reach it,
+    # then how to change it without re-pairing. edit-agent only rewrites the
+    # registry record - dispatch auth is CA-based (the agent cert CN is not
+    # checked), so renaming or switching to IP needs no new certificate.
+    my $name = $req->{hostname};
+    my $addr = ($lookup_by eq 'hostname') ? $name : ($ip // '?');
+    print "Approved '$name' ($reqid). Cert delivered on next poll.\n";
+    printf "  Registered:  %s   lookup_by=%s   addr=%s:%s\n",
+        $name, $lookup_by, $addr, ($port // '?');
+    if (length($req->{source_ip} // '') || $req->{reverse_confirmed}) {
+        print "  If this dispatcher cannot reach it by that, fix without re-pairing:\n";
+        printf "    ctrl-exec-dispatcher edit-agent %s --lookup-by ip --ip %s\n",
+            $name, $req->{source_ip}
+            if length($req->{source_ip} // '');
+        printf "    ctrl-exec-dispatcher edit-agent %s --rename %s\n",
+            $name, $req->{reverse_dns}
+            if $req->{reverse_confirmed} && length($req->{reverse_dns} // '')
+               && lc $req->{reverse_dns} ne lc $name;
+    }
 }
 
 # Deny and remove a pending request
@@ -468,6 +510,111 @@ sub _effective_ip {
     return '';
 }
 
+# --- identity diagnostics -------------------------------------------------
+#
+# A paired agent is reached by the name (or IP) it reported at pairing, resolved
+# from the dispatcher. When the agent reports a bare/short hostname - common when
+# the host's FQDN is managed by DHCP and the host itself does not know it - that
+# name may not resolve from this dispatcher, so dispatch fails later with a
+# confusing error. The dispatcher is the right place to discover the truth: it
+# can reverse-resolve the connection's source IP against its own resolver to find
+# the network's canonical name for the host. These helpers gather that signal and
+# turn it into an operator-facing recommendation.
+
+# Forward-confirmed reverse DNS of an IP. Returns { ptr => $name, confirmed => 0|1 }
+# or undef when there is no usable PTR (or the lookup times out). 'confirmed' is
+# true only when the PTR name forward-resolves back to the same IP, which guards
+# against a host claiming a name it does not actually own. Bounded by $timeout
+# (default 2s) so a missing or slow resolver cannot hang an interactive prompt.
+sub _reverse_lookup {
+    my ($ip, $timeout) = @_;
+    $timeout //= 2;
+    return undef unless defined $ip && length $ip && $ip ne 'unknown';
+
+    my $out = eval {
+        local $SIG{ALRM} = sub { die "timeout\n" };
+        alarm $timeout;
+
+        # Build a sockaddr for the numeric IP (AI_NUMERICHOST = no DNS here).
+        my ($aerr, @ai) = getaddrinfo($ip, '', { flags => AI_NUMERICHOST });
+        die "addr\n" if $aerr || !@ai;
+
+        # PTR. NI_NAMEREQD makes a missing PTR an error rather than echoing the
+        # numeric IP back as the "name".
+        my ($nerr, $name) = getnameinfo($ai[0]{addr}, NI_NAMEREQD, NIx_NOSERV);
+        die "ptr\n" if $nerr || !defined $name || !length $name;
+
+        # Forward-confirm: the PTR name must resolve back to the same IP.
+        my ($ferr, @fa) = getaddrinfo($name, '');
+        my $confirmed = 0;
+        unless ($ferr) {
+            for my $a (@fa) {
+                my ($gerr, $host) = getnameinfo($a->{addr}, NI_NUMERICHOST, NIx_NOSERV);
+                next if $gerr;
+                if (defined $host && $host eq $ip) { $confirmed = 1; last }
+            }
+        }
+        { ptr => $name, confirmed => $confirmed };
+    };
+    alarm 0;
+    return $out;   # undef on timeout or any failure
+}
+
+# Operator-facing identity lines for a queued request: the reported name (which
+# becomes the registry key), the source IP as this dispatcher saw it, the
+# agent's self-reported IP when it differs (a sign of NAT in between), and the
+# forward-confirmed reverse-DNS name. Reverse-DNS fields are read from the
+# request record (resolved once at queue time), not looked up again here.
+sub _identity_lines {
+    my ($req) = @_;
+    my @lines;
+    push @lines, sprintf("  Reported name: %s   (becomes the registry key)",
+        $req->{hostname} // '?');
+    push @lines, sprintf("  Source IP:     %s   (as this dispatcher saw the connection)",
+        $req->{source_ip} // '?');
+    if (defined $req->{ip} && length $req->{ip}
+        && defined $req->{source_ip} && $req->{ip} ne $req->{source_ip}) {
+        push @lines, sprintf("  Reported IP:   %s   (agent self-reported; differs - NAT?)",
+            $req->{ip});
+    }
+    if (length($req->{reverse_dns} // '')) {
+        push @lines, sprintf("  Reverse DNS:   %s   (%s)",
+            $req->{reverse_dns},
+            $req->{reverse_confirmed} ? 'forward-confirmed' : 'unconfirmed');
+    }
+    else {
+        push @lines, "  Reverse DNS:   (none resolvable from this dispatcher)";
+    }
+    return @lines;
+}
+
+# A one-or-two-line recommendation for how to register the agent so this
+# dispatcher can actually reach it, keyed on the reverse-DNS signal. Returns a
+# (possibly multi-line) string, or '' when nothing useful can be said.
+sub _identity_recommendation {
+    my ($req) = @_;
+    my $name = $req->{hostname}  // '';
+    my $src  = $req->{source_ip} // '';
+    my $rev  = $req->{reverse_dns} // '';
+    my $conf = $req->{reverse_confirmed} ? 1 : 0;
+
+    if ($conf && length $rev && lc $rev ne lc $name) {
+        return "Recommendation: this dispatcher resolves the agent's IP to '$rev'"
+             . " (forward-confirmed), which differs from the reported name '$name'.\n"
+             . "  If '$name' does not resolve here, register the resolvable name:\n"
+             . "    ctrl-exec-dispatcher edit-agent $name --rename $rev";
+    }
+    if ($conf && length $rev) {
+        return "Recommendation: reported name '$name' is forward-confirmed by"
+             . " reverse DNS; lookup_by=hostname should resolve from here.";
+    }
+    return "Recommendation: could not forward-confirm a name for the agent's"
+         . " source IP from this dispatcher.\n"
+         . "  If '$name' does not resolve here, dispatch by IP instead:\n"
+         . "    ctrl-exec-dispatcher edit-agent $name --lookup-by ip"
+         . (length $src ? " --ip $src" : '');
+}
+
 # --- interactive pairing helpers ---
 
 # Display pending requests and prompt for a command.
@@ -490,6 +637,10 @@ sub _interactive_prompt {
         printf "  Code:     %s   (verify this matches the agent display)\n",
             $r->{code} // '??????';
         printf "  Received: %s\n", $r->{received} // '?';
+        print "$_\n" for _identity_lines($r);
+        if (my $rec = _identity_recommendation($r)) {
+            print "$rec\n";
+        }
         print "Accept, Deny, or Skip? [a/d/s]: ";
     }
     else {
@@ -516,14 +667,14 @@ sub _print_queue {
 
 # Approve the Nth request in the current queue (1-based index).
 sub _interactive_approve {
-    my ($n, $log_fn, $dispatcher_id) = @_;
+    my ($n, $log_fn, $dispatcher_id, $dispatcher_cert) = @_;
     my $reqs = list_requests();
     my $r    = $reqs->[$n - 1];
     unless ($r) {
         print "No request at position $n.\n";
         return;
     }
-    _do_approve($r->{id}, $log_fn, $dispatcher_id);
+    _do_approve($r->{id}, $log_fn, $dispatcher_id, $dispatcher_cert);
 }
 
 # Deny the Nth request in the current queue (1-based index).
@@ -540,12 +691,13 @@ sub _interactive_deny {
 
 # Approve a request by reqid, with error handling for interactive context.
 sub _do_approve {
-    my ($reqid, $log_fn, $dispatcher_id) = @_;
+    my ($reqid, $log_fn, $dispatcher_id, $dispatcher_cert) = @_;
     eval {
         approve_request(
-            reqid         => $reqid,
-            dispatcher_id => $dispatcher_id,
-            log_fn        => $log_fn,
+            reqid           => $reqid,
+            dispatcher_id   => $dispatcher_id,
+            dispatcher_cert => $dispatcher_cert,
+            log_fn          => $log_fn,
         );
     };
     if ($@) {
@@ -623,6 +775,12 @@ sub _handle_pair_request {
     my $received   = strftime('%Y-%m-%dT%H:%M:%SZ', gmtime);
     my $code       = _pairing_code($csr);
 
+    # Resolve the network's canonical name for the connection's source IP once,
+    # now, so the operator can see how this dispatcher resolves the agent before
+    # approving (and so list-requests/approve never block on DNS). Bounded by a
+    # short timeout; absent/slow PTR just yields no reverse name.
+    my $rev = _reverse_lookup($peer_ip);
+
     # Queue depth check - expire stale entries first, then count remaining
     _expire_stale_requests($pairing_dir);
     my @pending = glob "$pairing_dir/*.json";
@@ -648,6 +806,8 @@ sub _handle_pair_request {
         port      => $agent_port,
         received  => $received,
         code      => $code,
+        reverse_dns       => ($rev ? $rev->{ptr} : ''),
+        reverse_confirmed => ($rev && $rev->{confirmed} ? 1 : 0),
     }));
 
     $log_fn->({ ACTION => 'pair-request', AGENT => $hostname, IP => $peer_ip,

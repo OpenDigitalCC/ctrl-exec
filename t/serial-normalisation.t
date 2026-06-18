@@ -43,6 +43,32 @@ subtest 'serial_to_hex: mixed case normalised' => sub {
         'mixed case lowercased';
 };
 
+# Leading-zero canonicalisation: a stored serial carrying an insignificant
+# leading 00 byte (e.g. migrated from a pre-0.9.0 single-serial file) must
+# normalise to the same minimal hex the live readers produce, or it never
+# matches and the dispatcher is rejected as a serial mismatch.
+subtest 'serial_to_hex: leading 00 byte stripped' => sub {
+    is Exec::Agent::AgentPairing::serial_to_hex('00aabbccdd'), 'aabbccdd',
+        'leading 00 byte dropped';
+    is Exec::Agent::AgentPairing::serial_to_hex('0000aabbccdd'), 'aabbccdd',
+        'multiple leading zero bytes dropped';
+    is Exec::Agent::AgentPairing::serial_to_hex('00DEADBEEF'), 'deadbeef',
+        'leading 00 dropped and lowercased';
+};
+
+subtest 'serial_to_hex: stored leading-00 matches live minimal hex' => sub {
+    # The exact failure mode: openssl/Net::SSLeay emit 'aabbccdd'; an older
+    # migrated entry stored '00aabbccdd'. Both must resolve to one key.
+    is Exec::Agent::AgentPairing::serial_to_hex('00aabbccdd'),
+       Exec::Agent::AgentPairing::serial_to_hex('aabbccdd'),
+       'migrated and live forms canonicalise identically';
+};
+
+subtest 'serial_to_hex: an all-zero serial keeps one digit' => sub {
+    is Exec::Agent::AgentPairing::serial_to_hex('00'), '0',
+        'all-zero serial does not strip to empty';
+};
+
 # ---------------------------------------------------------------------------
 # serial_to_hex: 0x prefix
 # ---------------------------------------------------------------------------

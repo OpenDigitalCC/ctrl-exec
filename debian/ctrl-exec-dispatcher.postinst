@@ -37,4 +37,21 @@ esac
 
 #DEBHELPER#
 
+# On upgrade only ($2 holds the previously-configured version), restart the API
+# service if it is already running so the new code takes effect. The package
+# ships the unit with dh_installsystemd --no-start (rules), which suppresses the
+# restart-after-upgrade that compat 13 would otherwise do; without this the old
+# code keeps running until a manual restart. Gate on is-active so a stopped or
+# unconfigured API server is left alone. The dispatcher CLI itself is not a
+# service. Runs after #DEBHELPER# so the helper's daemon-reload has loaded any
+# new unit.
+case "$1" in
+    configure)
+        if [ -n "$2" ] && [ -d /run/systemd/system ] \
+           && systemctl is-active --quiet ctrl-exec-api.service; then
+            deb-systemd-invoke restart ctrl-exec-api.service || true
+        fi
+        ;;
+esac
+
 exit 0
