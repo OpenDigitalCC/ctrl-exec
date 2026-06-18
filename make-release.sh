@@ -3,12 +3,14 @@
 # or repackage a ctrl-exec release under a licensed brand name.
 #
 # Usage:
-#   ./make-release.sh [--auto] [--no-deb]
+#   ./make-release.sh [--no-auto] [--no-deb]
 #       Build ctrl-exec-<version>.tar.gz from the current source tree.
 #       Bumps VERSION, creates git tag, generates sbom.json. Also builds the
 #       versioned .deb packages (ctrl-exec-common, ctrl-exec-agent, ctrl-exec)
 #       from debian/ into dist/, keeping debian/changelog in step with the
-#       release version. --no-deb skips the .deb build; it is also skipped
+#       release version. By default it then commits the release and pushes the
+#       branch and tag; --no-auto stops after building and prints the manual git
+#       steps instead. --no-deb skips the .deb build; it is also skipped
 #       gracefully when debian/ or dpkg-buildpackage is absent.
 #
 #   ./make-release.sh --brand <name> [--from ctrl-exec-<version>.tar.gz]
@@ -118,7 +120,10 @@ DIST_DIR="dist"
 # Argument parsing
 # ---------------------------------------------------------------------------
 
-AUTO=0
+# Auto-commit-and-push is the default; --no-auto stops after building and prints
+# the manual git steps. --auto/--force are kept as accepted no-ops for callers
+# (and habits) that still pass them.
+AUTO=1
 BRAND=""
 FROM=""
 BUILD_DEBS=1
@@ -127,6 +132,8 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --auto|--force)
             AUTO=1; shift ;;
+        --no-auto|--manual)
+            AUTO=0; shift ;;
         --brand)
             [[ -n "${2:-}" ]] || die "--brand requires a value (e.g. --brand acme)"
             BRAND="$2"; shift 2 ;;
