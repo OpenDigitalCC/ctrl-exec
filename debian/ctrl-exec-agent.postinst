@@ -85,7 +85,9 @@ esac
 # nothing to start - but --no-start also suppresses the restart-after-upgrade
 # that compat 13 would otherwise do, leaving the old code running until a manual
 # restart. Gate on is-active so a stopped or never-paired agent is left alone.
-# Runs after #DEBHELPER# so the helper's daemon-reload has loaded any new unit.
+# Runs after the debhelper-generated section, so its daemon-reload has loaded
+# any new unit. (Do not write the debhelper token in this comment - it would be
+# substituted a second time and splice shell code into the comment.)
 case "$1" in
     configure)
         if [ -n "$2" ] && [ -d /run/systemd/system ] \

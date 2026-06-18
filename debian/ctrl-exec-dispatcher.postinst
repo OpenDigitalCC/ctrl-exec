@@ -43,8 +43,9 @@ esac
 # restart-after-upgrade that compat 13 would otherwise do; without this the old
 # code keeps running until a manual restart. Gate on is-active so a stopped or
 # unconfigured API server is left alone. The dispatcher CLI itself is not a
-# service. Runs after #DEBHELPER# so the helper's daemon-reload has loaded any
-# new unit.
+# service. Runs after the debhelper-generated section, so its daemon-reload has
+# loaded any new unit. (Do not write the debhelper token in this comment - it
+# would be substituted a second time and splice shell code into the comment.)
 case "$1" in
     configure)
         if [ -n "$2" ] && [ -d /run/systemd/system ] \
