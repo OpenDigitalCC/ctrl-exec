@@ -540,7 +540,18 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
         dup2(in[0], 0); dup2(o[1], 1); dup2(e[1], 2);
         close(in[0]); close(in[1]); close(o[0]); close(o[1]); close(e[0]); close(e[1]);
         if (apply_profile(p, allow_unpriv) != 0) _exit(126);
+        /* Clear diagnostic instead of a silent exit-127: a run_as user that
+         * cannot read+exec the script is the most common cause. The script's
+         * permissions must allow the profile's run_as user (e.g. a script owned
+         * root:prosody mode 0750 for run_as=prosody). */
+        if (access(path, X_OK) != 0) {
+            dprintf(2, "executor: '%s' is not executable by the profile's run_as "
+                       "user (%s) - check the script's owner/group/mode\n",
+                    path, strerror(errno));
+            _exit(126);
+        }
         execv(path, argv);
+        dprintf(2, "executor: exec '%s' failed: %s\n", path, strerror(errno));
         _exit(127);
     }
     close(in[0]); close(o[1]); close(e[1]);

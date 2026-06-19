@@ -136,6 +136,11 @@ ca   = /etc/ctrl-exec-agent/ca.crt
 #   writable          colon-separated absolute dirs the script may write to
 #   no_new_privileges yes (default) | no
 #
+# run_as note: the script must be readable+executable by the run_as user - this
+# is ordinary Unix exec permission. Scope a script to a service by its group:
+# e.g. a script owned root:prosody mode 0750 works with run_as=prosody. A run_as
+# user that cannot exec the script gets a clear error (not a silent failure).
+#
 # Define only the profiles you need; reference them from scripts.conf. Naming a
 # profile in scripts.conf that is not defined here makes the agent refuse to
 # serve (fail-closed).
