@@ -146,59 +146,32 @@ reqid. A hook that restricts this must infer the original caller from the
 token and compare it to the stored result's caller context (not provided by
 the API directly - requires a lookup in the hook's own store).
 
-## Granting scripts a writable path
+## Script privilege and filesystem access (privilege separation)
 
-The agent runs under a systemd sandbox (`ProtectSystem=strict`), which mounts the
-whole filesystem read-only for the agent process except its state directory
-(`/var/lib/ctrl-exec-agent`). A managed script that writes anywhere else - say a
-cert-deploy script writing to `/srv/certificates` - fails with:
+> A fuller treatment of the privilege-separation model lands with the security
+> documentation rewrite; this is the operational summary.
 
-```
-mkdir: cannot create directory '/srv/certificates/project.im': Read-only file system
-```
+ctrl-exec does not blanket-sandbox the agent into being unable to do its job.
+A managed script runs with the privilege its work requires - governed by **which
+script** (the allowlist), **who** invoked it (mTLS + the auth hook), and **its
+security profile** - not by a filesystem wall the operator has to fight.
 
-This is **not** a permissions or disk problem (the error would be "Permission
-denied" or "No space left" respectively). It is the sandbox: the path is
-read-only to the agent regardless of its ownership. The run result carries a
-`hint` field naming this cause.
+With privilege separation enabled (`executor_socket` in `agent.conf`, plus the
+`ctrl-exec-exec.service` running), each synchronous run goes to the privileged
+executor, which runs the script under the profile named in `scripts.conf`:
 
-The sandbox is enforced by a mount namespace systemd sets up **before** the agent
-starts; the agent runs with no capabilities and `NoNewPrivileges=yes`, so it
-cannot make a path writable at runtime. Writable paths are therefore granted at
-the unit level - but you manage that from **`agent.conf`**, not by hand-editing
-units. Two settings control it:
+- `run_as` - the user the script runs as (ordinary Unix DAC governs its writes).
+- `caps` - the Linux capabilities it holds (e.g. `CAP_CHOWN`).
+- The agent's **control and state directories** (`/etc/ctrl-exec-agent`,
+  `/var/lib/ctrl-exec-agent`) are **read-only** to every action, including
+  `run_as=root` ones - so an action can never tamper with the controls or audit.
 
-- `sandbox = strict | moderate | off` - how much of the filesystem is read-only.
-  `strict` (default) locks everything except the agent state dir; `moderate`
-  (`ProtectSystem=full`) leaves `/srv`, `/var`, `/home`, `/opt` writable while
-  keeping `/usr`, `/boot`, `/etc` protected; `off` removes filesystem protection.
-- `writable_paths = /srv/certificates:/var/log/myapp` - specific directories to
-  open under `strict` (rendered as systemd `ReadWritePaths`).
+So "let a cert-deploy script write `/srv/certificates`" is just: give it a
+profile with the right `run_as` (and the directory owned/writable by that user).
+See the `[profile <name>]` documentation in `agent.conf.example`.
 
-After changing either, apply it (as root) and restart:
-
-```
-sudo ctrl-exec-agent apply-config        # renders the drop-in, reloads systemd
-sudo systemctl restart ctrl-exec-agent   # the namespace change needs a restart
-```
-
-`apply-config` writes a generated drop-in at
-`/etc/systemd/system/ctrl-exec-agent.service.d/50-ctrl-exec-sandbox.conf` - so
-the policy survives package upgrades and lives beside the rest of the config.
-The drop-in only adjusts `ProtectSystem`/`ProtectHome`/`ReadWritePaths`; every
-other hardening directive in the shipped unit is untouched.
-
-Caveats:
-
-- A `writable_paths` directory **must already exist** when the unit starts;
-  systemd bind-mounts each entry, and a missing path makes the service fail to
-  start. Scripts can create entries *under* a granted path, not the path itself.
-  The agent test-writes each `writable_paths` entry at startup and logs a warning
-  for any that are read-only (i.e. `apply-config`/restart has not been run).
-- Scope `writable_paths` tightly (`/srv/certificates`, not `/srv` or `/`), or
-  prefer `sandbox = moderate` if scripts legitimately write across many
-  operational paths.
-- Apply the same `agent.conf` to every agent that runs the write-bearing script.
+Without `executor_socket`, the agent runs scripts directly in its own
+(unprivileged) process - no profiles, no privilege change.
 
 
 ## `update-ctrl-exec-serial` Security

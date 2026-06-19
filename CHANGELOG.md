@@ -5,6 +5,27 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
+## 0.10.0 — privilege separation and per-script profiles (in progress)
+
+- **Added** privilege separation. A new root, no-network executor
+  (`ctrl-exec-exec`) runs allowlisted scripts; the unprivileged agent front-end
+  hands it authorised requests over a peer-cred-checked unix socket. The
+  executor re-derives the path and profile from its own root-owned config (it
+  trusts nothing in the message) and applies the profile - mount namespace with
+  the control/state dirs read-only, capability set, `run_as`, and
+  `no_new_privileges` - before exec. Opt-in via `executor_socket` in agent.conf.
+- **Added** per-script security profiles: `[profile <name>]` blocks in agent.conf
+  (`run_as`, `caps`, `writable`, `no_new_privileges`) referenced from
+  `scripts.conf` via `profile=<name>`. Unprofiled scripts use a restrictive
+  default; an undefined profile is a fatal config error (fail-closed). A shared
+  conformance test proves the C executor and the Perl front-end resolve the
+  identical security decision for any config.
+- **Removed** the interim filesystem sandbox (`sandbox`/`writable_paths`/
+  `apply-config` and the `ProtectSystem=strict`-as-action-blocker default). It
+  was a transitional mechanism; per-script profiles enforced by the executor
+  replace it. Deployments that set `writable_paths`/`sandbox` should move the
+  intent into a profile (those keys are now ignored).
+
 ## 0.9.3 — clearer dispatch errors
 
 - **Changed** how the dispatcher reports a host it cannot reach: a raw LWP

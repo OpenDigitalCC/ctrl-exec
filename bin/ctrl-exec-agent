@@ -60,7 +60,6 @@ sub main {
         'pairing-status'  => \&mode_pairing_status,
         'self-check'      => \&mode_self_check,
         'self-ping'       => \&mode_self_ping,
-        'apply-config'    => \&mode_apply_config,
     );
 
     my $handler = $dispatch{$mode}
@@ -154,10 +153,6 @@ MSG
         # A genuine crash still exits non-78 and is restarted as normal.
         exit 78;
     }
-
-    # Warn early if agent.conf declares writable_paths the sandbox has not been
-    # updated to grant - cheaper to learn at startup than mid-run as EROFS.
-    _check_writable_paths($config);
 
     require IO::Socket::SSL;
     require Exec::TLS;
@@ -832,38 +827,13 @@ sub handle_run {
         REQID      => $reqid,
     });
 
-    my %payload = (
+    _send_json($conn, {
         script => $name,
         exit   => $result->{exit},
         stdout => $result->{stdout},
         stderr => $result->{stderr},
         reqid  => $reqid,
-    );
-    if (my $hint = _sandbox_write_hint($result->{stderr})) {
-        $payload{hint} = $hint;
-    }
-    _send_json($conn, \%payload);
-}
-
-# A script that fails to write because the systemd sandbox (ProtectSystem=strict)
-# has made the target path read-only gets EROFS, which tools report as
-# "Read-only file system" - indistinguishable, at a glance, from a disk fault or
-# a permissions problem, when it is neither. When a script's stderr carries that
-# signature, return an operator hint naming the real cause and the fix, attached
-# as a separate 'hint' field so the script's own stderr is never altered.
-# Returns undef when no such signature is present.
-sub _sandbox_write_hint {
-    my ($stderr) = @_;
-    return undef unless defined $stderr
-        && $stderr =~ /read-only file system|\bEROFS\b/i;
-    return
-        "A write was refused with 'read-only file system'. This is the agent's "
-      . "systemd sandbox, not file ownership or a full disk: paths outside the "
-      . "agent's state directory are read-only to scripts by design. To allow "
-      . "it, add the path to 'writable_paths' (or loosen 'sandbox') in "
-      . "agent.conf, run 'ctrl-exec-agent apply-config' as root, and restart the "
-      . "agent. See 'Granting scripts a writable path' in "
-      . "docs/SECURITY-OPERATIONS.md.";
+    });
 }
 
 sub handle_ping {
@@ -1060,11 +1030,6 @@ sub handle_result {
         REQID      => $reqid,
         STATUS     => $record->{status} // 'unknown',
     });
-    if (ref $record eq 'HASH') {
-        if (my $hint = _sandbox_write_hint($record->{stderr})) {
-            $record->{hint} = $hint;
-        }
-    }
     _send_json($conn, $record);
 }
 
@@ -1156,71 +1121,6 @@ sub _preflight_dispatcher {
       . "  sudo ctrl-exec pairing-mode\n";
 }
 
-# apply-config: render the systemd sandbox drop-in from agent.conf and reload
-# systemd. agent.conf is the single source of truth for the sandbox level and
-# the paths scripts may write to; the agent process cannot relax its own kernel
-# mount namespace, so the policy is applied here, at the unit level, taking
-# effect on the next restart. Root-only (writes under /etc/systemd/system).
-sub mode_apply_config {
-    require Exec::Agent::Sandbox;
-    require File::Path;
-
-    unless (-d '/run/systemd/system') {
-        die "apply-config manages the systemd sandbox, but systemd is not the "
-          . "init here. On OpenWrt/procd, adjust the procd jail instead.\n";
-    }
-    unless ($> == 0) {
-        die "apply-config must run as root - it writes "
-          . "$Exec::Agent::Sandbox::DROPIN_PATH and reloads systemd.\n";
-    }
-
-    my $config = eval { Exec::Agent::Config::load_config($CONFIG_PATH) };
-    if ($@) { print STDERR "Config error: $@"; exit 1; }
-
-    my $text = eval { Exec::Agent::Sandbox::render_dropin($config) };
-    if ($@) { print STDERR "Config error: $@"; exit 1; }
-
-    my $path = $Exec::Agent::Sandbox::DROPIN_PATH;
-    File::Path::make_path($Exec::Agent::Sandbox::DROPIN_DIR)
-        unless -d $Exec::Agent::Sandbox::DROPIN_DIR;
-    open my $fh, '>', $path or die "Cannot write $path: $!\n";
-    print $fh $text;
-    close $fh;
-    chmod 0644, $path;
-
-    print "Wrote $path:\n\n$text\n";
-
-    my $rc = system('systemctl', 'daemon-reload');
-    warn "Warning: 'systemctl daemon-reload' exited $rc\n" if $rc != 0;
-
-    print "Restart the agent to apply it (detached async jobs survive - "
-        . "KillMode=process):\n";
-    print "    systemctl restart ctrl-exec-agent\n";
-}
-
-# At serve start, verify each declared writable_paths entry is actually writable.
-# Perl's -w reflects only DAC mode bits, not a read-only mount, so probe with a
-# real mkdir (the operation scripts most often perform). A read-only result means
-# the systemd sandbox has not been updated to match agent.conf - warn so the
-# operator runs apply-config and restarts, rather than discovering it mid-run.
-sub _check_writable_paths {
-    my ($config) = @_;
-    my $paths = $config->{writable_paths};
-    return unless ref $paths eq 'ARRAY';
-    for my $p (@$paths) {
-        unless (-d $p) {
-            warn "writable_paths: '$p' is not an existing directory - create it "
-               . "before scripts write there.\n";
-            next;
-        }
-        my $probe = "$p/.ctrl-exec-write-probe.$$";
-        if (mkdir $probe) { rmdir $probe; next; }
-        warn "writable_paths: '$p' is read-only to the agent ($!) - the systemd "
-           . "sandbox does not match agent.conf. Run 'ctrl-exec-agent "
-           . "apply-config' as root and restart the agent.\n";
-    }
-}
-
 # The agent's fully-qualified hostname. This is the value reported at pairing -
 # which becomes the dispatcher's registry key and, under lookup_by=hostname, the
 # address it connects back on - and the self-reported host in run/capabilities
@@ -1290,9 +1190,6 @@ Modes:
   pairing-status                 Show pairing/cert status
   self-check                     Validate local config and certs
   self-ping                      Connect to self on port 7443, verify mTLS and pairing
-  apply-config                   Render the systemd sandbox drop-in (filesystem
-                                 protection level + writable_paths) from
-                                 agent.conf and reload systemd (root; restart to apply)
 
 Options:
   --config <path>                Path to agent.conf

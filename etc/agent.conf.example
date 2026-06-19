@@ -52,29 +52,6 @@ ca   = /etc/ctrl-exec-agent/ca.crt
 #
 # executor_socket = /run/ctrl-exec-agent/exec.sock
 
-# Filesystem sandbox (optional; default: strict).
-# The agent runs under a systemd mount-namespace sandbox. This sets how much of
-# the filesystem scripts may write to. Because systemd builds the namespace
-# before the agent starts, changes here take effect only after you run
-# 'ctrl-exec-agent apply-config' (as root) and restart the agent - the command
-# renders these settings into a unit drop-in. Levels:
-#   strict   - default; whole tree read-only except the agent state dir (plus
-#              any writable_paths below). Most isolated.
-#   moderate - /usr, /boot, /etc read-only; /srv, /var, /home, /opt writable.
-#              Most operational writes work without listing each path.
-#   off      - no filesystem protection; scripts write wherever Unix permissions
-#              allow. Least isolated.
-#
-# sandbox = strict
-
-# Paths scripts are allowed to write to under the sandbox (optional).
-# Colon-separated absolute directories, rendered as systemd ReadWritePaths by
-# 'apply-config'. Use with sandbox=strict to open specific paths. Each must
-# already exist. The agent test-writes these at startup and warns on any that
-# are read-only (i.e. apply-config has not been run/restarted).
-#
-# writable_paths = /srv/certificates:/var/log/myapp
-
 # Async result store (optional).
 # Directory where results of detached (--async) jobs are persisted, keyed by
 # request id, until fetched or TTL-purged (24h). Defaults to the path below.
