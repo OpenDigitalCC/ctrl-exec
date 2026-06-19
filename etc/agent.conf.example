@@ -41,6 +41,17 @@ ca   = /etc/ctrl-exec-agent/ca.crt
 #
 # script_dirs = /opt/ctrl-exec-scripts:/usr/local/lib/ctrl-exec-scripts
 
+# Privilege separation (optional, recommended).
+# When set, the agent hands each synchronous run to the privileged executor
+# (ctrl-exec-exec.service) over this unix socket; the executor re-derives the
+# path and profile from its own root-owned config and applies the profile
+# (run_as, capabilities, control/state dirs read-only) before exec. Leave unset
+# to run scripts directly in the unprivileged agent process (no profiles).
+# Enabling this means: install and enable ctrl-exec-exec.service, then set the
+# path below. Async (--async) runs are not yet supported via the executor.
+#
+# executor_socket = /run/ctrl-exec-agent/exec.sock
+
 # Filesystem sandbox (optional; default: strict).
 # The agent runs under a systemd mount-namespace sandbox. This sets how much of
 # the filesystem scripts may write to. Because systemd builds the namespace

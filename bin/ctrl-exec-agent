@@ -729,6 +729,18 @@ sub handle_run {
     # fetches the result later via GET /result/<reqid>. A valid reqid is
     # required because it is the store key.
     if ($data->{async}) {
+        # Async runs still go through the in-process AsyncRunner, which would not
+        # apply the script's security profile. Rather than silently run an async
+        # job with the wrong (front-end) privilege, refuse it while the executor
+        # is configured. Async-through-executor is a follow-on (2c).
+        if ($config->{executor_socket}) {
+            _send_json($conn, {
+                script => $name, exit => -1, reqid => $reqid,
+                error  => 'async runs are not yet supported with the executor '
+                        . '(privilege separation); run synchronously',
+            });
+            return;
+        }
         unless (length $reqid && $reqid =~ /^[A-Za-z0-9_-]+\z/) {
             _send_json($conn, {
                 script => $name, exit => -1, reqid => $reqid,
@@ -782,10 +794,34 @@ sub handle_run {
         return;
     }
 
-    my $result = Exec::Agent::Runner::run_script(
-        $script_path, $args, $context,
-        $config->{stdin_timeout} // 10,
-    );
+    # Run path. With an executor_socket configured (privilege separation), hand
+    # the run to the privileged executor, which re-derives the path and profile
+    # from its own config and applies the profile before exec. Otherwise run it
+    # directly (legacy, unprivileged-front-end-only). The executor resolves the
+    # script by name; the context JSON goes to the script's stdin as before.
+    my $result;
+    if ($config->{executor_socket}) {
+        require Exec::Agent::ExecClient;
+        my $r = Exec::Agent::ExecClient::run(
+            socket        => $config->{executor_socket},
+            reqid         => $reqid,
+            dispatcher_id => $dispatcher,
+            script        => $name,
+            args          => $args,
+            stdin         => encode_json($context),
+        );
+        $result = {
+            exit   => $r->{exit},
+            stdout => $r->{stdout} // '',
+            stderr => $r->{stderr} // ($r->{error} // ''),
+        };
+    }
+    else {
+        $result = Exec::Agent::Runner::run_script(
+            $script_path, $args, $context,
+            $config->{stdin_timeout} // 10,
+        );
+    }
 
     Exec::Log::log_action('INFO', {
         ACTION     => 'run',
