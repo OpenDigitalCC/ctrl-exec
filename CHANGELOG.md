@@ -5,6 +5,17 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
+## 0.9.3 — clearer dispatch errors
+
+- **Changed** how the dispatcher reports a host it cannot reach: a raw LWP
+  transport string (`500 Can't connect to host:7443 (Connection refused)`) is
+  now translated into a status-like message — `host 'web01' did not resolve`,
+  `… did not respond on port 7443 - connection refused (agent not running, or
+  wrong port?)`, `… is unreachable`, `… connection timed out`, or `TLS handshake
+  … failed`. Applies to run, ping, status, and capabilities. A genuine HTTP
+  status (e.g. 403) is passed through unchanged, never mislabelled as a network
+  fault.
+
 ## 0.9.1 — explicit serve mode
 
 - **Changed** `ctrl-exec-agent` (`cea`) invoked with no mode: it now prints the

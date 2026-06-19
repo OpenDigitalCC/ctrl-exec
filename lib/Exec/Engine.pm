@@ -487,9 +487,9 @@ sub _dispatch_one {
         else {
             my $raw_err = $@ || ($resp ? $resp->status_line : 'no response');
             my $timeout = $config->{read_timeout} // $config->{timeout} // 60;
-            $err = ($raw_err =~ /timeout|read timeout/i)
+            $err = ($raw_err =~ /read timeout/i)
                 ? "read timeout after ${timeout}s"
-                : $raw_err;
+                : _transport_error($raw_err, $host, $port);
         }
         Exec::Log::log_action('ERR', {
             ACTION => $async ? 'run-async' : 'run',
@@ -586,7 +586,8 @@ sub _result_one {
             $err = 'forbidden: ' . ($body->{error} // $resp->status_line);
         }
         else {
-            $err = $@ || ($resp ? $resp->status_line : 'no response');
+            $err = _transport_error($@ || ($resp ? $resp->status_line : 'no response'),
+                                    $host, $port);
         }
         Exec::Log::log_action('ERR', {
             ACTION => 'result',
@@ -651,7 +652,8 @@ sub _ping_one {
             $err = 'request too large';
         }
         else {
-            $err = $@ || ($resp ? $resp->status_line : 'no response');
+            $err = _transport_error($@ || ($resp ? $resp->status_line : 'no response'),
+                                    $host, $port);
         }
         Exec::Log::log_action('ERR', {
             ACTION => 'ping',
@@ -698,7 +700,8 @@ sub _capabilities_one {
     my $rtt = sprintf '%.0fms', (Time::HiRes::time() - $t0) * 1000;
 
     if ($@ || !$resp || !$resp->is_success) {
-        my $err = $@ || ($resp ? $resp->status_line : 'no response');
+        my $err = _transport_error($@ || ($resp ? $resp->status_line : 'no response'),
+                                   $host, $port);
         Exec::Log::log_action('ERR', {
             ACTION => 'capabilities',
             TARGET => "$host:$port",
@@ -723,6 +726,41 @@ sub _capabilities_one {
     });
 
     return $result;
+}
+
+# Translate a raw transport failure (LWP status_line or $@) into a concise,
+# status-like message: a connection failure arrives as a 5xx whose status_line
+# embeds the socket reason in parentheses ("500 Can't connect to host:port
+# (Connection refused)"), which reads like a crash rather than a reachability
+# status. Rewrite only recognised transport causes; anything else (including a
+# genuine HTTP status such as 403) is returned unchanged, so this never mislabels
+# an authorisation response as a network problem.
+sub _transport_error {
+    my ($raw, $host, $port) = @_;
+    $raw  //= '';
+    $host //= 'host';
+
+    return "host '$host' did not resolve - check the name or use an IP address"
+        if $raw =~ /bad \s* hostname | name \s or \s service \s not \s known |
+                    nodename \s nor \s servname | temporary \s failure \s in \s name |
+                    cannot \s resolve | no \s address \s associated/xi;
+
+    return "host '$host' did not respond on port $port - connection refused "
+         . "(agent not running, or wrong port?)"
+        if $raw =~ /connection \s refused/xi;
+
+    return "host '$host' is unreachable - no route to host or network down"
+        if $raw =~ /no \s route \s to \s host | network \s is \s unreachable |
+                    host \s is \s unreachable/xi;
+
+    return "host '$host' did not respond - connection timed out"
+        if $raw =~ /timed \s out | \btimeout\b/xi;
+
+    return "TLS handshake with '$host' failed - certificate or trust mismatch"
+        if $raw =~ /ssl \s connect | \bssl\b | \btls\b | certificate | handshake |
+                    verify \s failed/xi;
+
+    return $raw;   # unrecognised - leave as-is (may be a real HTTP status)
 }
 
 sub _build_ua {
