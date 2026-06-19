@@ -78,8 +78,13 @@ backup-mysql = /opt/scripts/backup.sh
 rotate-logs  = /opt/scripts/rotate.sh
 END
     my $al = Exec::Agent::Config::load_allowlist($path);
-    is $al->{'backup-mysql'}, '/opt/scripts/backup.sh', 'backup-mysql path';
-    is $al->{'rotate-logs'},  '/opt/scripts/rotate.sh', 'rotate-logs path';
+    # Entries are now { path, profile } records; profile defaults to 'default'.
+    is $al->{'backup-mysql'}{path}, '/opt/scripts/backup.sh', 'backup-mysql path';
+    is $al->{'rotate-logs'}{path},  '/opt/scripts/rotate.sh', 'rotate-logs path';
+    is $al->{'backup-mysql'}{profile}, 'default', 'unannotated -> default profile';
+    # validate_script still returns the bare path.
+    is Exec::Agent::Config::validate_script('backup-mysql', $al),
+       '/opt/scripts/backup.sh', 'validate_script returns the path';
 };
 
 subtest 'load_allowlist: relative path skipped with warning' => sub {

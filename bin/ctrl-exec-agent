@@ -78,6 +78,16 @@ sub mode_serve {
     my $allowlist = Exec::Agent::Config::load_allowlist($ALLOWLIST_PATH);
     my $schemas   = Exec::Agent::Schema::load_for_allowlist($allowlist);
 
+    # Fail-closed: every allowlisted script must reference a defined profile (or
+    # the implicit 'default'). A typo'd or undefined profile must not silently
+    # run with default privileges - refuse to serve until the config is fixed.
+    if (my @bad = Exec::Agent::Config::validate_profiles($allowlist, $config)) {
+        die "Refusing to serve: script(s) reference an undefined profile: "
+          . join(', ', @bad)
+          . "\nDefine the profile(s) in agent.conf ([profile <name>]) or correct "
+          . "the profile= in scripts.conf.\n";
+    }
+
     my $revoked_path = $config->{revoked_serials}
                     // '/etc/ctrl-exec-agent/revoked-serials';
     my $revoked = Exec::Agent::AgentPairing::load_revoked_serials(
@@ -453,9 +463,17 @@ sub mode_self_check {
     }
 
     for my $name (sort keys %$allowlist) {
-        my $path = $allowlist->{$name};
-        my $ok   = -x $path ? 'ok' : 'NOT EXECUTABLE';
-        print "  Script '$name': $path [$ok]\n";
+        my $path    = Exec::Agent::Config::validate_script($name, $allowlist);
+        my $profile = Exec::Agent::Config::script_profile($name, $allowlist);
+        my $ok      = (defined $path && -x $path) ? 'ok' : 'NOT EXECUTABLE';
+        print "  Script '$name': $path  (profile: $profile) [$ok]\n";
+    }
+
+    # Fail-closed: a script referencing an undefined profile is a config error.
+    my @bad = Exec::Agent::Config::validate_profiles($allowlist, $config);
+    if (@bad) {
+        print "  Profile error: undefined profile(s) referenced: ",
+              join(', ', @bad), "\n";
     }
 
     print "Self-check complete.\n";
@@ -914,11 +932,12 @@ sub handle_capabilities {
 
     my @scripts;
     for my $name (sort keys %$allowlist) {
-        my $path  = $allowlist->{$name};
+        my $path  = Exec::Agent::Config::validate_script($name, $allowlist);
         my $entry = {
             name       => $name,
             path       => $path,
-            executable => (-x $path ? JSON::true : JSON::false),
+            executable => ((defined $path && -x $path) ? JSON::true : JSON::false),
+            profile    => Exec::Agent::Config::script_profile($name, $allowlist),
         };
         # Advertise the script's schema sidecar when present (the agent only
         # transports it; the consumer interprets it). See docs/SCHEMA-SIDECAR.md.

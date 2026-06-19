@@ -109,3 +109,39 @@ ca   = /etc/ctrl-exec-agent/ca.crt
 # env  = prod
 # role = db
 # site = london
+
+# Security profiles (optional).
+# A profile is the security context a script runs under, applied by the agent's
+# privileged executor before it execs the script: which user it runs as, which
+# Linux capabilities it holds, and which paths it may write to. Scripts reference
+# a profile by name in scripts.conf (profile=<name>); a script with no profile
+# runs under the implicit, most-restrictive 'default' (unprivileged, no caps, no
+# writable paths). The control/audit files are read-only to every profile,
+# including root ones, so an action can never tamper with the agent's controls.
+#
+# Fields per profile:
+#   run_as            user (or uid) to drop to; omit to keep the agent's user
+#   caps              comma/space-separated CAP_* to retain (e.g. CAP_CHOWN)
+#   writable          colon-separated absolute dirs the script may write to
+#   no_new_privileges yes (default) | no
+#
+# Define only the profiles you need; reference them from scripts.conf. Naming a
+# profile in scripts.conf that is not defined here makes the agent refuse to
+# serve (fail-closed).
+#
+# [profile read-only]
+# # the default-equivalent: write nothing, no privilege
+#
+# [profile cert-deploy]
+# run_as   = root
+# caps     = CAP_CHOWN
+# writable = /etc/nginx/ssl:/srv/certificates
+#
+# [profile svc-restart]
+# run_as = root
+# caps   = CAP_KILL
+#
+# [profile privileged]
+# # full root, no FS restriction beyond the always-read-only control/audit
+# # files. Use sparingly and pair the script with a strict argument schema.
+# run_as = root

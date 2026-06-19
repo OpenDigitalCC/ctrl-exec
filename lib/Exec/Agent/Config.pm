@@ -17,15 +17,28 @@ sub load_config {
         or croak "Cannot open config '$path': $!";
 
     my %config;
-    my $section = '';   # current section name; '' means top-level
+    my $section = '';      # current section name; '' means top-level
+    my $cur_profile;       # name of the [profile <name>] currently being read
 
     while (my $line = <$fh>) {
         chomp $line;
         next if $line =~ /^\s*#/;   # skip comments
         next if $line =~ /^\s*$/;   # skip blank lines
 
-        if ($line =~ /^\s*\[(\w+)\]\s*$/) {
-            $section = lc $1;
+        # Section header: [name], or [profile <name>] which carries a sub-name.
+        if ($line =~ /^\s*\[\s*(\w+)(?:\s+([\w.-]+))?\s*\]\s*$/) {
+            my ($sect, $sub) = (lc $1, $2);
+            if ($sect eq 'profile') {
+                croak "Profile section needs a name ([profile <name>]) in '$path'"
+                    unless defined $sub && length $sub;
+                $section     = 'profile';
+                $cur_profile = $sub;
+                $config{profiles}{$sub} //= {};
+            }
+            else {
+                $section     = $sect;
+                $cur_profile = undef;
+            }
             next;
         }
 
@@ -33,6 +46,10 @@ sub load_config {
             my ($k, $v) = ($1, $2);
             if ($section eq 'tags') {
                 $config{tags}{$k} = $v;
+            }
+            elsif ($section eq 'profile') {
+                # Raw value; normalised in _validate_config.
+                $config{profiles}{$cur_profile}{$k} = $v;
             }
             elsif ($section eq '') {
                 $config{$k} = $v;
@@ -90,6 +107,41 @@ sub _validate_config {
         croak "sandbox must be one of strict|moderate|off in '$path'"
             unless $lvl =~ /^(?:strict|moderate|off)$/;
         $config->{sandbox} = $lvl;
+    }
+
+    # Normalise security profiles ([profile <name>] blocks): caps -> arrayref of
+    # CAP_* names, writable -> arrayref of absolute dirs, run_as validated,
+    # no_new_privileges -> bool (default on). The executor applies these before
+    # exec; the implicit most-restrictive 'default' profile is supplied by the
+    # agent and need not be defined here (defining [profile default] overrides it).
+    if (ref $config->{profiles} eq 'HASH') {
+        for my $pname (sort keys %{ $config->{profiles} }) {
+            my $p = $config->{profiles}{$pname};
+
+            $p->{caps} = [ grep { length } split /[,\s]+/, ($p->{caps} // '') ];
+            for my $c (@{ $p->{caps} }) {
+                croak "Profile '$pname': invalid capability '$c' (expected CAP_*) in '$path'"
+                    unless $c =~ /^CAP_[A-Z0-9_]+$/;
+            }
+
+            $p->{writable} = [ grep { length } split /:/, ($p->{writable} // '') ];
+            for my $w (@{ $p->{writable} }) {
+                croak "Profile '$pname': writable path must be absolute: '$w' in '$path'"
+                    unless $w =~ m{^/};
+            }
+
+            if (defined $p->{run_as} && length $p->{run_as}) {
+                croak "Profile '$pname': invalid run_as '$p->{run_as}' in '$path'"
+                    unless $p->{run_as} =~ /^(?:[A-Za-z_][A-Za-z0-9_-]*|\d+)$/;
+            }
+            else {
+                delete $p->{run_as};
+            }
+
+            $p->{no_new_privileges} =
+                (!defined $p->{no_new_privileges}
+                 || $p->{no_new_privileges} =~ /^(?:1|y|yes|true|on)$/i) ? 1 : 0;
+        }
     }
 
     # Parse allowed_ips from comma-separated string into arrayref.
@@ -185,8 +237,34 @@ sub load_allowlist {
         chomp $line;
         next if $line =~ /^\s*#/;
         next if $line =~ /^\s*$/;
-        if ($line =~ /^\s*([\w-]+)\s*=\s*(\S+)\s*$/) {
-            my ($name, $script_path) = ($1, $2);
+        if ($line =~ /^\s*([\w-]+)\s*=\s*(.+?)\s*$/) {
+            my ($name, $rest) = ($1, $2);
+
+            # The value is the absolute script path plus optional, order-
+            # independent key=value annotations (profile=, future schema=/
+            # timeout=). The lone bare token is the path; key=value tokens are
+            # annotations - so 'profile=' may appear before or after the path.
+            my ($script_path, $extra_path, %annot);
+            for my $tok (split /\s+/, $rest) {
+                if ($tok =~ /^([a-z_]+)=(.*)$/) {
+                    $annot{$1} = $2;
+                }
+                elsif (defined $script_path) {
+                    $extra_path = $tok;
+                }
+                else {
+                    $script_path = $tok;
+                }
+            }
+
+            unless (defined $script_path) {
+                warn "Allowlist: skipping '$name' - no script path\n";
+                next;
+            }
+            if (defined $extra_path) {
+                warn "Allowlist: skipping '$name' - more than one path on the line\n";
+                next;
+            }
             unless ($script_path =~ m{^/}) {
                 warn "Allowlist: skipping '$name' - path must be absolute: $script_path\n";
                 next;
@@ -195,7 +273,10 @@ sub load_allowlist {
                 warn "Allowlist: skipping '$name' - path not in approved script_dirs: $script_path\n";
                 next;
             }
-            $allowlist{$name} = $script_path;
+            $allowlist{$name} = {
+                path    => $script_path,
+                profile => ($annot{profile} // 'default'),
+            };
         }
         else {
             warn "Allowlist: skipping malformed line: $line\n";
@@ -213,13 +294,42 @@ sub load_allowlist {
 sub validate_script {
     my ($name, $allowlist, $script_dirs) = @_;
     return unless defined $name && $name =~ /^[\w-]+$/;
-    my $path = $allowlist->{$name};
+    my $entry = $allowlist->{$name};
+    return unless defined $entry;
+    # Entries are { path, profile } records; tolerate a bare path string in case
+    # an older caller still passes one.
+    my $path = ref $entry eq 'HASH' ? $entry->{path} : $entry;
     return unless defined $path;
     if ($script_dirs && !_path_in_dirs($path, $script_dirs)) {
         warn "validate_script: '$name' path rejected at execution time - not in script_dirs: $path\n";
         return;
     }
     return $path;
+}
+
+# The profile name assigned to a script in the allowlist ('default' when unset).
+sub script_profile {
+    my ($name, $allowlist) = @_;
+    my $entry = $allowlist->{$name};
+    return undef unless defined $entry;
+    return ref $entry eq 'HASH' ? ($entry->{profile} // 'default') : 'default';
+}
+
+# Cross-check the allowlist against the defined profiles: every script's profile
+# must be defined in agent.conf, or be the implicit 'default'. Returns a list of
+# "script -> profile" strings for any that are not (empty when all resolve).
+# Fail-closed: callers (serve startup, self-check) treat a non-empty result as a
+# fatal config error rather than silently running an undefined - possibly
+# over-permissive - profile.
+sub validate_profiles {
+    my ($allowlist, $config) = @_;
+    my %defined = (default => 1, %{ $config->{profiles} // {} });
+    my @unknown;
+    for my $name (sort keys %$allowlist) {
+        my $p = script_profile($name, $allowlist) // 'default';
+        push @unknown, "$name -> $p" unless exists $defined{$p};
+    }
+    return @unknown;
 }
 
 # Return true if $path is under any directory in @$dirs.

@@ -1,13 +1,22 @@
 # ctrl-exec-agent script allowlist
 # /etc/ctrl-exec-agent/scripts.conf
 #
-# One entry per line: <name> = <absolute-path>
+# One entry per line: <name> = <absolute-path> [profile=<name>]
 # The name is what the ctrl-exec passes as the script argument.
 # The path must be executable and owned by root.
 #
 # Example:
 #   backup-mysql = /opt/ctrl-exec-scripts/backup-mysql.sh
 #   deploy-app   = /opt/ctrl-exec-scripts/deploy-app.sh
+#
+# The optional 'profile=<name>' pins the security context the script runs under.
+# It is order-independent (either side of the path) and the profile is defined in
+# agent.conf under [profile <name>]. A script with no profile= runs under the
+# most-restrictive 'default' profile. A profile= naming a profile that is not
+# defined in agent.conf is a fatal config error (the agent refuses to serve).
+#
+#   deploy-cert = /opt/ctrl-exec-scripts/deploy-cert.sh  profile=cert-deploy
+#   restart-web = /opt/ctrl-exec-scripts/restart-web.sh  profile=svc-restart
 
 # --- Demonstrator (evaluation and examples) ---
 #

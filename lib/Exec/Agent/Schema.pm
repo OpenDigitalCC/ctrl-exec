@@ -34,7 +34,8 @@ sub load_for_allowlist {
     my %out;
 
     for my $name (sort keys %$allowlist) {
-        my $path    = $allowlist->{$name};
+        my $entry   = $allowlist->{$name};
+        my $path    = ref $entry eq 'HASH' ? $entry->{path} : $entry;
         my $sidecar = "$path.schema.json";
         next unless -e $sidecar;
 
