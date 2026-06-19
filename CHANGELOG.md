@@ -15,6 +15,11 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
   ctrl-exec does not distribute debug symbols. Also dropped the
   `ctrl-exec-agent-dbgsym` that the 0.10.0 release accidentally committed to
   `dist/`. Rebuild with `DEB_BUILD_OPTIONS=nostrip` if you need symbols.
+- **Fixed** the upgrade restart not covering the executor: the agent postinst
+  now restarts both `ctrl-exec-exec.service` and `ctrl-exec-agent.service` (each
+  only if already running). Previously only the Perl front-end was restarted, so
+  after an upgrade the **changed C executor** kept running its old code until a
+  manual restart - the symptom under privilege separation.
 
 ## 0.10.0 — privilege separation and per-script profiles
 
