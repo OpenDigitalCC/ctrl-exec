@@ -763,6 +763,90 @@ sub _transport_error {
     return $raw;   # unrecognised - leave as-is (may be a real HTTP status)
 }
 
+# Broadcast a trusted-serial change to agents during cert rotation. POSTs to the
+# agent's /rotate-serial control-plane endpoint (no script, no executor): the
+# agent derives the dispatcher identity from the caller's authenticated serial
+# and adds/removes the given serial under it. Returns an arrayref of per-host
+# { host, status, exit, error?, rtt } (exit 0 == success), mirroring dispatch_all.
+sub rotate_all {
+    my (%opts) = @_;
+    my $hosts  = $opts{hosts}  or croak "hosts required";
+    my $serial = $opts{serial} or croak "serial required";
+    my $action = $opts{action} // 'add';
+    my $config = $opts{config} or croak "config required";
+    my $port   = $opts{port}   // $DEFAULT_PORT;
+    croak "hosts must be an arrayref" unless ref $hosts eq 'ARRAY';
+    croak "action must be add or remove" unless $action eq 'add' || $action eq 'remove';
+
+    my @entries = map { [ _host_entry($_) ] } @$hosts;
+    my (@results, %pipes);
+
+    for my $entry (@entries) {
+        my ($name, $target) = @$entry;
+        my ($host, $hport)  = parse_host($target, $port);
+        pipe my $r, my $w or die "pipe: $!";
+        my $pid = fork();
+        die "fork: $!" unless defined $pid;
+        if ($pid == 0) {
+            close $r;
+            my $result = _rotate_one(
+                host => $host, port => $hport,
+                serial => $serial, action => $action, config => $config,
+            );
+            print $w encode_json($result);
+            close $w;
+            exit 0;
+        }
+        close $w;
+        $pipes{$pid} = { fh => $r, name => $name };
+    }
+
+    while (%pipes) {
+        my $pid = waitpid -1, 0;
+        last if $pid <= 0;
+        next unless exists $pipes{$pid};
+        my $fh   = $pipes{$pid}{fh};
+        my $name = $pipes{$pid}{name};
+        my $raw  = do { local $/; <$fh> };
+        close $fh;
+        my $result = eval { decode_json($raw) }
+            // { status => 'error', exit => -1, error => 'no response from child' };
+        $result->{host} = $name;          # report by the registry name, not the resolved address
+        push @results, $result;
+        delete $pipes{$pid};
+    }
+    return \@results;
+}
+
+sub _rotate_one {
+    my (%opts) = @_;
+    my ($host, $port, $config) = @opts{qw(host port config)};
+    require Time::HiRes;
+    my $t0 = Time::HiRes::time();
+    my $ua = _build_ua($config);
+
+    my $payload = encode_json({ serial => $opts{serial}, action => $opts{action} });
+    my $resp = eval {
+        $ua->post("https://$host:$port/rotate-serial",
+            'Content-Type' => 'application/json', Content => $payload);
+    };
+    my $rtt = sprintf '%.0fms', (Time::HiRes::time() - $t0) * 1000;
+
+    if ($@ || !$resp || !$resp->is_success) {
+        my $err = ($resp && $resp->code == 403)
+            ? 'forbidden: ' . ((eval { decode_json($resp->content) } // {})->{error}
+                               // $resp->status_line)
+            : _transport_error($@ || ($resp ? $resp->status_line : 'no response'), $host, $port);
+        return { host => $host, status => 'error', exit => -1, error => $err, rtt => $rtt };
+    }
+
+    my $decoded = eval { decode_json($resp->content) }
+        // { status => 'error', error => 'invalid JSON' };
+    $decoded->{rtt}  = $rtt;
+    $decoded->{exit} //= (($decoded->{status} // '') eq 'ok') ? 0 : -1;
+    return $decoded;
+}
+
 sub _build_ua {
     my ($config) = @_;
     require LWP::UserAgent;

@@ -320,7 +320,7 @@ subtest 'retire_previous_serial: no-op before the overlap window expires' => sub
 
     my @calls;
     no warnings 'redefine';
-    local *Exec::Engine::dispatch_all = sub { push @calls, {@_}; return []; };
+    local *Exec::Engine::rotate_all = sub { push @calls, {@_}; return []; };
 
     Exec::Rotation::retire_previous_serial(config => config(
         rotation_file => $rotFile, registry_dir => $regDir));
@@ -352,15 +352,15 @@ subtest 'retire_previous_serial: removes the old serial from current agents afte
 
     my @calls;
     no warnings 'redefine';
-    local *Exec::Engine::dispatch_all = sub { push @calls, {@_}; return []; };
+    local *Exec::Engine::rotate_all = sub { push @calls, {@_}; return []; };
 
     my $n = Exec::Rotation::retire_previous_serial(config => config(
         rotation_file => $rotFile, registry_dir => $regDir));
 
     is $n, 1, 'one current agent targeted';
     is scalar @calls, 1, 'exactly one removal dispatch';
-    is $calls[0]{script}, 'update-ctrl-exec-serial', 'invokes the trust-update script';
-    is_deeply $calls[0]{args}, ['--remove', '0000ffff'], 'removes the previous serial';
+    is $calls[0]{action}, 'remove', 'rotate action is remove';
+    is $calls[0]{serial}, '0000ffff', 'removes the previous serial';
     is_deeply $calls[0]{hosts}, ['agent-01'], 'targets only the confirmed agent';
 
     my $state = decode_json(read_file($rotFile));
@@ -382,7 +382,7 @@ subtest 'retire_previous_serial: idempotent once previous_serial is cleared' => 
 
     my @calls;
     no warnings 'redefine';
-    local *Exec::Engine::dispatch_all = sub { push @calls, {@_}; return []; };
+    local *Exec::Engine::rotate_all = sub { push @calls, {@_}; return []; };
 
     Exec::Rotation::retire_previous_serial(config => config(
         rotation_file => $rotFile, registry_dir => $regDir));

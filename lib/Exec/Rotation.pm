@@ -176,16 +176,17 @@ sub broadcast_serial {
         DISPATCHER => $dispatcher_id,
     });
 
-    # Run update-ctrl-exec-serial on all pending agents in parallel. The agent
-    # ADDS the new serial (keeping the old one trusted through the overlap
-    # window); retire_previous_serial removes the old one afterwards.
+    # Tell each pending agent to ADD the new serial via the built-in
+    # /rotate-serial control-plane operation (no script, works with or without
+    # the executor). The agent maps it to THIS dispatcher's identity, derived
+    # from our authenticated (still-current) serial - we do not send the id.
+    # retire_previous_serial removes the old one after the overlap window.
     my $results = eval {
-        Exec::Engine::dispatch_all(
+        Exec::Engine::rotate_all(
             hosts  => \@hostnames,
-            script => 'update-ctrl-exec-serial',
-            args   => [$serial, $dispatcher_id],
+            serial => $serial,
+            action => 'add',
             config => $config,
-            reqid  => Exec::Engine::gen_reqid(),
         );
     };
     if ($@) {
@@ -262,12 +263,11 @@ sub retire_previous_serial {
             SERIAL => $old,
         });
         eval {
-            Exec::Engine::dispatch_all(
+            Exec::Engine::rotate_all(
                 hosts  => \@hostnames,
-                script => 'update-ctrl-exec-serial',
-                args   => ['--remove', $old],
+                serial => $old,
+                action => 'remove',
                 config => $config,
-                reqid  => Exec::Engine::gen_reqid(),
             );
         };
         Exec::Log::log_action('WARNING', { ACTION => 'serial-retire-error', ERROR => $@ })

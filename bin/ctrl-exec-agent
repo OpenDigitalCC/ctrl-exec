@@ -635,9 +635,111 @@ sub handle_connection {
     elsif ($method eq 'GET' && $path =~ m{^/result/([A-Za-z0-9_-]+)\z}) {
         handle_result($conn, $1, $peer, $config, $trusted, $peer_serial);
     }
+    elsif ($method eq 'POST' && $path eq '/rotate-serial') {
+        handle_rotate_serial($conn, $body, $peer, $config, $trusted, $peer_serial);
+    }
     else {
         _send_raw($conn, 404, encode_json({ error => 'not found' }));
     }
+}
+
+# Cert-rotation control-plane operation: trust (or retire) a dispatcher serial.
+# This is a built-in the front-end performs directly - NOT a script and NOT run
+# via the executor - so it works in both modes, and the trust map (which the
+# executor keeps read-only for every action) is only ever written here, by the
+# agent's own authenticated, hook-gated handler.
+#
+# The dispatcher identity is derived from the CALLER's authenticated serial, never
+# from the request body: a dispatcher can only add/retire serials under its own
+# identity. This chains trust - each new serial is authorised by the
+# currently-trusted one, back to the original human-approved pairing.
+sub handle_rotate_serial {
+    my ($conn, $body, $peer, $config, $trusted, $peer_serial) = @_;
+
+    my $dispatcher = Exec::Agent::AgentPairing::dispatcher_trusted($peer_serial, $trusted);
+    unless (defined $dispatcher) {
+        _send_raw($conn, 403, encode_json({ error => 'serial mismatch', status => 'forbidden' }));
+        Exec::Log::log_action('WARNING', {
+            ACTION => 'serial-reject', PEER => $peer, PEER_SERIAL => $peer_serial,
+        });
+        return;
+    }
+
+    my $data       = eval { decode_json($body) } // {};
+    my $new_serial = $data->{serial};
+    my $action     = $data->{action} // 'add';
+    unless (defined $new_serial && length $new_serial) {
+        _send_json($conn, { status => 'error', error => 'serial required' });
+        return;
+    }
+    unless ($action eq 'add' || $action eq 'remove') {
+        _send_json($conn, { status => 'error', error => "invalid action '$action'" });
+        return;
+    }
+
+    # Auth hook (action 'rotate'), so operators can gate rotation per dispatcher.
+    if ($config->{auth_hook}) {
+        my $auth = Exec::Auth::check(
+            action            => 'rotate',
+            config            => $config,
+            script            => '',
+            args              => [ $action, $new_serial ],
+            username          => '',
+            token             => $data->{token} // '',
+            source_ip         => $peer,
+            dispatcher        => $dispatcher,
+            dispatcher_serial => $peer_serial,
+        );
+        unless ($auth->{ok}) {
+            Exec::Log::log_action('WARNING', {
+                ACTION => 'rotate-deny', DISPATCHER => $dispatcher, REASON => $auth->{reason},
+            });
+            _send_raw($conn, 403, encode_json({ error => 'not authorised: ' . $auth->{reason} }));
+            return;
+        }
+    }
+
+    my $trusted_path = $config->{trusted_dispatchers_path}
+                    // '/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers';
+
+    my $ok = eval {
+        if ($action eq 'add') {
+            Exec::Agent::AgentPairing::add_trusted_dispatcher(
+                path => $trusted_path, serial => $new_serial, id => $dispatcher);
+        }
+        else {
+            # Retire: only a serial that currently belongs to THIS dispatcher's
+            # identity - never another dispatcher's, and a no-op if absent.
+            my $hex = Exec::Agent::AgentPairing::serial_to_hex($new_serial);
+            my $map = Exec::Agent::AgentPairing::load_trusted_dispatchers(path => $trusted_path);
+            die "serial not owned by '$dispatcher'\n"
+                if exists $map->{$hex} && $map->{$hex} ne $dispatcher;
+            Exec::Agent::AgentPairing::remove_trusted_dispatcher(
+                path => $trusted_path, serial => $new_serial);
+        }
+        1;
+    };
+    unless ($ok) {
+        my $err = $@ || 'rotation failed'; chomp $err;
+        Exec::Log::log_action('ERR', {
+            ACTION => 'rotate-fail', DISPATCHER => $dispatcher, ERROR => $err,
+        });
+        _send_json($conn, { status => 'error', error => $err });
+        return;
+    }
+
+    # Make the running agent (this child's parent) reload its in-memory trust map
+    # so the change takes effect for subsequent connections - same mechanism the
+    # operator's SIGHUP reload uses.
+    kill 'HUP', getppid();
+
+    Exec::Log::log_action('INFO', {
+        ACTION => 'rotate', DISPATCHER => $dispatcher,
+        SERIAL_ACTION => $action, SERIAL => $new_serial, PEER => $peer,
+    });
+    _send_json($conn, {
+        status => 'ok', action => $action, serial => $new_serial, dispatcher => $dispatcher,
+    });
 }
 
 sub handle_run {
