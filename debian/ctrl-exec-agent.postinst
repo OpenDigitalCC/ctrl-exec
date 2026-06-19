@@ -67,12 +67,6 @@ case "$1" in
            /opt/ctrl-exec-scripts/ctrl-exec-demonstrator.sh
         chmod 750 /opt/ctrl-exec-scripts/ctrl-exec-demonstrator.sh
         chown root:ctrl-exec-agent /opt/ctrl-exec-scripts/ctrl-exec-demonstrator.sh
-        # Cert-rotation script. Enable in scripts.conf on agents whose dispatcher
-        # rotates its certificate (seamless add-then-remove); disabled by default.
-        cp /usr/share/ctrl-exec/examples/update-ctrl-exec-serial \
-           /opt/ctrl-exec-scripts/update-ctrl-exec-serial
-        chmod 750 /opt/ctrl-exec-scripts/update-ctrl-exec-serial
-        chown root:ctrl-exec-agent /opt/ctrl-exec-scripts/update-ctrl-exec-serial
         ;;
 esac
 

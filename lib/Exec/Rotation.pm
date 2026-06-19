@@ -136,8 +136,8 @@ sub expire_stale_agents {
 }
 
 # Broadcast the current dispatcher serial to all pending agents.
-# Attempts a run of 'update-ctrl-exec-serial' on each pending agent.
-# Updates registry on success. Reports results.
+# Calls each agent's built-in /rotate-serial control-plane op (Engine::rotate_all)
+# to ADD the new serial. Updates registry on success. Reports results.
 #
 # Required opts:
 #   config => \%config

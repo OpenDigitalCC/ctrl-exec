@@ -9,7 +9,7 @@ references. Scopes:
 
     full        every binary + the whole Exec:: library (the tarball SBOM)
     common      the Exec:: library only          (ctrl-exec-common)
-    agent       ctrl-exec-agent + update-ctrl-exec-serial   (ctrl-exec-agent)
+    agent       ctrl-exec-agent                             (ctrl-exec-agent)
     dispatcher  ctrl-exec-dispatcher + ctrl-exec-api         (ctrl-exec-dispatcher)
 
 Used by both make-release.sh (full SBOM -> tarball) and debian/rules (per-package
@@ -84,7 +84,7 @@ PERL_DEP = {
 SCOPES = {
     'full':       {'bins': None, 'libs': True,  'app': 'ctrl-exec'},
     'common':     {'bins': [],   'libs': True,  'app': 'ctrl-exec-common'},
-    'agent':      {'bins': ['ctrl-exec-agent', 'update-ctrl-exec-serial'],
+    'agent':      {'bins': ['ctrl-exec-agent'],
                    'libs': False, 'app': 'ctrl-exec-agent'},
     'dispatcher': {'bins': ['ctrl-exec-dispatcher', 'ctrl-exec-api'],
                    'libs': False, 'app': 'ctrl-exec-dispatcher'},

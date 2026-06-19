@@ -40,10 +40,6 @@ override_dh_auto_install:
 	install -m644 etc/ctrl-exec.conf.example    debian/tmp/usr/share/ctrl-exec/examples/
 	install -m755 etc/auth-hook.example         debian/tmp/usr/share/ctrl-exec/examples/
 	install -m755 etc/ctrl-exec-demonstrator.sh debian/tmp/usr/share/ctrl-exec/examples/
-	# Agent-side cert-rotation script. Staged like the demonstrator; the agent
-	# postinst copies it into /opt/ctrl-exec-scripts so it can be allowlisted on
-	# agents whose dispatcher rotates its certificate.
-	install -m755 bin/update-ctrl-exec-serial   debian/tmp/usr/share/ctrl-exec/examples/
 	# Per-package CycloneDX SBOMs. Each .deb carries an SBOM scoped to its own
 	# components - the agent's differs from the dispatcher's, and common has the
 	# library - via the shared generator that also produces the full-project SBOM

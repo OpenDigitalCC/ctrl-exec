@@ -173,12 +173,6 @@ chmod 0755 \
     "$SCRIPT_DIR/sleep-90.sh" \
     "$SCRIPT_DIR/daemonise-test.sh"
 
-# update-ctrl-exec-serial is installed by the agent installer, not written here.
-# chmod it only if it exists.
-if [ -f "$SCRIPT_DIR/update-ctrl-exec-serial" ]; then
-    chmod 0755 "$SCRIPT_DIR/update-ctrl-exec-serial"
-fi
-
 echo "Scripts written to $SCRIPT_DIR"
 
 # --- append allowlist entries if missing ---
@@ -206,7 +200,6 @@ append_if_missing "sleep-15"                 "$SCRIPT_DIR/sleep-15.sh"
 append_if_missing "sleep-90"                 "$SCRIPT_DIR/sleep-90.sh"
 append_if_missing "daemonise-test"           "$SCRIPT_DIR/daemonise-test.sh"
 append_if_missing "ctrl-exec-demonstrator"  "$SCRIPT_DIR/ctrl-exec-demonstrator.sh"
-append_if_missing "update-ctrl-exec-serial" "$SCRIPT_DIR/update-ctrl-exec-serial"
 # allowlist-reload-check is intentionally NOT added here.
 # Test 09 adds it manually after setup to verify SIGHUP reload works.
 

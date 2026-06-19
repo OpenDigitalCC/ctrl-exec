@@ -236,7 +236,6 @@ if [[ -n "$BRAND" ]]; then
         ["bin/ctrl-exec-dispatcher"]="bin/${BRAND}-exec-dispatcher"
         ["bin/ctrl-exec-agent"]="bin/${BRAND}-exec-agent"
         ["bin/ctrl-exec-api"]="bin/${BRAND}-exec-api"
-        ["bin/update-ctrl-exec-serial"]="bin/update-${BRAND}-exec-serial"
         ["etc/ctrl-exec-agent.service"]="etc/${BRAND}-exec-agent.service"
         ["etc/ctrl-exec-api.service"]="etc/${BRAND}-exec-api.service"
         ["etc/ctrl-exec-agent.init"]="etc/${BRAND}-exec-agent.init"
@@ -479,7 +478,6 @@ SHIP_FILES=(
     bin/ctrl-exec-dispatcher
     bin/ctrl-exec-agent
     bin/ctrl-exec-api
-    bin/update-ctrl-exec-serial
     install.sh
     VERSION
     LICENCE

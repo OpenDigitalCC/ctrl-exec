@@ -3,5 +3,4 @@ usr/sbin/ctrl-exec-exec
 usr/share/ctrl-exec/examples/agent.conf.example
 usr/share/ctrl-exec/examples/scripts.conf.example
 usr/share/ctrl-exec/examples/ctrl-exec-demonstrator.sh
-usr/share/ctrl-exec/examples/update-ctrl-exec-serial
 usr/share/ctrl-exec/sbom-agent.json
