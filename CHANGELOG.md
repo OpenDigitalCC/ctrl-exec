@@ -5,6 +5,18 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
+## 0.10.2 — quieter, clearer upgrades
+
+- **Fixed** a spurious `Failed to stop ctrl-exec-exec.service: Unit not loaded`
+  warning on upgrade from a pre-privsep version. With `--no-start`, debhelper used
+  the stop-on-upgrade model, whose preinst tried to stop every unit - including
+  one never loaded on the host. Adding `--no-stop-on-upgrade` leaves running
+  services alone on upgrade (our postinst owns the restart), so the warning is
+  gone. The install always succeeded; only the message was alarming.
+- **Changed** the postinst upgrade restart to print an informative line per
+  service - "restarted <svc> to apply the upgrade" or "<svc> is not running - no
+  restart needed" - instead of being silent.
+
 ## 0.10.1 — packaging fixes for the compiled executor
 
 - **Fixed** the agent `.deb` requiring `libc6 (>= 2.38)`, which blocked install on

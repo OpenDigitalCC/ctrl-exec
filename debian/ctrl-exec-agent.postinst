@@ -93,9 +93,12 @@ esac
 case "$1" in
     configure)
         if [ -n "$2" ] && [ -d /run/systemd/system ]; then
-            for svc in ctrl-exec-exec.service ctrl-exec-agent.service; do
-                if systemctl is-active --quiet "$svc"; then
-                    deb-systemd-invoke restart "$svc" || true
+            for svc in ctrl-exec-exec ctrl-exec-agent; do
+                if systemctl is-active --quiet "$svc.service"; then
+                    deb-systemd-invoke restart "$svc.service" || true
+                    echo "ctrl-exec: restarted $svc to apply the upgrade."
+                else
+                    echo "ctrl-exec: $svc is not running - no restart needed."
                 fi
             done
         fi

@@ -65,12 +65,17 @@ override_dh_auto_install:
 # dh_installsystemd only picks up a package.NAME.service file when given --name,
 # so without this call the API unit is silently dropped from the deb.
 override_dh_installsystemd:
-	dh_installsystemd --no-enable --no-start
-	dh_installsystemd --no-enable --no-start --name=ctrl-exec-api
+	# --no-stop-on-upgrade: leave running services alone during an upgrade; our
+	# postinst restarts the active ones itself. Without it, --no-start makes
+	# debhelper use the stop-on-upgrade model, whose preinst tries to stop every
+	# unit - including one never loaded on this host (e.g. ctrl-exec-exec when
+	# upgrading from a pre-privsep version), emitting a spurious "Failed to stop".
+	dh_installsystemd --no-enable --no-start --no-stop-on-upgrade
+	dh_installsystemd --no-enable --no-start --no-stop-on-upgrade --name=ctrl-exec-api
 	# The privileged executor unit (agent package). Like the API unit, the named
 	# file debian/ctrl-exec-agent.ctrl-exec-exec.service needs --name to be picked
 	# up. Not enabled/started by default - the operator opts into privsep.
-	dh_installsystemd --no-enable --no-start --name=ctrl-exec-exec
+	dh_installsystemd --no-enable --no-start --no-stop-on-upgrade --name=ctrl-exec-exec
 
 # The agent ships one small C binary (the executor). Strip it, but do not emit an
 # automatic -dbgsym package - we do not distribute debug symbols. Rebuild without
