@@ -3,7 +3,7 @@
 # or repackage a ctrl-exec release under a licensed brand name.
 #
 # Usage:
-#   ./make-release.sh [--no-auto] [--no-deb]
+#   ./make-release.sh [--no-auto] [--no-deb] [--dry-run]
 #       Build ctrl-exec-<version>.tar.gz from the current source tree.
 #       Bumps VERSION, creates git tag, generates sbom.json. Also builds the
 #       versioned .deb packages (ctrl-exec-common, ctrl-exec-agent, ctrl-exec)
@@ -11,7 +11,9 @@
 #       release version. By default it then commits the release and pushes the
 #       branch and tag; --no-auto stops after building and prints the manual git
 #       steps instead. --no-deb skips the .deb build; it is also skipped
-#       gracefully when debian/ or dpkg-buildpackage is absent.
+#       gracefully when debian/ or dpkg-buildpackage is absent. --dry-run builds
+#       everything to verify it (allowing an uncommitted tree), then restores the
+#       tree and removes the artifacts - no version bump, tag, commit, or push.
 #
 #   ./make-release.sh --brand <name> [--from ctrl-exec-<version>.tar.gz]
 #       Repackage an existing ctrl-exec tarball as <name>-exec-<version>.tar.gz.
@@ -95,18 +97,20 @@ build_debs() {
     # (the .deb is committed; keeping every past version would bloat the repo).
     # Mirrors the tarball cleanup further down. Untracks any that were committed.
     local removed=0 old
-    for old in "$dist"/ctrl-exec*.deb \
-               "$dist"/ctrl-exec_*.buildinfo \
-               "$dist"/ctrl-exec_*.changes; do
-        [[ -e "$old" ]] || continue
-        case "$old" in
-            *_"${version}"_*) continue ;;
-        esac
-        rm -f "$old"
-        git rm --cached --quiet --ignore-unmatch "$old" 2>/dev/null || true
-        removed=$((removed + 1))
-    done
-    [[ "$removed" -gt 0 ]] && info "Pruned $removed stale .deb artefact(s) from $dist/"
+    if [[ "$DRY_RUN" -ne 1 ]]; then
+        for old in "$dist"/ctrl-exec*.deb \
+                   "$dist"/ctrl-exec_*.buildinfo \
+                   "$dist"/ctrl-exec_*.changes; do
+            [[ -e "$old" ]] || continue
+            case "$old" in
+                *_"${version}"_*) continue ;;
+            esac
+            rm -f "$old"
+            git rm --cached --quiet --ignore-unmatch "$old" 2>/dev/null || true
+            removed=$((removed + 1))
+        done
+        [[ "$removed" -gt 0 ]] && info "Pruned $removed stale .deb artefact(s) from $dist/"
+    fi
 
     # Remove build byproducts from the working tree.
     fakeroot debian/rules clean >/dev/null 2>&1 || true
@@ -128,6 +132,7 @@ AUTO=1
 BRAND=""
 FROM=""
 BUILD_DEBS=1
+DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -135,6 +140,10 @@ while [[ $# -gt 0 ]]; do
             AUTO=1; shift ;;
         --no-auto|--manual)
             AUTO=0; shift ;;
+        --dry-run)
+            # Build everything to verify it works, then revert all changes -
+            # no version bump, tag, commit, push, or kept artifacts.
+            DRY_RUN=1; AUTO=0; shift ;;
         --brand)
             [[ -n "${2:-}" ]] || die "--brand requires a value (e.g. --brand acme)"
             BRAND="$2"; shift 2 ;;
@@ -411,7 +420,10 @@ if ! git rev-parse --git-dir &>/dev/null; then
     die "Not a git repository."
 fi
 
-if ! git diff --quiet || ! git diff --cached --quiet; then
+# A real release needs a clean tree; a dry run does not - its purpose is often to
+# verify uncommitted changes build before committing. The dry-run cleanup
+# snapshots and restores the files it touches, so other uncommitted work is safe.
+if [[ "$DRY_RUN" -ne 1 ]] && { ! git diff --quiet || ! git diff --cached --quiet; }; then
     die "Working tree has uncommitted changes. Commit or stash before releasing."
 fi
 
@@ -423,7 +435,42 @@ mkdir -p "$DIST_DIR"
 TARBALL="${DIST_DIR}/${RELEASE_NAME}.tar.gz"
 STAGE_DIR=$(mktemp -d)
 STAGE="${STAGE_DIR}/${RELEASE_NAME}"
-trap 'rm -rf "$STAGE_DIR"' EXIT
+
+SNAP_DIR=""
+RELEASE_FILES="VERSION NEXT_VERSION sbom.json debian/changelog"
+
+# Always remove the staging dir; under --dry-run also restore the files the build
+# touches from a pre-build snapshot (preserving any uncommitted edits to them)
+# and remove this run's artifacts, so a dry run leaves no trace.
+cleanup() {
+    local rc=$? f
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        echo ""
+        info "DRY RUN: reverting (no bump, tag, commit, or kept artifacts)."
+        for f in $RELEASE_FILES; do
+            [[ -n "$SNAP_DIR" && -e "$SNAP_DIR/$(basename "$f")" ]] \
+                && cp -a "$SNAP_DIR/$(basename "$f")" "$f"
+        done
+        rm -f "$DIST_DIR/ctrl-exec-${VERSION}.tar.gz" \
+              "$DIST_DIR/ctrl-exec-${VERSION}.tar.gz.sha256" \
+              "$DIST_DIR"/ctrl-exec*_"${VERSION}"_*.deb \
+              "$DIST_DIR"/ctrl-exec_"${VERSION}"_*.buildinfo \
+              "$DIST_DIR"/ctrl-exec_"${VERSION}"_*.changes 2>/dev/null || true
+        [[ -n "$SNAP_DIR" ]] && rm -rf "$SNAP_DIR"
+    fi
+    rm -rf "$STAGE_DIR" 2>/dev/null || true
+    return $rc
+}
+trap cleanup EXIT
+
+# Snapshot the files the build mutates, before it mutates them.
+if [[ "$DRY_RUN" -eq 1 ]]; then
+    info "DRY RUN: building $VERSION to verify; the tree is restored afterwards."
+    SNAP_DIR=$(mktemp -d)
+    for f in $RELEASE_FILES; do
+        [[ -e "$f" ]] && cp -a "$f" "$SNAP_DIR/$(basename "$f")"
+    done
+fi
 
 SHIP_FILES=(
     bin/ctrl-exec-dispatcher
@@ -485,14 +532,18 @@ cp sbom.json "$STAGE/sbom.json"
 
 info "Creating tarball: $TARBALL"
 
-while IFS= read -r old; do
-    old_base="${old}"
-    [[ "$old_base" == "$TARBALL" ]] && continue
-    old_sha="${old_base%.tar.gz}.tar.gz.sha256"
-    rm -f "$old_base" "$old_sha"
-    git rm --cached --quiet --ignore-unmatch "$old_base" "$old_sha" 2>/dev/null || true
-    info "Removed previous tarball: $old_base"
-done < <(find "$DIST_DIR" -maxdepth 1 -name 'ctrl-exec-*.tar.gz' | sort)
+# Prune previous tarballs (skipped under --dry-run, which must not touch existing
+# tracked artifacts).
+if [[ "$DRY_RUN" -ne 1 ]]; then
+    while IFS= read -r old; do
+        old_base="${old}"
+        [[ "$old_base" == "$TARBALL" ]] && continue
+        old_sha="${old_base%.tar.gz}.tar.gz.sha256"
+        rm -f "$old_base" "$old_sha"
+        git rm --cached --quiet --ignore-unmatch "$old_base" "$old_sha" 2>/dev/null || true
+        info "Removed previous tarball: $old_base"
+    done < <(find "$DIST_DIR" -maxdepth 1 -name 'ctrl-exec-*.tar.gz' | sort)
+fi
 
 tar -czf "$TARBALL" -C "$STAGE_DIR" "$RELEASE_NAME"
 
@@ -507,7 +558,9 @@ else
 fi
 
 TAG="v${VERSION}"
-if git rev-parse "$TAG" &>/dev/null 2>&1; then
+if [[ "$DRY_RUN" -eq 1 ]]; then
+    info "DRY RUN: would tag $TAG (skipped)."
+elif git rev-parse "$TAG" &>/dev/null 2>&1; then
     warn "Tag $TAG already exists - skipping tag creation."
 else
     git tag -a "$TAG" -m "Release $VERSION"
@@ -542,7 +595,9 @@ echo "  To build a branded package from this release:"
 echo "    ./make-release.sh --brand <name> --from $TARBALL"
 echo ""
 
-if [[ "$AUTO" -eq 1 ]]; then
+if [[ "$DRY_RUN" -eq 1 ]]; then
+    info "DRY RUN: build of $VERSION succeeded (tarball + .deb). Nothing kept."
+elif [[ "$AUTO" -eq 1 ]]; then
     info "Auto mode: committing and pushing..."
     git add -u                             # stages tarball/deb deletions from git rm above
     git add sbom.json VERSION NEXT_VERSION debian/changelog
