@@ -5,14 +5,32 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
-## 0.10.2 — quieter, clearer upgrades
+## 0.11.0 — built-in cert rotation; clearer upgrades and profiles
 
+- **Added** built-in cert rotation. The agent handles dispatcher-serial rotation
+  as a first-class control-plane operation (`POST /rotate-serial`) in the
+  front-end, replacing the `update-ctrl-exec-serial` script. This makes seamless
+  rotation work under privilege separation (the executor keeps the trust map
+  read-only for every action, so a script could not write it; the front-end can)
+  - so rotation and the executor now coexist with no re-pairing. It is also more
+  secure: the dispatcher identity is derived from the caller's authenticated
+  serial, never sent in the request, so a dispatcher can only add/retire serials
+  under its own identity. Gated by the trusted-dispatcher check + the auth hook
+  (action `rotate`). Each new serial is authorised by the currently-trusted one,
+  chaining back to the original human-supervised pairing.
+- **Removed** the `update-ctrl-exec-serial` script and everything that shipped or
+  referenced it (packaging, installer, allowlist example, SBOM, docs). Rotation
+  needs no allowlist entry. If you had it in `scripts.conf`, the entry is now
+  inert and can be deleted.
+- **Changed** profile documentation and added a startup warning: profiles are
+  enforced only by the executor; without `executor_socket` a `profile=` is parsed
+  but not applied (scripts run as the unprivileged agent user). Documented that a
+  script runs under exactly one profile, that `executor_socket` and `--async` are
+  mutually exclusive, and pointed at `capabilities(7)`.
 - **Fixed** a spurious `Failed to stop ctrl-exec-exec.service: Unit not loaded`
-  warning on upgrade from a pre-privsep version. With `--no-start`, debhelper used
-  the stop-on-upgrade model, whose preinst tried to stop every unit - including
-  one never loaded on the host. Adding `--no-stop-on-upgrade` leaves running
-  services alone on upgrade (our postinst owns the restart), so the warning is
-  gone. The install always succeeded; only the message was alarming.
+  warning on upgrade from a pre-privsep version (`--no-stop-on-upgrade` on the
+  units; our postinst owns the restart). The install always succeeded; only the
+  message was alarming.
 - **Changed** the postinst upgrade restart to print an informative line per
   service - "restarted <svc> to apply the upgrade" or "<svc> is not running - no
   restart needed" - instead of being silent.
