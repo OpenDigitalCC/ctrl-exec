@@ -7,6 +7,71 @@ brand: odcc
 # ctrl-exec - Security Model
 
 
+## The invariant
+
+ctrl-exec is built around one guarantee:
+
+> A holder of a valid dispatcher certificate can invoke the approved actions and
+> nothing else, and cannot alter the controls (allowlist, auth hook, config,
+> trust) or the audit trail - **even with full control of the dispatcher**.
+> Within that, an action runs with whatever privilege the operator gave its
+> profile.
+
+Security is enforced at ctrl-exec's own layer - the **allowlist**, **mTLS
+identity**, **argument schemas**, the **auth hook** policy engine, **per-script
+profiles**, and the **audit** - not by crippling the agent's ability to do its
+job. A managed script runs with the privilege its work needs; what is controlled
+is *which* script, invoked by *whom*, with *what arguments*, and recorded.
+
+This is what makes ctrl-exec a sound replacement for `ssh + sudo`: it does the
+same operational work, but the surface is a fixed set of named, reviewed,
+argument-constrained, cryptographically-authenticated, audited operations - and
+there is no shell.
+
+
+## Enforcement model: two boundaries
+
+Think of two boundaries an attacker would have to cross, and what each enforces.
+
+**First boundary - the dispatcher / API.** The dispatcher (and its optional HTTP
+API) is where requests originate. It is authenticated, authorised by the auth
+hook, rate-limited, and exposes only `run`/`ping`/discovery. Security here does
+**not** depend on the protocol being secret - it is assumed known.
+
+**Second boundary - the agent.** This is the real enforcement point. Even an
+attacker who bypasses the dispatcher entirely and speaks the mTLS protocol
+directly to an agent still needs a CA-signed dispatcher certificate, and **even
+with one** is bound by the agent to exactly the approved action set: the
+allowlist (only named scripts), per-script profiles (the privilege each runs
+with), schema validation (constrained arguments), and the auth hook. It cannot
+extend the allowlist, edit the hook/config, change trust, or erase audit - the
+executor runs every action with the agent's control and state directories
+read-only (see *Allowlist and Execution Security*).
+
+The headline: **the dispatcher is a control and convenience layer, not a trusted
+one. The agent is the enforcement boundary, and its guarantees hold under full
+dispatcher compromise.**
+
+### Worked scenario: a compromised autonomous agent
+
+Suppose an advanced AI drives the dispatcher's API and is taken over by a bad
+actor - with API access, and even read access to the source.
+
+- Reading the source gains nothing: security is not by obscurity; the protocol
+  is assumed public.
+- Through the API, the attacker can do only what the dispatcher is authorised to
+  do - bounded by the auth hook and rate limits, and every call is attributed
+  and logged.
+- If it bypasses the API and speaks mTLS protocol straight to agents, it is held
+  to the **same** bound by each agent: the approved, profiled, schema-checked,
+  audited action set, at the declared privilege - and it cannot touch the
+  agents' controls or audit.
+
+So compromising the dispatcher (or the AI driving it) does **not** escalate
+beyond the action set the operator already approved. The blast radius is
+"everything the dispatcher was allowed to do" - fully recorded - and no more.
+
+
 ## Trust Model
 
 ctrl-exec uses a private CA for all mTLS trust. The CA is created once on
@@ -140,6 +205,31 @@ Allowlist is server-enforced
 : The allowlist is validated on the agent, not trusted from the dispatcher
   request. A dispatcher cannot request a script that is not in the agent's
   allowlist regardless of what it sends.
+
+Privilege separation and per-script profiles (optional, recommended)
+: With `executor_socket` set in `agent.conf`, the network-facing agent runs
+  unprivileged and hands each authorised run to a small, root, no-network
+  **executor** (`ctrl-exec-exec`) over a unix socket. The socket is owned by the
+  agent user, mode `0600`, and the executor rejects any connection whose
+  `SO_PEERCRED` uid is not the agent (a defence-in-depth check on top of the
+  permissions). The executor **re-derives** the script path and its security
+  profile from its own root-owned config - it trusts nothing in the request - so
+  even a compromised front-end can only run an allowlisted script with its pinned
+  profile, never an arbitrary command. It then applies the profile before
+  `exec`: a mount namespace in which `/etc/ctrl-exec-agent` and
+  `/var/lib/ctrl-exec-agent` (the control and state directories) are **read-only**
+  - so even a `run_as=root` action cannot tamper with the allowlist, hook,
+  config, trust map, or audit - the capability set the profile lists, `run_as`,
+  and `no_new_privileges`. A script with no profile gets a restrictive default;
+  an undefined profile is a fatal config error (fail-closed). Without
+  `executor_socket`, the agent runs scripts directly in its own unprivileged
+  process (no profiles). Profiles are defined in `agent.conf` (`[profile <name>]`)
+  and referenced from `scripts.conf` (`profile=<name>`); see `agent.conf.example`.
+
+  This split is what bounds a front-end compromise (e.g. an RCE in the
+  network-facing code): the only thing that can act with privilege is the small,
+  audited executor, and it can run only allowlisted scripts under their declared
+  profiles. The privileged surface is kept deliberately tiny.
 
 Schema sidecars are advertised, never executed
 : A script's optional `<script>.schema.json` sidecar (see REFERENCE.md) is read
@@ -299,7 +389,8 @@ writes it directly; the dispatcher store is owned by `root:ctrl-exec`.
 
 ## Systemd Hardening
 
-The agent and API systemd units apply the following restrictions:
+The network-facing units - the agent front-end (`ctrl-exec-agent`) and the API -
+are heavily sandboxed:
 
 ```
 NoNewPrivileges=yes
@@ -311,6 +402,25 @@ PrivateDevices=yes
 
 The API unit additionally sets `ReadWritePaths=/var/lib/ctrl-exec` to
 restrict filesystem write access to the runtime directory only.
+
+Under privilege separation the agent front-end **does not execute privileged
+scripts** - it does network, mTLS, allowlist, schema, and auth-hook work, then
+hands the run to the executor - so this tight sandbox costs nothing and shrinks
+the blast radius of an RCE in the network-facing code. Write-bearing or
+privileged scripts run via the executor, not the front-end (see below).
+
+The executor unit (`ctrl-exec-exec`) is deliberately **not** sandboxed: it is
+root and needs `CAP_SYS_ADMIN` (to build each action's mount namespace),
+`setuid`, and full filesystem reach to do its job. Its protection is its small,
+audited surface, the peer-cred check on its socket, and the fact that it runs
+only allowlisted scripts under their profiles - not an OS sandbox. Enable it only
+alongside `executor_socket` in `agent.conf`.
+
+> Legacy mode (no `executor_socket`): the front-end runs scripts directly, so
+> they inherit the front-end's sandbox above - suitable for read-only/diagnostic
+> scripts. For scripts that must write or hold privilege, enable the executor and
+> give them a profile; that is the supported path, and it keeps the front-end
+> locked down.
 
 The agent unit sets `StateDirectory=ctrl-exec-agent`, which creates and owns
 `/var/lib/ctrl-exec-agent` (mode `0750`) and is the only path the agent may
@@ -651,6 +761,9 @@ limitations, Docker-specific notes), see SECURITY-OPERATIONS.md.
 | Lateral reconnaissance via capabilities | `/capabilities` restricted to the trusted-dispatcher map (per-dispatcher serial); hard deny on unknown serial; re-pair to activate |
 | Script execution by non-current dispatcher cert | `/run`, `/ping`, and `/result` restricted to the trusted-dispatcher map (per-dispatcher serial); hard deny on unknown serial |
 | Cross-dispatcher result disclosure | Runs partitioned per owner; `GET /result/<reqid>` owner-gated, `404 unknown` to other dispatchers (`result-deny`, REASON=not-owner) |
+| Compromised dispatcher (or AI driving its API) | Bounded by each agent to the allowlisted, profiled, schema-checked, audited action set; cannot extend the allowlist, edit hook/config/trust, or erase audit |
+| RCE in the agent front-end (network-facing code) | Privilege separation: the front-end is unprivileged; only the small executor can act, and it runs only allowlisted scripts under their pinned profiles (re-derived from its own root-owned config) |
+| Action tampering with agent controls or audit | Executor runs every action with `/etc/ctrl-exec-agent` and `/var/lib/ctrl-exec-agent` read-only - including `run_as=root` profiles |
 | Arbitrary script execution via run | Agent-side allowlist, name pattern validation |
 | Path traversal in script name | `/^[\w-]+$/` excludes `/` and `.` |
 | Shell injection via arguments | `exec` without shell, args passed as list |
@@ -663,7 +776,7 @@ limitations, Docker-specific notes), see SECURITY-OPERATIONS.md.
 | Port scan or TLS probe from unexpected host | IP allowlist (`allowed_ips` in `agent.conf`); connection closed before any request |
 | TLS downgrade or weak cipher negotiation | TLS 1.2 minimum; ECDHE+AEAD ciphers only; CBC, RC4, export-grade excluded |
 | Memory exhaustion via large request body | Body size limit: 1 MB ceiling checked before read; 413 returned on excess |
-| Privilege escalation via allowlisted script | Empty `CapabilityBoundingSet`; `MemoryDenyWriteExecute`; restricted syscall filter |
+| Privilege escalation via allowlisted script | Per-script profile bounds run_as + capabilities (executor); on the front-end, empty `CapabilityBoundingSet`, `MemoryDenyWriteExecute`, restricted syscall filter |
 | Namespace escape from agent process | `RestrictNamespaces=yes` in agent systemd unit |
 | Unauthorised API access (no hook) | `api_auth_default = deny` blocks all requests by default |
 | Unauthorised API access (network) | API binds to `127.0.0.1` by default; external bind is opt-in |
