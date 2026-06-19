@@ -73,19 +73,50 @@ sub main {
 sub mode_serve {
     my ($opts) = @_;
 
-    my $config    = Exec::Agent::Config::load_config($CONFIG_PATH);
-    my $allowlist = Exec::Agent::Config::load_allowlist($ALLOWLIST_PATH);
-    my $schemas   = Exec::Agent::Schema::load_for_allowlist($allowlist);
+    # Load and validate all configuration up front. A config error (a parse
+    # error, an invalid capability, an undefined profile, ...) cannot be fixed by
+    # restarting, so we must NOT die with a generic exception and let systemd
+    # respawn us forever - that buries the real error under a restart loop (the
+    # symptom an operator first sees is "restart counter is at 134"). Instead,
+    # catch it, print exactly what and where, and exit EX_CONFIG (78), which the
+    # unit lists in RestartPreventExitStatus: one clear failure, no loop.
+    my ($config, $allowlist, $schemas);
+    eval {
+        $config    = Exec::Agent::Config::load_config($CONFIG_PATH);
+        $allowlist = Exec::Agent::Config::load_allowlist($ALLOWLIST_PATH);
+        $schemas   = Exec::Agent::Schema::load_for_allowlist($allowlist);
 
-    # Fail-closed: every allowlisted script must reference a defined profile (or
-    # the implicit 'default'). A typo'd or undefined profile must not silently
-    # run with default privileges - refuse to serve until the config is fixed.
-    if (my @bad = Exec::Agent::Config::validate_profiles($allowlist, $config)) {
-        die "Refusing to serve: script(s) reference an undefined profile: "
-          . join(', ', @bad)
-          . "\nDefine the profile(s) in agent.conf ([profile <name>]) or correct "
-          . "the profile= in scripts.conf.\n";
-    }
+        # Fail-closed: every allowlisted script must reference a defined profile
+        # (or the implicit 'default'). A typo'd or undefined profile must not
+        # silently run with default privileges.
+        if (my @bad = Exec::Agent::Config::validate_profiles($allowlist, $config)) {
+            die "script(s) reference an undefined profile: " . join(', ', @bad)
+              . "\nDefine the profile(s) in agent.conf ([profile <name>]) or "
+              . "correct the profile= in scripts.conf.\n";
+        }
+        1;
+    } or do {
+        my $err = $@ || 'unknown configuration error';
+        $err =~ s/ at \S+ line \d+\.?\s*$//;   # strip Perl's "at FILE line N" tail
+        $err =~ s/\s+\z//;
+        print STDERR <<"MSG";
+ctrl-exec-agent: cannot start - configuration error.
+
+    $err
+
+The agent will not serve until this is corrected. Configuration lives in:
+    $CONFIG_PATH
+        (agent.conf - ports, certs, [profile <name>] blocks)
+    $ALLOWLIST_PATH
+        (scripts.conf - allowlisted scripts and their profile=)
+
+Fix the file named above and start the agent again. Note: comments must be on
+their own line; an inline '# ...' after a value becomes part of the value.
+MSG
+        # EX_CONFIG (78): listed in the unit's RestartPreventExitStatus so systemd
+        # reports a single clear failure instead of respawning into a loop.
+        exit 78;
+    };
 
     # Profiles are enforced only by the executor. If scripts declare non-default
     # profiles but executor_socket is not set, those profiles are NOT applied -

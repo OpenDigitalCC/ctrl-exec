@@ -5,7 +5,19 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
-## 0.11.0 — built-in cert rotation; clearer upgrades and profiles
+## 0.11.2 — config errors fail clearly instead of looping
+
+- **Changed** agent startup so a configuration error (parse error, invalid
+  capability, undefined profile, ...) prints one clear message naming the file
+  and the problem, then exits `EX_CONFIG` (78). The unit lists 78 in
+  `RestartPreventExitStatus`, so systemd reports a single failure instead of
+  respawning into a restart loop that buries the real error ("restart counter is
+  at 134"). Previously these died as a generic exception (255) and looped.
+- **Changed** the "invalid capability" error to detect the common mistake of an
+  inline `# ...` comment on a value line (the format supports whole-line comments
+  only) and say so, instead of the bare "invalid capability '#'".
+
+## 0.11.1 — built-in cert rotation; clearer upgrades and profiles
 
 - **Added** built-in cert rotation. The agent handles dispatcher-serial rotation
   as a first-class control-plane operation (`POST /rotate-serial`) in the
