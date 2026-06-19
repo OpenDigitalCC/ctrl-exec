@@ -52,7 +52,7 @@ Each test file corresponds to one module:
 | `t/rotation.t` | `Exec::Rotation` |
 | `t/serial-normalisation.t` | `Exec::Agent::AgentPairing::serial_to_hex` |
 | `t/trusted-dispatchers.t` | Agent trusted-dispatcher map (`valid_dispatcher_id`, `load_trusted_dispatchers`, `dispatcher_trusted`, `add_trusted_dispatcher`) |
-| `t/update-ctrl-exec-serial.t` | `bin/update-ctrl-exec-serial` |
+| `t/rotate-serial.t` | Built-in `/rotate-serial` operation (trusted-map behaviour + ownership rule) |
 
 The `ctrl-exec-cli.t` and `engine.t` files cover CLI argument parsing and
 dispatch logic respectively. `lock-holder.pl` is a test helper used by
@@ -134,7 +134,6 @@ Scripts installed:
 | `sleep-90` | Sleeps 90 seconds; completes within a 120s timeout |
 | `daemonise-test` | Forks a background job and returns immediately |
 | `allowlist-reload-check` | Added manually by test 09 to verify SIGHUP reload |
-| `update-ctrl-exec-serial` | Serial update script; must be in allowlist for cert rotation |
 
 The following are installed by `setup-agent-scripts.sh --install-auth-test` only,
 and removed by `--remove-auth-test`.

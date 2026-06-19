@@ -174,22 +174,36 @@ Without `executor_socket`, the agent runs scripts directly in its own
 (unprivileged) process - no profiles, no privilege change.
 
 
-## `update-ctrl-exec-serial` Security
+## Cert-Rotation (`/rotate-serial`) Security
 
-The `update-ctrl-exec-serial` script validates that its serial argument is a
-hex string of 8–40 characters (and, when adding, that the dispatcher id is a
-well-formed token) before editing the trusted-dispatcher map at
+Cert rotation is a built-in operation handled by the agent front-end
+(`ctrl-exec-agent`), not an allowlisted script: a caller POSTs to
+`/rotate-serial`. It is gated by the same trusted-dispatcher serial check as
+`/run` — the caller's cert serial must already be in the trusted map — plus the
+auth hook, which sees `ENVEXEC_ACTION=rotate`, an empty `ENVEXEC_SCRIPT`, and
+`ENVEXEC_ARGS_JSON` of `["add","<serial>"]` or `["remove","<serial>"]`.
+
+The agent's rotate handler validates that the serial argument is a hex string of
+8–40 characters before editing the trusted-dispatcher map at
 `/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers`. Arguments that fail the hex
-pattern check or fall outside the length range are rejected with a non-zero exit
-and an error message; the map is not changed.
+pattern check or fall outside the length range are rejected and the map is not
+changed.
 
-Despite this validation, an API caller with access to this script can still add
-or remove a plausible-looking serial in the map. A serial is inert without a
-CA-signed certificate bearing it, so the CA trust model bounds the risk; even
-so, the auth hook should restrict invocation of `update-ctrl-exec-serial`
-to privileged tokens only. A standard operator token should not be able to call
-this script. Use a separate token issued to the dispatcher's own rotation
-machinery, and block it for all other callers in the hook.
+The dispatcher identity is **derived from the caller's authenticated cert
+serial** — it is never sent in the request. A dispatcher can therefore only
+add or retire serials under its **own** identity, and the currently-trusted
+serial is what authorises the next one, so the trust chain stays rooted in the
+original human-supervised pairing approval. (This closes a spoofing gap in the
+former rotation script, which took the dispatcher id as a command-line argument
+that a compromised dispatcher could forge.)
+
+Despite the serial validation, an API caller able to reach `/rotate-serial` can
+still add or remove a plausible-looking serial in the map. A serial is inert
+without a CA-signed certificate bearing it, so the CA trust model bounds the
+risk; even so, the auth hook should restrict the `rotate` operation to
+privileged tokens only. A standard operator token should not be able to invoke
+it. Use a separate token issued to the dispatcher's own rotation machinery, and
+block it for all other callers in the hook.
 
 Seamless rotation (0.9.0)
 : As of 0.9.0 the agent keys dispatcher trust on the trusted-dispatcher map at
@@ -200,13 +214,13 @@ Seamless rotation (0.9.0)
   trusted through the overlap window, and after the window the dispatcher
   broadcasts removal of the old serial (`retire_previous_serial`, logged as
   `serial-retire`). Only an agent that was *offline* during the broadcast misses
-  the update and needs re-pairing once the overlap window expires. The script's
+  the update and needs re-pairing once the overlap window expires. The operation's
   behaviour and its token-restriction guidance are unchanged.
 
 ### Call rate limiting per agent
 
 Even with token restriction, a rotation machinery bug or misconfigured caller
-could issue rapid successive calls to `update-ctrl-exec-serial`. Each call
+could issue rapid successive calls to `/rotate-serial`. Each call
 writes the serial file and sends SIGHUP, clearing all rate-limit state on the
 agent. The following hook pattern adds a per-agent time-window limit on top of
 the token restriction.
@@ -217,15 +231,15 @@ Calls within the window are rejected with exit code 1 (deny, hook error logged).
 
 ```bash
 #!/bin/bash
-# Auth hook with rate-limit on update-ctrl-exec-serial
+# Auth hook with rate-limit on the rotate operation
 
 TOKEN_ROTATION="${ROTATION_TOKEN:-}"   # set in hook environment or config
 RATE_DIR="/var/lib/ctrl-exec/hook-rate"
 WINDOW_SECONDS=300   # one call per agent per 5 minutes
 
-# Only apply rate-limit logic to the target script
-if [ "$ENVEXEC_SCRIPT" != "update-ctrl-exec-serial" ]; then
-    # Pass all other scripts through to normal token validation
+# Only apply rate-limit logic to the rotate operation
+if [ "$ENVEXEC_ACTION" != "rotate" ]; then
+    # Pass all other actions through to normal token validation
     if [ "$ENVEXEC_TOKEN" = "$TOKEN_ROTATION" ]; then exit 0; fi
     exit 1
 fi
@@ -259,9 +273,9 @@ be `0700` owned by the user the hook runs as. The hook should be set `0700`
 with root ownership; its parent directory should not be writable by the
 dispatcher process.
 
-Note that `SIGHUP` from `update-ctrl-exec-serial` clears rate-limit state
-in the *agent's* connection limiter, not in this hook's state file. The two
-mechanisms are independent.
+Note that the `SIGHUP` sent by the built-in rotate handler clears rate-limit
+state in the *agent's* connection limiter, not in this hook's state file. The
+two mechanisms are independent.
 
 
 ## CA Compromise Recovery
@@ -364,8 +378,8 @@ Request result access
 
 Rate state persistence
 : Rate limit state is held in memory and cleared on SIGHUP or agent restart.
-  `update-ctrl-exec-serial` sends SIGHUP as part of normal rotation, which
-  clears all rate blocks. The window between the SIGHUP and the next connection
+  the built-in `/rotate-serial` handler sends SIGHUP as part of normal rotation,
+  which clears all rate blocks. The window between the SIGHUP and the next connection
   is milliseconds in practice - not operationally meaningful - but operators
   should be aware that a serial update resets rate state on all agents.
   Persistent rate state across reloads is not currently supported.

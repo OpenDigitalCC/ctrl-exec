@@ -314,8 +314,9 @@ Seamless rotation (add-then-remove)
 : Dispatcher cert rotation updates each agent's trusted-dispatcher map
   (`/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers`) automatically over the run
   channel — no re-pairing. The broadcast (`broadcast_serial` →
-  `update-ctrl-exec-serial`) carries the **new** serial together with the
-  dispatcher's stable identity, and each agent **adds** it to the map; the old
+  built-in `/rotate-serial`) carries the **new** serial, and each agent **adds**
+  it to the map under the dispatcher identity it derives from the caller's
+  authenticated cert serial; the old
   serial is kept trusted through the overlap window so in-flight traffic on the
   previous cert continues to be accepted. After the overlap window the
   dispatcher broadcasts removal of the **old** serial via
@@ -335,7 +336,7 @@ run_check_loop
   └─ expire_stale_agents   (mark pending agents stale after overlap window)
   └─ check_and_rotate      (check expiry; calls _do_rotation if renewal due)
        └─ _do_rotation     (regenerate cert, write rotation.json, mark agents pending)
-  └─ broadcast_serial      (run update-ctrl-exec-serial on all pending agents)
+  └─ broadcast_serial      (POST /rotate-serial to all pending agents via Engine::rotate_all)
 ```
 
 Call sequence for manual rotation (`ced rotate-cert`):
@@ -397,18 +398,20 @@ Functions:
 
 `broadcast_serial(%opts)`
 : Reads rotation state to find `current_serial`. Queries the registry for
-  agents with status `pending` or `unknown`. Dispatches
-  `update-ctrl-exec-serial` to all of them in parallel via
-  `Exec::Engine::dispatch_all`, passing `[serial, dispatcher_id]` so each agent
-  **adds** the new serial to its trusted-dispatcher map under the dispatcher's
-  stable identity (the old serial stays trusted through the overlap window). On
+  agents with status `pending` or `unknown`. POSTs to each agent's built-in
+  `/rotate-serial` operation in parallel via `Exec::Engine::rotate_all`
+  (`_rotate_one`) with `action => 'add'` and the new serial, so each agent
+  **adds** the new serial to its trusted-dispatcher map under the dispatcher
+  identity it derives from the caller's authenticated cert serial (the old
+  serial stays trusted through the overlap window). On
   success for each agent, calls `Exec::Registry::update_agent_serial_status` to
   set status `confirmed`. Returns arrayref of
   `{ hostname, status => 'ok'|'failed', error? }`. Required: `config`.
 
 `retire_previous_serial(%opts)`
 : Run after the overlap window closes. Reads rotation state to find
-  `previous_serial`, then dispatches `update-ctrl-exec-serial` to the
+  `previous_serial`, then POSTs to the built-in `/rotate-serial` operation
+  (`Exec::Engine::rotate_all` with `action => 'remove'`) on the
   `confirmed` agents instructing each to **remove** that serial from its
   trusted-dispatcher map, leaving only the current serial trusted. Logs
   `serial-retire` per batch. Returns arrayref of

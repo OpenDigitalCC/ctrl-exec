@@ -494,8 +494,9 @@ Agents that were unreachable during the broadcast are retried automatically
 by the internal check loop. Agents that remain unreachable after
 `cert_overlap_days` are marked `stale` and require re-pairing.
 
-The `update-ctrl-exec-serial` script must be in the agent's `scripts.conf`
-allowlist for the broadcast to succeed. See `scripts.conf.example`.
+The broadcast uses the agent's built-in `/rotate-serial` operation, so it
+needs no `scripts.conf` allowlist entry — cert rotation is a first-class
+control-plane operation, not an allowlisted script.
 
 ---
 

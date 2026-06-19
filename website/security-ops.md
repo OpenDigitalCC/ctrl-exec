@@ -110,14 +110,14 @@ Use absolute paths for all file references in hooks
 : The hook's working directory is not guaranteed.
 
 ::: examplebox
-Rate-limiting a sensitive script with a hook:
+Rate-limiting the cert-rotation operation with a hook:
 
 ```bash
 #!/bin/bash
 RATE_DIR="/var/lib/ctrl-exec/hook-rate"
 mkdir -p "$RATE_DIR"
 
-if [ "$ENVEXEC_SCRIPT" != "update-ctrl-exec-serial" ]; then
+if [ "$ENVEXEC_ACTION" != "rotate" ]; then
     exit 0
 fi
 

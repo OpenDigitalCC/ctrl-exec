@@ -535,11 +535,21 @@ Renewal trigger
   remain (default: 90), it generates a new cert automatically.
 
 Broadcast
-: Immediately after generating the new cert, the dispatcher calls
-  `update-ctrl-exec-serial` on all registered agents in parallel, passing
-  the new serial and its `dispatcher_id` as arguments. The script adds the new
-  serial to the agent's trusted-dispatcher map and sends SIGHUP. Agents that
-  respond successfully are marked `current` in the registry.
+: Immediately after generating the new cert, the dispatcher POSTs to each
+  registered agent's built-in `/rotate-serial` operation in parallel, carrying
+  the new serial. The agent's rotate handler adds the new serial to its
+  trusted-dispatcher map and sends itself SIGHUP. The dispatcher identity is
+  derived from the caller's authenticated cert serial — it is never sent in the
+  request — so an agent only ever adds a serial under the calling dispatcher's
+  own identity. Agents that respond successfully are marked `current` in the
+  registry.
+
+  Trust chain
+  : Each new serial is authorised by the currently-trusted (previous) serial,
+    which chains back to the original human-supervised pairing approval. Any
+    number of rotations therefore stays rooted in that one human approval, and
+    no rotation can introduce a serial that was not vouched for by an
+    already-trusted one.
 
   Seamless rotation (0.9.0)
   : Cert rotation updates each agent's trusted-dispatcher map automatically
@@ -583,14 +593,18 @@ dispatcher re-keying
   before proceeding and displays the number of agents that will require
   re-pairing if the overlap window is missed.
 
-`update-ctrl-exec-serial` script
-: Installed by the agent installer at
-  `/opt/ctrl-exec-scripts/update-ctrl-exec-serial`. Must be enabled in the
-  agent's `scripts.conf` for automatic rotation to work. The script adds the
-  broadcast serial to the agent's trusted-dispatcher map (and, at retirement,
-  removes the old one) and sends SIGHUP. Agents without this entry in their
-  allowlist will not receive serial updates and will need re-pairing when the
-  overlap window expires.
+Built-in `/rotate-serial` operation
+: Cert rotation is handled by the agent front-end (`ctrl-exec-agent`) as a
+  first-class control-plane operation — no `scripts.conf` allowlist entry is
+  required, and the work runs in the front-end rather than through the executor.
+  This is deliberate: with privilege separation enabled the executor mounts the
+  agent's control/state directories read-only for every action, so a script
+  could not write the trusted-dispatcher map; the front-end can, which is why
+  rotation works identically whether or not the executor is enabled. The handler
+  adds the broadcast serial to the trusted-dispatcher map (and, at retirement,
+  removes the old one) and sends SIGHUP. Access is gated by the same
+  trusted-dispatcher serial check as `/run`, plus the auth hook (which sees
+  `ENVEXEC_ACTION=rotate`).
 
 ## Certificate Revocation
 
@@ -680,9 +694,9 @@ Connection rate limiting
   failures within 600 seconds is blocked for 1 hour (probe threshold). Blocks
   are held in the agent process memory and cleared on SIGHUP. The block state
   is logged at the point the threshold is crossed; repeat checks are silent.
-  Rate state is not persisted across reloads - `update-ctrl-exec-serial`
-  sends SIGHUP as part of normal rotation and clears all rate blocks as a
-  side effect. A legitimate dispatcher that triggers the probe block due to a
+  Rate state is not persisted across reloads - the built-in `/rotate-serial`
+  handler sends SIGHUP as part of normal rotation and clears all rate blocks as
+  a side effect. A legitimate dispatcher that triggers the probe block due to a
   cert misconfiguration can be unblocked immediately with
   `systemctl reload ctrl-exec-agent`. Thresholds are configurable via
   `rate_limit_volume` and `rate_limit_probe` in `agent.conf`.

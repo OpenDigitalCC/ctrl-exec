@@ -313,7 +313,7 @@ via add-then-remove against the trusted-dispatcher map (see below).
 Seamless rotation (0.9.0)
 : Rotation updates each agent's trusted-dispatcher map at
   `/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers` automatically. The serial
-  broadcast (`broadcast_serial` → `update-ctrl-exec-serial`) **adds** the new
+  broadcast (`broadcast_serial` → built-in `/rotate-serial`) **adds** the new
   serial to the map against the dispatcher's stable `dispatcher_id`, while the
   **old** serial stays trusted through the overlap window — so the live cert
   (the old one before the instances restart, the new one after) is accepted
@@ -330,7 +330,7 @@ Rotation procedure for HA:
 1. Run `ced rotate-cert` on one designated node. This generates the
    new cert, writes it to `/etc/ctrl-exec/dispatcher.crt` and
    `/etc/ctrl-exec/dispatcher.key`, and broadcasts the new serial to all
-   agents via `update-ctrl-exec-serial`.
+   agents via their built-in `/rotate-serial` operation.
 2. Sync the updated `/etc/ctrl-exec/` to all other dispatcher instances. The
    old serial stays trusted through the overlap window, so an instance still
    presenting the old cert continues to be accepted while the sync and restarts
@@ -345,7 +345,7 @@ Rotation procedure for HA:
    `ctrl-exec-api` reads its cert at startup. There is no live cert
    reload — a restart is required.
 
-The `update-ctrl-exec-serial` script on each agent adds the new serial to the
+Each agent's built-in `/rotate-serial` handler adds the new serial to the
 trusted-dispatcher map and sends SIGHUP to the agent process; the agent reloads
 its map on SIGHUP and immediately trusts the rotated cert, with no re-pairing.
 The overlap window (`cert_overlap_days`, default 30 days) is the time the old

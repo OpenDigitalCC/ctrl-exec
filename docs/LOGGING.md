@@ -845,6 +845,29 @@ Fields
 ACTION=result-deny PEER=10.0.0.1 DISPATCHER=ctrl-exec-secondary REQID=a1b2c3d4e5f60001 REASON=not-owner
 ```
 
+### rotate (agent-side)
+
+Emitted by the agent's built-in `/rotate-serial` handler when it adds or
+removes a serial in its trusted-dispatcher map. The dispatcher identity is
+derived from the caller's authenticated cert serial, so the agent only ever
+rewrites the map under the calling dispatcher's own identity.
+
+Priority
+: INFO
+
+Fields
+
+| Field | Type | Description |
+| --- | --- | --- |
+| ACTION | string | `rotate` |
+| SERIAL_ACTION | string | `add` or `remove` |
+| DISPATCHER | string | Id of the calling dispatcher (derived from its cert serial) |
+| SERIAL | string | The serial being added or removed |
+
+```
+ACTION=rotate SERIAL_ACTION=add DISPATCHER=ctrl-exec-primary SERIAL=0a1b2c3d
+```
+
 ### revoked-cert
 
 Emitted when a connecting peer presents a certificate whose serial appears
@@ -1287,8 +1310,8 @@ ACTION=cert-rotation-fail ERROR="openssl x509 failed: ..."
 
 ### serial-broadcast
 
-Emitted when `broadcast_serial` begins dispatching `update-ctrl-exec-serial`
-to pending agents.
+Emitted when `broadcast_serial` begins calling the built-in `/rotate-serial`
+operation on pending agents.
 
 Priority
 : INFO
@@ -1330,7 +1353,7 @@ ACTION=serial-retire HOSTS=web-01,db-01,db-02 SERIAL=09abcdef
 ### serial-confirmed
 
 Emitted for each agent that successfully receives and acknowledges the
-new serial via `update-ctrl-exec-serial`.
+new serial via the built-in `/rotate-serial` operation.
 
 Priority
 : INFO
@@ -1348,8 +1371,8 @@ ACTION=serial-confirmed AGENT=web-01
 
 ### serial-broadcast-fail
 
-Emitted for each agent where the serial broadcast attempt fails (non-zero
-exit from `update-ctrl-exec-serial` or connection error).
+Emitted for each agent where the serial broadcast attempt fails (the agent's
+`/rotate-serial` operation returns an error or the connection fails).
 
 Priority
 : WARNING
