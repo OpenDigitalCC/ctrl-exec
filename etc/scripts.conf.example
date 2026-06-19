@@ -5,18 +5,18 @@
 # The name is what the ctrl-exec passes as the script argument.
 # The path must be executable and owned by root.
 #
-# Example:
+# The optional 'profile=<name>' pins the security context the script runs under
+# (run_as, capabilities, writable paths). It is order-independent (either side of
+# the path); the profile is defined in agent.conf under [profile <name>], and is
+# enforced only when the executor is enabled (executor_socket in agent.conf). A
+# script with no profile= uses the most-restrictive 'default'. A profile= naming
+# a profile not defined in agent.conf is a fatal config error (refuses to serve).
+#
+# Examples (with and without a profile):
 #   backup-mysql = /opt/ctrl-exec-scripts/backup-mysql.sh
 #   deploy-app   = /opt/ctrl-exec-scripts/deploy-app.sh
-#
-# The optional 'profile=<name>' pins the security context the script runs under.
-# It is order-independent (either side of the path) and the profile is defined in
-# agent.conf under [profile <name>]. A script with no profile= runs under the
-# most-restrictive 'default' profile. A profile= naming a profile that is not
-# defined in agent.conf is a fatal config error (the agent refuses to serve).
-#
-#   deploy-cert = /opt/ctrl-exec-scripts/deploy-cert.sh  profile=cert-deploy
-#   restart-web = /opt/ctrl-exec-scripts/restart-web.sh  profile=svc-restart
+#   deploy-cert  = /opt/ctrl-exec-scripts/deploy-cert.sh   profile=cert-deploy
+#   restart-web  = /opt/ctrl-exec-scripts/restart-web.sh   profile=svc-restart
 
 # --- Demonstrator (evaluation and examples) ---
 #
