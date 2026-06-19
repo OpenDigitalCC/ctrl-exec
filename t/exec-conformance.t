@@ -18,7 +18,7 @@ plan skip_all => 'gcc not available' unless $cc && -x $cc;
 
 my $TMP = tempdir(CLEANUP => 1);
 my $BIN = "$TMP/ctrl-exec-exec";
-system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-exec.c") == 0
+system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-exec.c", '-lcap') == 0
     or plan skip_all => 'could not compile src/ctrl-exec-exec.c';
 
 my $REQUIRED = "port = 7443\ncert = /x\nkey = /y\nca = /z\n";

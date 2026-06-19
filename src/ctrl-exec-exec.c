@@ -29,6 +29,31 @@
 #include <strings.h>
 #include <ctype.h>
 #include <limits.h>
+#include <stdint.h>
+#include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <pwd.h>
+#include <grp.h>
+#include <sched.h>
+#include <sys/prctl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/mount.h>
+#include <sys/capability.h>
+
+/* Directories the executed action must never be able to modify: the agent's
+ * control plane (config, allowlist, hook, certs, trusted map) and its state.
+ * The privileged child bind-mounts each read-only inside its own mount
+ * namespace, so even a root-profile action cannot tamper with the controls. */
+static const char *const CONTROL_DIRS[] = {
+    "/etc/ctrl-exec-agent",
+    "/var/lib/ctrl-exec-agent",
+};
+#define N_CONTROL_DIRS ((int)(sizeof(CONTROL_DIRS) / sizeof(CONTROL_DIRS[0])))
 
 #define MAX_PROFILES   64
 #define MAX_CAPS       32
@@ -343,13 +368,331 @@ static int cmd_resolve(const char *agent_conf, const char *scripts_conf,
     return 0;
 }
 
+/* ====================================================================== *
+ *  serve mode: socket + peer-cred + framed request -> profiled exec
+ * ====================================================================== */
+
+/* Wire framing. Request (front-end -> executor), all big-endian length-prefixed:
+ *   [u32 total] [u32 len][reqid] [u32 len][disp] [u32 len][script]
+ *   [u32 len][stdin] [u32 argc] argc*([u32 len][arg])
+ * Response (executor -> front-end):
+ *   [i32 exit] [u32 len][stdout] [u32 len][stderr]
+ * Length-prefixed throughout so args/stdin may hold arbitrary bytes (args still
+ * cannot contain NUL - execv requires C strings - but stdin may). */
+
+#define MAX_FRAME   (16 * 1024 * 1024)   /* 16MB request cap */
+#define MAX_ARGS    256
+
+static int read_all(int fd, void *buf, size_t n) {
+    char *p = buf; size_t got = 0;
+    while (got < n) {
+        ssize_t r = read(fd, p + got, n - got);
+        if (r == 0) return -1;             /* short */
+        if (r < 0) { if (errno == EINTR) continue; return -1; }
+        got += (size_t)r;
+    }
+    return 0;
+}
+static int write_all(int fd, const void *buf, size_t n) {
+    const char *p = buf; size_t put = 0;
+    while (put < n) {
+        ssize_t w = write(fd, p + put, n - put);
+        if (w < 0) { if (errno == EINTR) continue; return -1; }
+        put += (size_t)w;
+    }
+    return 0;
+}
+static int read_u32(int fd, uint32_t *v) {
+    unsigned char b[4];
+    if (read_all(fd, b, 4) != 0) return -1;
+    *v = ((uint32_t)b[0]<<24)|((uint32_t)b[1]<<16)|((uint32_t)b[2]<<8)|b[3];
+    return 0;
+}
+static int write_u32(int fd, uint32_t v) {
+    unsigned char b[4] = { v>>24, v>>16, v>>8, v };
+    return write_all(fd, b, 4);
+}
+
+/* Read a length-prefixed field from an in-memory buffer (the already-read
+ * frame), advancing *off. Returns malloc'd NUL-terminated string + sets *len. */
+static char *take_field(const unsigned char *buf, uint32_t total, uint32_t *off, uint32_t *len) {
+    if (*off + 4 > total) return NULL;
+    uint32_t l = ((uint32_t)buf[*off]<<24)|((uint32_t)buf[*off+1]<<16)|
+                 ((uint32_t)buf[*off+2]<<8)|buf[*off+3];
+    *off += 4;
+    if (l > total - *off) return NULL;
+    char *s = malloc((size_t)l + 1);
+    if (!s) return NULL;
+    memcpy(s, buf + *off, l);
+    s[l] = '\0';
+    *off += l;
+    if (len) *len = l;
+    return s;
+}
+
+/* ---- privileged child setup ------------------------------------------- */
+/* Apply the profile in the forked child just before exec. Returns 0 or -1.
+ * COMPILE-VERIFIED; the namespace/cap/setuid paths require root + CAP_SYS_ADMIN
+ * and are exercised on a real host (see the on-host test plan). With
+ * allow_unpriv and a non-root euid (test only), the privileged steps are
+ * skipped and only no_new_privileges is applied. */
+static int apply_profile(const profile_t *p, int allow_unpriv) {
+    int is_root = (geteuid() == 0);
+
+    if (!is_root) {
+        if (!allow_unpriv) { fprintf(stderr, "executor: must run as root\n"); return -1; }
+        if (p->run_as[0] || p->ncaps > 0) {
+            fprintf(stderr, "executor: profile needs privilege but euid != 0\n");
+            return -1;
+        }
+        if (p->nnp && prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) return -1;
+        return 0;
+    }
+
+    /* Control-plane integrity: control/state dirs read-only in this action's
+     * mount namespace. CAP_SYS_ADMIN required - we have it as root. */
+    if (unshare(CLONE_NEWNS) != 0) { perror("unshare"); return -1; }
+    if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0) { perror("mount private"); return -1; }
+    for (int i = 0; i < N_CONTROL_DIRS; i++) {
+        const char *d = CONTROL_DIRS[i];
+        if (access(d, F_OK) != 0) continue;
+        if (mount(d, d, NULL, MS_BIND | MS_REC, NULL) != 0) { perror("bind"); return -1; }
+        if (mount(NULL, d, NULL, MS_REMOUNT | MS_BIND | MS_REC | MS_RDONLY | MS_NOSUID, NULL) != 0) {
+            perror("remount ro"); return -1;
+        }
+    }
+
+    /* Drop the bounding set to exactly the profile's caps. */
+    for (int cap = 0; cap <= CAP_LAST_CAP; cap++) {
+        int keep = 0;
+        for (int i = 0; i < p->ncaps; i++) {
+            cap_value_t cv;
+            if (cap_from_name(p->caps[i], &cv) == 0 && (int)cv == cap) { keep = 1; break; }
+        }
+        if (!keep) prctl(PR_CAPBSET_DROP, cap, 0, 0, 0);
+    }
+
+    /* run_as: switch gid/uid, keeping caps across the transition. */
+    if (p->run_as[0]) {
+        uid_t uid; gid_t gid;
+        struct passwd *pw = getpwnam(p->run_as);
+        if (pw) { uid = pw->pw_uid; gid = pw->pw_gid; }
+        else {
+            char *end; long v = strtol(p->run_as, &end, 10);
+            if (*end || v < 0) { fprintf(stderr, "executor: unknown run_as '%s'\n", p->run_as); return -1; }
+            uid = (uid_t)v; gid = (gid_t)v;
+        }
+        if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) != 0) return -1;
+        if (setgroups(0, NULL) != 0) return -1;
+        if (pw) initgroups(p->run_as, gid);
+        if (setgid(gid) != 0) { perror("setgid"); return -1; }
+        if (setuid(uid) != 0) { perror("setuid"); return -1; }
+    }
+
+    /* Set the final cap set, and raise ambient so caps survive exec when the
+     * action runs as a non-root run_as. */
+    cap_t caps = cap_init();
+    if (p->ncaps > 0) {
+        cap_value_t cvs[MAX_CAPS]; int nc = 0;
+        for (int i = 0; i < p->ncaps && nc < MAX_CAPS; i++)
+            if (cap_from_name(p->caps[i], &cvs[nc]) == 0) nc++;
+        cap_set_flag(caps, CAP_PERMITTED,   nc, cvs, CAP_SET);
+        cap_set_flag(caps, CAP_EFFECTIVE,   nc, cvs, CAP_SET);
+        cap_set_flag(caps, CAP_INHERITABLE, nc, cvs, CAP_SET);
+    }
+    if (cap_set_proc(caps) != 0) { perror("cap_set_proc"); cap_free(caps); return -1; }
+    cap_free(caps);
+    for (int i = 0; i < p->ncaps; i++) {
+        cap_value_t cv;
+        if (cap_from_name(p->caps[i], &cv) == 0)
+            prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, cv, 0, 0);
+    }
+
+    if (p->nnp && prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) return -1;
+    return 0;
+}
+
+/* Grow-on-demand byte buffer. */
+typedef struct { char *p; size_t len, cap; } buf_t;
+static int buf_add(buf_t *b, const char *d, size_t n) {
+    if (b->len + n + 1 > b->cap) {
+        size_t nc = b->cap ? b->cap * 2 : 4096;
+        while (nc < b->len + n + 1) nc *= 2;
+        char *np = realloc(b->p, nc);
+        if (!np) return -1;
+        b->p = np; b->cap = nc;
+    }
+    memcpy(b->p + b->len, d, n);
+    b->len += n; b->p[b->len] = '\0';
+    return 0;
+}
+
+/* Run path/argv under profile p, feeding `indata` to stdin, capturing stdout and
+ * stderr concurrently (select, to avoid pipe-buffer deadlock). */
+static int run_with_profile(const profile_t *p, const char *path, char *const argv[],
+                            const char *indata, size_t inlen, int allow_unpriv,
+                            int *exit_out, buf_t *out, buf_t *err) {
+    int o[2], e[2], in[2];
+    if (pipe(o) || pipe(e) || pipe(in)) return -1;
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        dup2(in[0], 0); dup2(o[1], 1); dup2(e[1], 2);
+        close(in[0]); close(in[1]); close(o[0]); close(o[1]); close(e[0]); close(e[1]);
+        if (apply_profile(p, allow_unpriv) != 0) _exit(126);
+        execv(path, argv);
+        _exit(127);
+    }
+    close(in[0]); close(o[1]); close(e[1]);
+    if (indata && inlen) (void)!write_all(in[1], indata, inlen);
+    close(in[1]);
+
+    int fds[2] = { o[0], e[0] };
+    buf_t *bufs[2] = { out, err };
+    int open_n = 2;
+    while (open_n > 0) {
+        fd_set rd; FD_ZERO(&rd); int mx = -1;
+        for (int i = 0; i < 2; i++) if (fds[i] >= 0) { FD_SET(fds[i], &rd); if (fds[i] > mx) mx = fds[i]; }
+        if (mx < 0) break;
+        if (select(mx + 1, &rd, NULL, NULL, NULL) < 0) { if (errno == EINTR) continue; break; }
+        for (int i = 0; i < 2; i++) {
+            if (fds[i] >= 0 && FD_ISSET(fds[i], &rd)) {
+                char tmp[8192];
+                ssize_t r = read(fds[i], tmp, sizeof(tmp));
+                if (r > 0) buf_add(bufs[i], tmp, (size_t)r);
+                else { close(fds[i]); fds[i] = -1; open_n--; }
+            }
+        }
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    *exit_out = WIFEXITED(status) ? WEXITSTATUS(status) : 126;
+    return 0;
+}
+
+/* Handle one connection: read request, resolve, run, write response. */
+static void handle_conn(int cfd, const char *agent_conf, const char *scripts_conf,
+                        int allow_unpriv) {
+    uint32_t total;
+    if (read_u32(cfd, &total) != 0 || total == 0 || total > MAX_FRAME) return;
+    unsigned char *frame = malloc(total);
+    if (!frame) return;
+    if (read_all(cfd, frame, total) != 0) { free(frame); return; }
+
+    uint32_t off = 0;
+    char *reqid  = take_field(frame, total, &off, NULL);
+    char *disp   = take_field(frame, total, &off, NULL);
+    char *script = take_field(frame, total, &off, NULL);
+    uint32_t inlen = 0;
+    char *indata = take_field(frame, total, &off, &inlen);
+    int bad = (!reqid || !disp || !script || !indata);
+
+    char *argv[MAX_ARGS + 2]; int argc = 0;
+    uint32_t na = 0;
+    if (!bad) {
+        if (off + 4 > total) bad = 1;
+        else { na = ((uint32_t)frame[off]<<24)|((uint32_t)frame[off+1]<<16)|
+                    ((uint32_t)frame[off+2]<<8)|frame[off+3]; off += 4; }
+    }
+    if (!bad && na > MAX_ARGS) bad = 1;
+    if (!bad) {
+        argv[argc++] = script;                       /* argv[0] = script path (set below) */
+        for (uint32_t i = 0; i < na && !bad; i++) {
+            char *a = take_field(frame, total, &off, NULL);
+            if (!a) { bad = 1; break; }
+            argv[argc++] = a;
+        }
+        argv[argc] = NULL;
+    }
+
+    int ecode = -1; buf_t out = {0}, err = {0};
+    if (bad) { buf_add(&err, "executor: malformed request\n", 28); ecode = -1; }
+    else {
+        /* Re-derive path + profile from our OWN config; never trust the message. */
+        config_t *c = calloc(1, sizeof(*c));
+        char spath[VALLEN], pname[NAMELEN];
+        profile_t builtin, *p = NULL;
+        if (!c || parse_agent_conf(agent_conf, c) != 0) {
+            buf_add(&err, "executor: config error\n", 23);
+        } else if (!find_script(scripts_conf, script, spath, sizeof(spath), pname, sizeof(pname))) {
+            buf_add(&err, "executor: script not permitted\n", 31);
+        } else if (!path_in_dirs(spath, c)) {
+            buf_add(&err, "executor: script not in script_dirs\n", 36);
+        } else if (!(p = find_profile(c, pname)) && strcmp(pname, "default") != 0) {
+            buf_add(&err, "executor: undefined profile\n", 28);
+        } else {
+            if (!p) { memset(&builtin, 0, sizeof(builtin));
+                      snprintf(builtin.name, sizeof(builtin.name), "default");
+                      builtin.nnp = 1; p = &builtin; }
+            argv[0] = spath;                          /* argv[0] = resolved path */
+            run_with_profile(p, spath, argv, indata, inlen, allow_unpriv, &ecode, &out, &err);
+        }
+        free(c);
+    }
+
+    int32_t ec = (int32_t)ecode;
+    write_u32(cfd, (uint32_t)ec);
+    write_u32(cfd, (uint32_t)out.len); if (out.len) write_all(cfd, out.p, out.len);
+    write_u32(cfd, (uint32_t)err.len); if (err.len) write_all(cfd, err.p, err.len);
+
+    free(out.p); free(err.p);
+    free(reqid); free(disp); free(indata);
+    for (int i = 1; i < argc; i++) free(argv[i]);   /* argv[0] is spath/script (freed via script) */
+    free(script);
+    free(frame);
+}
+
+static int cmd_serve(const char *sockpath, const char *agent_conf,
+                     const char *scripts_conf, const char *peer_user) {
+    int allow_unpriv = (getenv("CTRL_EXEC_EXEC_ALLOW_UNPRIV") != NULL);
+    if (geteuid() != 0 && !allow_unpriv) {
+        fprintf(stderr, "ctrl-exec-exec: serve must run as root\n");
+        return 1;
+    }
+    struct passwd *pw = getpwnam(peer_user);
+    if (!pw) { fprintf(stderr, "ctrl-exec-exec: unknown peer user '%s'\n", peer_user); return 1; }
+    uid_t peer_uid = pw->pw_uid;
+
+    int sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sfd < 0) { perror("socket"); return 1; }
+    struct sockaddr_un addr; memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    if (strlen(sockpath) >= sizeof(addr.sun_path)) { fprintf(stderr, "socket path too long\n"); return 1; }
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", sockpath);
+    unlink(sockpath);
+    if (bind(sfd, (struct sockaddr *)&addr, sizeof(addr)) != 0) { perror("bind"); return 1; }
+    /* Owner = peer user, mode 0600: only that uid (and root) may connect. */
+    if (chown(sockpath, peer_uid, pw->pw_gid) != 0) perror("chown");
+    if (chmod(sockpath, 0600) != 0) perror("chmod");
+    if (listen(sfd, 16) != 0) { perror("listen"); return 1; }
+
+    for (;;) {
+        int cfd = accept(sfd, NULL, NULL);
+        if (cfd < 0) { if (errno == EINTR) continue; perror("accept"); break; }
+
+        struct ucred uc; socklen_t ucl = sizeof(uc);
+        if (getsockopt(cfd, SOL_SOCKET, SO_PEERCRED, &uc, &ucl) != 0 ||
+            (uc.uid != peer_uid && uc.uid != 0)) {
+            close(cfd); continue;             /* reject: not the front-end uid */
+        }
+        pid_t pid = fork();
+        if (pid == 0) { close(sfd); handle_conn(cfd, agent_conf, scripts_conf, allow_unpriv); close(cfd); _exit(0); }
+        close(cfd);
+        while (waitpid(-1, NULL, WNOHANG) > 0) {}   /* reap finished handlers */
+    }
+    close(sfd);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc == 5 && strcmp(argv[1], "resolve") == 0)
         return cmd_resolve(argv[2], argv[3], argv[4]);
+    if (argc == 6 && strcmp(argv[1], "serve") == 0)
+        return cmd_serve(argv[2], argv[3], argv[4], argv[5]);
 
     fprintf(stderr,
         "ctrl-exec-exec - privileged executor for ctrl-exec-agent\n"
         "usage: ctrl-exec-exec resolve <agent.conf> <scripts.conf> <script-name>\n"
-        "       (serve mode - the socket server and privileged exec - lands in phase 2b)\n");
+        "       ctrl-exec-exec serve   <socket> <agent.conf> <scripts.conf> <peer-user>\n");
     return 1;
 }

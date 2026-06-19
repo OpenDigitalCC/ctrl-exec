@@ -6,7 +6,7 @@
 
 CC      ?= cc
 CFLAGS  ?= -O2 -Wall -Wextra
-LDLIBS  ?=
+LDLIBS  ?= -lcap
 
 BIN = src/ctrl-exec-exec
 SRC = src/ctrl-exec-exec.c
