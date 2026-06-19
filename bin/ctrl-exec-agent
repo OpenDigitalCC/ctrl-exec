@@ -87,6 +87,22 @@ sub mode_serve {
           . "the profile= in scripts.conf.\n";
     }
 
+    # Profiles are enforced only by the executor. If scripts declare non-default
+    # profiles but executor_socket is not set, those profiles are NOT applied -
+    # the scripts run as the unprivileged agent user. Warn so this is not silent.
+    unless ($config->{executor_socket}) {
+        my @profiled = grep {
+            (Exec::Agent::Config::script_profile($_, $allowlist) // 'default') ne 'default'
+        } keys %$allowlist;
+        if (@profiled) {
+            warn "ctrl-exec-agent: " . scalar(@profiled) . " script(s) declare a "
+               . "profile but executor_socket is not set - profiles are NOT "
+               . "enforced; these scripts run as the unprivileged agent user. "
+               . "Set executor_socket (and run ctrl-exec-exec.service) to apply "
+               . "profiles.\n";
+        }
+    }
+
     my $revoked_path = $config->{revoked_serials}
                     // '/etc/ctrl-exec-agent/revoked-serials';
     my $revoked = Exec::Agent::AgentPairing::load_revoked_serials(

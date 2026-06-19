@@ -45,10 +45,19 @@ ca   = /etc/ctrl-exec-agent/ca.crt
 # When set, the agent hands each synchronous run to the privileged executor
 # (ctrl-exec-exec.service) over this unix socket; the executor re-derives the
 # path and profile from its own root-owned config and applies the profile
-# (run_as, capabilities, control/state dirs read-only) before exec. Leave unset
-# to run scripts directly in the unprivileged agent process (no profiles).
+# (run_as, capabilities, control/state dirs read-only) before exec.
+#
+# REQUIRED FOR PROFILES: per-script profiles (below) are enforced ONLY by the
+# executor. With executor_socket unset, the agent runs scripts directly in its
+# own process and the profile= in scripts.conf is ignored - see the profile
+# section for exactly what scripts can do in that case.
+#
+# MUTUALLY EXCLUSIVE WITH ASYNC: while executor_socket is set, --async runs are
+# refused (the executor does not yet handle detached jobs). Use synchronous runs
+# with the executor, or leave executor_socket unset to use --async.
+#
 # Enabling this means: install and enable ctrl-exec-exec.service, then set the
-# path below. Async (--async) runs are not yet supported via the executor.
+# path below.
 #
 # executor_socket = /run/ctrl-exec-agent/exec.sock
 
@@ -57,6 +66,7 @@ ca   = /etc/ctrl-exec-agent/ca.crt
 # request id, until fetched or TTL-purged (24h). Defaults to the path below.
 # The agent must be able to write it; the systemd unit's StateDirectory and the
 # installer create it owned by the agent user (0750).
+# Note: --async is unavailable while executor_socket is set (see above).
 #
 # async_runs_dir = /var/lib/ctrl-exec-agent/runs
 
@@ -107,11 +117,26 @@ ca   = /etc/ctrl-exec-agent/ca.crt
 # writable paths). The control/audit files are read-only to every profile,
 # including root ones, so an action can never tamper with the agent's controls.
 #
+# PROFILES REQUIRE THE EXECUTOR. They are applied only when executor_socket is
+# set (above) and ctrl-exec-exec.service is running. WITHOUT the executor the
+# profile= in scripts.conf is parsed but NOT applied: every script instead runs
+# directly in the agent process - as the unprivileged 'ctrl-exec-agent' user,
+# with no added capabilities and the agent unit's filesystem sandbox (it can
+# write only its own state directory). That is the only behaviour available
+# without the executor, regardless of any profile= you set. To grant a script
+# run_as/capabilities/writable paths, you MUST enable the executor.
+#
 # Fields per profile:
 #   run_as            user (or uid) to drop to; omit to keep the agent's user
 #   caps              comma/space-separated CAP_* to retain (e.g. CAP_CHOWN)
 #   writable          colon-separated absolute dirs the script may write to
 #   no_new_privileges yes (default) | no
+#
+# A script runs under exactly ONE profile - there is no stacking or inheritance.
+# If a script needs more than one capability (e.g. deploy a cert AND restart a
+# service), list them all in a single profile: caps = CAP_CHOWN, CAP_KILL.
+# For the capability names and what each grants, see capabilities(7)
+# (`man 7 capabilities`).
 #
 # run_as note: the script must be readable+executable by the run_as user - this
 # is ordinary Unix exec permission. Scope a script to a service by its group:
