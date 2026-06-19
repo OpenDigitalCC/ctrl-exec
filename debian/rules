@@ -71,3 +71,10 @@ override_dh_installsystemd:
 	# file debian/ctrl-exec-agent.ctrl-exec-exec.service needs --name to be picked
 	# up. Not enabled/started by default - the operator opts into privsep.
 	dh_installsystemd --no-enable --no-start --name=ctrl-exec-exec
+
+# The agent ships one small C binary (the executor). Strip it, but do not emit an
+# automatic -dbgsym package - we do not distribute debug symbols. Rebuild without
+# this override (or with DEB_BUILD_OPTIONS=nostrip) if you need symbols to debug
+# an executor crash.
+override_dh_strip:
+	dh_strip --no-automatic-dbgsym

@@ -5,7 +5,18 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
-## 0.10.0 — privilege separation and per-script profiles (in progress)
+## 0.10.1 — packaging fixes for the compiled executor
+
+- **Fixed** the agent `.deb` requiring `libc6 (>= 2.38)`, which blocked install on
+  Debian 12 / Ubuntu 22.04 (glibc 2.36). The executor used `strtol`, which under
+  `_GNU_SOURCE` redirects to the C23 `__isoc23_strtol` (a glibc-2.38 symbol);
+  replaced it with a manual integer parse. The package's libc floor is now 2.34.
+- **Removed** the automatic `-dbgsym` package (`dh_strip --no-automatic-dbgsym`):
+  ctrl-exec does not distribute debug symbols. Also dropped the
+  `ctrl-exec-agent-dbgsym` that the 0.10.0 release accidentally committed to
+  `dist/`. Rebuild with `DEB_BUILD_OPTIONS=nostrip` if you need symbols.
+
+## 0.10.0 — privilege separation and per-script profiles
 
 - **Added** privilege separation. A new root, no-network executor
   (`ctrl-exec-exec`) runs allowlisted scripts; the unprivileged agent front-end

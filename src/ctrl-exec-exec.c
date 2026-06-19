@@ -478,8 +478,19 @@ static int apply_profile(const profile_t *p, int allow_unpriv) {
         struct passwd *pw = getpwnam(p->run_as);
         if (pw) { uid = pw->pw_uid; gid = pw->pw_gid; }
         else {
-            char *end; long v = strtol(p->run_as, &end, 10);
-            if (*end || v < 0) { fprintf(stderr, "executor: unknown run_as '%s'\n", p->run_as); return -1; }
+            /* Numeric uid. run_as is validated at config load as a name or all
+             * digits; here it is digits. Parse manually rather than strtol -
+             * under _GNU_SOURCE, strtol redirects to the C23 __isoc23_strtol,
+             * which is a glibc-2.38 symbol and would raise the package's libc
+             * floor (breaking installs on older stable releases). */
+            unsigned long v = 0;
+            for (const char *q = p->run_as; *q; q++) {
+                if (*q < '0' || *q > '9') {
+                    fprintf(stderr, "executor: unknown run_as '%s'\n", p->run_as);
+                    return -1;
+                }
+                v = v * 10 + (unsigned long)(*q - '0');
+            }
             uid = (uid_t)v; gid = (gid_t)v;
         }
         if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) != 0) return -1;
