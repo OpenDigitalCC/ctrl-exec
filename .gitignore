@@ -24,3 +24,6 @@ tmp/
 # not part of the project tree
 scripts/
 
+
+# Compiled C executor (built from src/, shipped via packaging)
+/src/ctrl-exec-exec
