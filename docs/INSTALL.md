@@ -815,6 +815,10 @@ sudo systemctl restart ctrl-exec-api
 
 ## Troubleshooting
 
+This section covers pairing, connectivity and rate limiting. For profiles,
+privilege separation, package upgrades and configuration-file pitfalls once an
+agent is running, see `TROUBLESHOOTING.md`.
+
 Agent unreachable after pairing
 : Check the service is running: `systemctl status ctrl-exec-agent`.
   Check port 7443 is open: `ss -tlnp | grep 7443`.

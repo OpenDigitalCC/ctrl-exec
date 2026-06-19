@@ -16,6 +16,13 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 - **Changed** the "invalid capability" error to detect the common mistake of an
   inline `# ...` comment on a value line (the format supports whole-line comments
   only) and say so, instead of the bare "invalid capability '#'".
+- **Added** `docs/TROUBLESHOOTING.md` - use cases and troubleshooting for a
+  running agent: the profile mental model (executor required, one profile per
+  script, executor/`--async` exclusivity), the deploy-and-restart use case,
+  capability-bounded root (`run_as = root` grants only the listed caps, no
+  implicit `CAP_DAC_OVERRIDE`), config-file pitfalls (inline comments, the
+  exit-78 behaviour), upgrade/install messages (`libc6` floor, `-dbgsym`,
+  automatic restart), diagnosing a failed start, and rotation under the executor.
 
 ## 0.11.1 — built-in cert rotation; clearer upgrades and profiles
 

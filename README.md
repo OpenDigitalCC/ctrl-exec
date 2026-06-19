@@ -81,6 +81,11 @@ automatic cert renewal
 : Security model, trust boundaries, file permissions, and operational
   security guidance.
 
+`TROUBLESHOOTING.md`
+: Use cases and troubleshooting once an agent is running - security profiles,
+  privilege separation, capability-bounded root, upgrades, and configuration
+  pitfalls.
+
 `DEVELOPER.md`
 : Module reference, wire format, protocol details, and how to extend the
   system.

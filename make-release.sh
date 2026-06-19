@@ -491,6 +491,7 @@ SHIP_FILES=(
     docs/MANUAL-CHECKS.md
     docs/REFERENCE.md
     docs/SECURITY.md
+    docs/TROUBLESHOOTING.md
 )
 
 SHIP_DIRS=(lib etc t)
