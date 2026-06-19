@@ -448,8 +448,11 @@ cleanup() {
         echo ""
         info "DRY RUN: reverting (no bump, tag, commit, or kept artifacts)."
         for f in $RELEASE_FILES; do
+            # Content-only restore (no -a): the file may be owned by another user,
+            # and preserving times would fail and, under set -e, abort the revert.
+            # Identical content means git sees no change regardless of mtime.
             [[ -n "$SNAP_DIR" && -e "$SNAP_DIR/$(basename "$f")" ]] \
-                && cp -a "$SNAP_DIR/$(basename "$f")" "$f"
+                && cp "$SNAP_DIR/$(basename "$f")" "$f" 2>/dev/null || true
         done
         rm -f "$DIST_DIR/ctrl-exec-${VERSION}.tar.gz" \
               "$DIST_DIR/ctrl-exec-${VERSION}.tar.gz.sha256" \
@@ -577,7 +580,11 @@ info "VERSION set to $VERSION (current release). NEXT_VERSION set to $NEXT_VERSI
 
 echo ""
 echo "================================================================"
-echo " Release $VERSION complete"
+if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo " DRY RUN: $VERSION build verified (nothing kept; tree restored)"
+else
+    echo " Release $VERSION complete"
+fi
 echo "================================================================"
 echo ""
 echo "  Tarball:   $TARBALL"
@@ -588,8 +595,12 @@ if [[ "$BUILD_DEBS" -eq 1 ]] && compgen -G "$DIST_DIR/ctrl-exec*_${VERSION}_*.de
     echo "             $DIST_DIR/ctrl-exec-agent_${VERSION}_*.deb   (arch-specific: ships the C executor)"
     echo "             $DIST_DIR/ctrl-exec-dispatcher_${VERSION}_all.deb"
 fi
-echo "  Tag:       $TAG  ($COMMIT)"
-echo "  Next ver:  $NEXT_VERSION  (written to NEXT_VERSION)"
+if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "  Tag:       $TAG  (dry run - not created)"
+else
+    echo "  Tag:       $TAG  ($COMMIT)"
+    echo "  Next ver:  $NEXT_VERSION  (written to NEXT_VERSION)"
+fi
 echo ""
 echo "  To build a branded package from this release:"
 echo "    ./make-release.sh --brand <name> --from $TARBALL"
