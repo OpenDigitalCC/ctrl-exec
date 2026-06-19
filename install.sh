@@ -489,6 +489,29 @@ install_agent() {
     sed -i "s|our \$VERSION = .*;|our \$VERSION = '$RELEASE_VERSION';|" \
         "$BIN_DIR/ctrl-exec-agent"
 
+    # Privileged executor (C). The agent uses it when 'executor_socket' is set in
+    # agent.conf (privilege separation). Compiled here from src/; needs gcc and
+    # libcap-dev. If absent, the agent still works in its legacy direct-run mode.
+    mkdir -p /usr/local/sbin
+    if command -v gcc &>/dev/null; then
+        if gcc -O2 -o /usr/local/sbin/ctrl-exec-exec \
+               "$SOURCE_DIR/src/ctrl-exec-exec.c" -lcap; then
+            chmod 755 /usr/local/sbin/ctrl-exec-exec
+            info "Built ctrl-exec-exec -> /usr/local/sbin/ctrl-exec-exec"
+            if [[ "$HAS_SYSTEMD" == true ]]; then
+                safe_install 644 "$SOURCE_DIR/etc/ctrl-exec-exec.service" \
+                    "$SYSTEMD_DIR/ctrl-exec-exec.service"
+                systemctl daemon-reload
+            fi
+        else
+            warn "Could not compile ctrl-exec-exec (install libcap-dev). Privilege"
+            warn "separation will be unavailable until it is built."
+        fi
+    else
+        warn "gcc not found - skipping ctrl-exec-exec build. Install gcc + libcap-dev"
+        warn "and re-run to enable privilege separation (executor_socket)."
+    fi
+
     # Config directory - readable by agent group, not world
     mkdir -p "$AGENT_CONF_DIR"
     chmod 750 "$AGENT_CONF_DIR"

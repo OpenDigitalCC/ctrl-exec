@@ -5,25 +5,23 @@ After=network.target
 
 [Service]
 Type=simple
-# Root by design: this is the privileged half of the privilege-separated agent.
-# It re-validates each request against its own root-owned config and drops to the
+# Root by design: the privileged half of the privilege-separated agent. It
+# re-validates each request against its own root-owned config and drops to the
 # script's profile (run_as, capabilities, control/state dirs read-only) before
 # exec. The unprivileged front-end (ctrl-exec-agent.service) connects over the
-# socket below; the executor chowns the socket to that user, mode 0600, and an
-# SO_PEERCRED check rejects any other connector.
-ExecStart=/usr/local/sbin/ctrl-exec-exec serve /run/ctrl-exec-agent/exec.sock \
+# socket; the executor chowns it to that user, mode 0600, with an SO_PEERCRED
+# check rejecting any other connector.
+ExecStart=/usr/sbin/ctrl-exec-exec serve /run/ctrl-exec-agent/exec.sock \
     /etc/ctrl-exec-agent/agent.conf /etc/ctrl-exec-agent/scripts.conf ctrl-exec-agent
 Restart=on-failure
 RestartSec=5
 
-# The socket lives in a runtime dir the front-end can traverse.
 RuntimeDirectory=ctrl-exec-agent
 RuntimeDirectoryMode=0755
 
 # Deliberately NOT sandboxed: the executor needs CAP_SYS_ADMIN (mount namespace),
-# setuid, and full filesystem reach to do its job. Its protection is its small,
-# audited surface plus the peer-cred check - not an OS sandbox. Enable this unit
-# only alongside 'executor_socket' in agent.conf.
+# setuid, and full filesystem reach. Its protection is its small audited surface
+# plus the peer-cred check. Enable only alongside 'executor_socket' in agent.conf.
 
 [Install]
 WantedBy=multi-user.target

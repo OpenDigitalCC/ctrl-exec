@@ -6,6 +6,8 @@ Build-Depends:
  debhelper-compat (= 13),
  perl,
  python3,
+ gcc,
+ libcap-dev,
 Standards-Version: 4.7.2
 Homepage: https://github.com/OpenDigitalCC/ctrl-exec
 Rules-Requires-Root: no
@@ -26,10 +28,11 @@ Description: mTLS remote script execution - shared library
  own - install ctrl-exec or ctrl-exec-agent.
 
 Package: ctrl-exec-agent
-Architecture: all
+Architecture: any
 Depends:
  ${misc:Depends},
  ${perl:Depends},
+ ${shlibs:Depends},
  ctrl-exec-common (= ${source:Version}),
  libio-socket-ssl-perl,
  openssl,

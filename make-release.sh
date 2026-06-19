@@ -75,9 +75,10 @@ build_debs() {
     fi
 
     info "Building .deb packages (version $version)..."
-    # -d: pure-Perl Architecture: all packages compile nothing, so the
-    # build-essential implied build-dependency is not required.
-    dpkg-buildpackage -us -uc -b -d || die ".deb build failed."
+    # The agent package compiles the C executor, so the build needs gcc +
+    # libcap-dev (declared in Build-Depends). Enforce the build-deps (no -d) so a
+    # missing toolchain fails early and clearly rather than mid-compile.
+    dpkg-buildpackage -us -uc -b || die ".deb build failed."
 
     mkdir -p "$dist"
     local moved=0 f
@@ -94,7 +95,7 @@ build_debs() {
     # (the .deb is committed; keeping every past version would bloat the repo).
     # Mirrors the tarball cleanup further down. Untracks any that were committed.
     local removed=0 old
-    for old in "$dist"/ctrl-exec*_all.deb \
+    for old in "$dist"/ctrl-exec*.deb \
                "$dist"/ctrl-exec_*.buildinfo \
                "$dist"/ctrl-exec_*.changes; do
         [[ -e "$old" ]] || continue
@@ -529,9 +530,9 @@ echo ""
 echo "  Tarball:   $TARBALL"
 echo "  Checksum:  ${TARBALL}.sha256"
 echo "  SBOM:      sbom.json"
-if [[ "$BUILD_DEBS" -eq 1 ]] && compgen -G "$DIST_DIR/ctrl-exec*_${VERSION}_all.deb" >/dev/null; then
+if [[ "$BUILD_DEBS" -eq 1 ]] && compgen -G "$DIST_DIR/ctrl-exec*_${VERSION}_*.deb" >/dev/null; then
     echo "  Packages:  $DIST_DIR/ctrl-exec-common_${VERSION}_all.deb"
-    echo "             $DIST_DIR/ctrl-exec-agent_${VERSION}_all.deb"
+    echo "             $DIST_DIR/ctrl-exec-agent_${VERSION}_*.deb   (arch-specific: ships the C executor)"
     echo "             $DIST_DIR/ctrl-exec-dispatcher_${VERSION}_all.deb"
 fi
 echo "  Tag:       $TAG  ($COMMIT)"
@@ -546,7 +547,7 @@ if [[ "$AUTO" -eq 1 ]]; then
     git add -u                             # stages tarball/deb deletions from git rm above
     git add sbom.json VERSION NEXT_VERSION debian/changelog
     git add -f "$TARBALL" "${TARBALL}.sha256"
-    [[ "$BUILD_DEBS" -eq 1 ]] && git add "$DIST_DIR"/ctrl-exec*_"${VERSION}"_all.deb 2>/dev/null
+    [[ "$BUILD_DEBS" -eq 1 ]] && git add "$DIST_DIR"/ctrl-exec*_"${VERSION}"_*.deb 2>/dev/null
     git commit -m "release: $VERSION"
     git push
     git push origin "$TAG"
@@ -559,7 +560,7 @@ else
     echo "       git add sbom.json VERSION NEXT_VERSION debian/changelog"
     echo "       git add -f $TARBALL ${TARBALL}.sha256"
     if [[ "$BUILD_DEBS" -eq 1 ]]; then
-        echo "       git add $DIST_DIR/ctrl-exec*_${VERSION}_all.deb"
+        echo "       git add $DIST_DIR/ctrl-exec*_${VERSION}_*.deb"
     fi
     echo "       git commit -m 'release: $VERSION'"
     echo ""

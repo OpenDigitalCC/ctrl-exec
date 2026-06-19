@@ -29,6 +29,10 @@ override_dh_auto_install:
 	  sed "s|'UNINSTALLED'|'$(DEB_VERSION)'|" bin/$$b > debian/tmp/usr/bin/$$b; \
 	  chmod 755 debian/tmp/usr/bin/$$b; \
 	done
+	# Privileged executor (C). dh_auto_build compiled it from src/ via the
+	# Makefile; install the root daemon to /usr/sbin.
+	install -d debian/tmp/usr/sbin
+	install -m755 src/ctrl-exec-exec debian/tmp/usr/sbin/ctrl-exec-exec
 	# Example configs -> /usr/share/ctrl-exec/examples (postinst seeds /etc).
 	install -d debian/tmp/usr/share/ctrl-exec/examples
 	install -m644 etc/agent.conf.example        debian/tmp/usr/share/ctrl-exec/examples/
@@ -63,3 +67,7 @@ override_dh_auto_install:
 override_dh_installsystemd:
 	dh_installsystemd --no-enable --no-start
 	dh_installsystemd --no-enable --no-start --name=ctrl-exec-api
+	# The privileged executor unit (agent package). Like the API unit, the named
+	# file debian/ctrl-exec-agent.ctrl-exec-exec.service needs --name to be picked
+	# up. Not enabled/started by default - the operator opts into privsep.
+	dh_installsystemd --no-enable --no-start --name=ctrl-exec-exec

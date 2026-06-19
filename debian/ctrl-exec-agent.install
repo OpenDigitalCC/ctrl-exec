@@ -1,4 +1,5 @@
 usr/bin/ctrl-exec-agent
+usr/sbin/ctrl-exec-exec
 usr/share/ctrl-exec/examples/agent.conf.example
 usr/share/ctrl-exec/examples/scripts.conf.example
 usr/share/ctrl-exec/examples/ctrl-exec-demonstrator.sh
