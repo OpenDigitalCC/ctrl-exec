@@ -97,8 +97,17 @@ sub _validate_config {
 
             $p->{caps} = [ grep { length } split /[,\s]+/, ($p->{caps} // '') ];
             for my $c (@{ $p->{caps} }) {
-                croak "Profile '$pname': invalid capability '$c' (expected CAP_*) in '$path'"
-                    unless $c =~ /^CAP_[A-Z0-9_]+$/;
+                next if $c =~ /^CAP_[A-Z0-9_]+$/;
+                # A token starting with '#' almost always means the operator put
+                # an inline comment after the value - which this format does not
+                # support (whole-line comments only). Say so, instead of the bare
+                # "invalid capability '#'".
+                my $hint = $c =~ /^#/
+                    ? " - inline '# ...' comments are not supported on value lines;"
+                      . " put the comment on its own line"
+                    : '';
+                croak "Profile '$pname': invalid capability '$c' (expected CAP_*) "
+                    . "in '$path'$hint";
             }
 
             $p->{writable} = [ grep { length } split /:/, ($p->{writable} // '') ];

@@ -39,6 +39,13 @@ subtest 'no_new_privileges can be turned off' => sub {
 subtest 'invalid profile fields croak at load' => sub {
     eval { Exec::Agent::Config::load_config(agent_conf("[profile x]\ncaps = NOPE\n")) };
     like $@, qr/invalid capability/, 'bad cap name';
+    # An inline '# ...' comment after a value is a common mistake (the format
+    # supports whole-line comments only); the error must say so, not just
+    # "invalid capability '#'".
+    eval { Exec::Agent::Config::load_config(
+        agent_conf("[profile x]\ncaps = CAP_CHOWN  # and more\n")) };
+    like $@, qr/inline '# \.\.\.' comments are not supported/,
+        'inline comment on caps line gets an instructive hint';
     eval { Exec::Agent::Config::load_config(agent_conf("[profile x]\nwritable = rel/path\n")) };
     like $@, qr/writable path must be absolute/, 'relative writable';
     eval { Exec::Agent::Config::load_config(agent_conf("[profile x]\nrun_as = 1bad name\n")) };

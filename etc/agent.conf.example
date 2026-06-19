@@ -1,5 +1,9 @@
 # ctrl-exec-agent configuration
 # /etc/ctrl-exec-agent/agent.conf
+#
+# Comments must be on their own line (starting with '#'). An inline '# ...' after
+# a value is NOT stripped - it becomes part of the value. So write a profile's
+# caps as `caps = CAP_CHOWN, CAP_KILL`, with any note on a separate line above.
 
 port = 7443
 cert = /etc/ctrl-exec-agent/agent.crt
