@@ -13,6 +13,15 @@ in the repository, and the complete detail is in the git log. Unreleased work on
 `main` may be ahead of the latest version below.
 :::
 
+0.12.0
+: The HTTP API runs unprivileged - a dedicated `ctrl-exec` service user, not root,
+  so a compromise of the network-facing server cannot sign certificates or touch
+  the control plane. Per-profile `writable` paths are now enforced as a read-only
+  filesystem, and the certificate lifecycle is hands-free (renewal and rotation on
+  a timer). Plus a round of security hardening - CSR validation, request-size
+  limits, environment sanitisation, owner-gated status, fail-closed auth - and the
+  shipped auth hook now allows by default so a fresh install runs out of the box.
+
 0.11.1
 : Built-in cert rotation - the agent handles dispatcher-serial rotation as a
   first-class control-plane operation. Clearer upgrade messaging and profile

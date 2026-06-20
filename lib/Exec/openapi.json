@@ -3,7 +3,7 @@
   "info": {
     "title": "ctrl-exec API",
     "description": "REST gateway for the ctrl-exec mTLS remote script execution system. Provides programmatic access to the run, ping, discovery, and health endpoints. Authentication is delegated to the configured auth hook on the ctrl-exec host; pass credentials in the request body. Under load the server may return 503 on any endpoint when it is at its concurrent-request cap (api_max_children).",
-    "version": "0.11.2",
+    "version": "0.12.0",
     "license": {
       "name": "AGPL-3.0-only"
     },
@@ -43,7 +43,7 @@
                 "schema": { "$ref": "#/components/schemas/HealthResponse" },
                 "example": {
                   "ok": true,
-                  "version": "0.11.2"
+                  "version": "0.12.0"
                 }
               }
             }
@@ -113,7 +113,7 @@
                       "status": "ok",
                       "rtt": "12ms",
                       "expiry": "Jan 15 12:00:00 2026 GMT",
-                      "version": "0.11.2"
+                      "version": "0.12.0"
                     },
                     {
                       "host": "web-02",
@@ -298,7 +298,7 @@
         "required": ["ok", "version"],
         "properties": {
           "ok":      { "type": "boolean", "enum": [true] },
-          "version": { "type": "string", "description": "ctrl-exec version string", "example": "0.11.2" }
+          "version": { "type": "string", "description": "ctrl-exec version string", "example": "0.12.0" }
         }
       },
       "PingRequest": {
@@ -334,7 +334,7 @@
           "status":  { "type": "string", "enum": ["ok", "error"] },
           "rtt":     { "type": "string", "description": "Round-trip time, e.g. 12ms.", "example": "12ms" },
           "expiry":  { "type": "string", "description": "Agent certificate expiry (openssl notAfter format). Present when status is ok.", "example": "Jan 15 12:00:00 2026 GMT" },
-          "version": { "type": "string", "description": "Agent version string. Present when status is ok.", "example": "0.11.2" },
+          "version": { "type": "string", "description": "Agent version string. Present when status is ok.", "example": "0.12.0" },
           "error":   { "type": "string", "description": "Error message. Present when status is error.", "example": "read timeout after 60s" }
         }
       },
@@ -507,7 +507,7 @@
               "web-01": {
                 "host": "web-01",
                 "status": "ok",
-                "version": "0.11.2",
+                "version": "0.12.0",
                 "scripts": [
                   { "name": "deploy", "path": "/opt/ctrl-exec-scripts/deploy.sh", "executable": true },
                   { "name": "status", "path": "/opt/ctrl-exec-scripts/status.sh", "executable": true }

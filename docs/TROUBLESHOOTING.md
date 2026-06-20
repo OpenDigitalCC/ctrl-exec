@@ -20,7 +20,7 @@ obvious until someone ran into them.
 ## Security profiles: the mental model
 
 A profile is the security context a script runs under - which user, which Linux
-capabilities, and (in future) which paths are writable. Profiles are the feature
+capabilities, and which paths are writable. Profiles are the feature
 most often misunderstood on first contact, because whether they apply at all
 depends on one setting.
 

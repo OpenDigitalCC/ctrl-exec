@@ -5,7 +5,7 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
-## unreleased
+## 0.12.0 — unprivileged API, enforced writable profiles, hands-free certs, hardening
 
 - **Changed** the HTTP API server to run as a dedicated unprivileged `ctrl-exec`
   service user instead of root. The dispatcher private key is now owned by that
@@ -16,10 +16,9 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
   renewal is driven solely by `ced maintain` (root timer). An RCE in the
   network-facing JSON server is therefore not root and cannot sign certificates.
   The installer/postinst create the user and migrate the key ownership;
-  `setup-ctrl-exec` and `rotate-cert` chown newly generated keys.
-
-## 0.11.2 — security hardening; config errors fail clearly instead of looping
-
+  `setup-ctrl-exec` and `rotate-cert` chown newly generated keys. The shared
+  runtime dirs are setgid (`2770`) and lock files `0660` so the root CLI and the
+  unprivileged API can share the registry, run records, and locks.
 - **Changed** the bundled OpenAPI spec to match the code: added the `/`,
   `/openapi.json`, `/openapi-live.json` routes, `RunResponse.reqid`,
   `HostCapabilities.tags`/`reported_hostname`, 404s on `/run` and `/ping`, the
@@ -29,8 +28,6 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
   default 64) returns `503` above the cap, and the agent (`max_children`, default
   256) closes the connection above the cap on top of its per-IP rate limit -
   bounding an aggregate connection flood.
-- **Fixed** a registry lost-update in `edit_agent` too (now under the same lock as
-  the other read-modify-write updates).
 - **Changed** the agent renew timer to decide via `ctrl-exec-agent cert-staged`
   (which reads `cert_staging_path` from config) instead of a hard-coded path, so a
   staging-path override is honoured. Added `cert-promote`/`maintain` failure
@@ -59,8 +56,9 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
   response writer, removing the drifted hand-rolled status-phrase tables (413 and
   500 were inconsistent across them). No wire change beyond the phrase text.
 - **Fixed** a registry lost-update: concurrent read-modify-write of an agent
-  record (serial status, expiry, tags - which a maintenance run can touch at
-  once) could drop a change. A registry-wide lock now serialises those updates.
+  record (serial status, expiry, tags, and `edit_agent` - which a maintenance run
+  or an operator edit can touch at once) could drop a change. A registry-wide lock
+  now serialises all of those updates.
 - **Changed** the agent accept loop to reap all finished children per accept
   (not one), so request handlers cannot accumulate as zombies under bursty load -
   matching the API and executor loops.

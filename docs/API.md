@@ -348,10 +348,12 @@ including `action`, `script`, `hosts`, `username`, `token`, and
 `source_ip`. Exit codes follow the same convention as the CLI: 0 = authorised,
 1 = denied, 2 = bad credentials, 3 = insufficient privilege.
 
-If no hook is configured, behaviour is governed by `api_auth_default` in
-`ctrl-exec.conf`. The default is `deny` - all requests return 403 until a
-hook is configured. Set `api_auth_default = allow` only on isolated networks
-where no credential checking is required.
+The install ships an `auth-hook` that allows every request (`exit 0`), so the API
+authorises out of the box on the default localhost bind - replace it with real
+rules for production. If you remove the hook entirely, behaviour falls back to
+`api_auth_default` in `ctrl-exec.conf`, whose default is `deny` - all requests
+return 403 until a hook is configured. Set `api_auth_default = allow` only on
+isolated networks where no credential checking is required.
 
 Always use `ENVEXEC_ARGS_JSON` in hook scripts to inspect script arguments.
 `ENVEXEC_ARGS` (space-joined) is deprecated and unreliable for arguments
