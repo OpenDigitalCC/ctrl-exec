@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ctrl-exec API",
-    "description": "REST gateway for the ctrl-exec mTLS remote script execution system. Provides programmatic access to the run, ping, discovery, and health endpoints. Authentication is delegated to the configured auth hook on the ctrl-exec host; pass credentials in the request body.",
+    "description": "REST gateway for the ctrl-exec mTLS remote script execution system. Provides programmatic access to the run, ping, discovery, and health endpoints. Authentication is delegated to the configured auth hook on the ctrl-exec host; pass credentials in the request body. Under load the server may return 503 on any endpoint when it is at its concurrent-request cap (api_max_children).",
     "version": "0.11.2",
     "license": {
       "name": "AGPL-3.0-only"
@@ -43,11 +43,41 @@
                 "schema": { "$ref": "#/components/schemas/HealthResponse" },
                 "example": {
                   "ok": true,
-                  "version": "0.2.8"
+                  "version": "0.11.2"
                 }
               }
             }
           }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "summary": "API index",
+        "description": "Human-readable index of the API with links to the OpenAPI documents.",
+        "operationId": "getIndex",
+        "responses": {
+          "200": { "description": "Index document" }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "summary": "OpenAPI specification (static)",
+        "description": "The bundled OpenAPI 3.1 specification for this API.",
+        "operationId": "getOpenapi",
+        "responses": {
+          "200": { "description": "OpenAPI specification" }
+        }
+      }
+    },
+    "/openapi-live.json": {
+      "get": {
+        "summary": "OpenAPI specification (live)",
+        "description": "The OpenAPI specification augmented at request time with the scripts and schema sidecars discovered across the live agent fleet (host/script enums).",
+        "operationId": "getOpenapiLive",
+        "responses": {
+          "200": { "description": "OpenAPI specification with live host/script data" }
         }
       }
     },
@@ -83,7 +113,7 @@
                       "status": "ok",
                       "rtt": "12ms",
                       "expiry": "Jan 15 12:00:00 2026 GMT",
-                      "version": "0.2.8"
+                      "version": "0.11.2"
                     },
                     {
                       "host": "web-02",
@@ -97,7 +127,8 @@
             }
           },
           "400": { "$ref": "#/components/responses/BadRequest" },
-          "403": { "$ref": "#/components/responses/Forbidden" }
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
     },
@@ -171,6 +202,7 @@
           },
           "400": { "$ref": "#/components/responses/BadRequest" },
           "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
           "409": { "$ref": "#/components/responses/Conflict" }
         }
       }
@@ -188,6 +220,14 @@
             "schema": { "type": "string", "pattern": "^[a-f0-9]+$" },
             "description": "The request id returned by POST /run.",
             "example": "a1b2c3d4e5f60718"
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Optional 'Bearer <token>' credential. When an auth hook is configured it can owner-gate the result (returned only to an authorised caller); an unauthorised request gets 404 so the run's existence is not disclosed. With no hook, possession of the unguessable reqid is the capability.",
+            "example": "Bearer mytoken"
           }
         ],
         "responses": {
@@ -258,7 +298,7 @@
         "required": ["ok", "version"],
         "properties": {
           "ok":      { "type": "boolean", "enum": [true] },
-          "version": { "type": "string", "description": "ctrl-exec version string", "example": "0.2.8" }
+          "version": { "type": "string", "description": "ctrl-exec version string", "example": "0.11.2" }
         }
       },
       "PingRequest": {
@@ -294,7 +334,7 @@
           "status":  { "type": "string", "enum": ["ok", "error"] },
           "rtt":     { "type": "string", "description": "Round-trip time, e.g. 12ms.", "example": "12ms" },
           "expiry":  { "type": "string", "description": "Agent certificate expiry (openssl notAfter format). Present when status is ok.", "example": "Jan 15 12:00:00 2026 GMT" },
-          "version": { "type": "string", "description": "Agent version string. Present when status is ok.", "example": "0.2.8" },
+          "version": { "type": "string", "description": "Agent version string. Present when status is ok.", "example": "0.11.2" },
           "error":   { "type": "string", "description": "Error message. Present when status is error.", "example": "read timeout after 60s" }
         }
       },
@@ -356,9 +396,10 @@
       },
       "RunResponse": {
         "type": "object",
-        "required": ["ok", "results"],
+        "required": ["ok", "reqid", "results"],
         "properties": {
           "ok":      { "type": "boolean", "enum": [true] },
+          "reqid":   { "type": "string", "description": "The run id; poll GET /status/{reqid} for the stored record." },
           "results": { "type": "array", "items": { "$ref": "#/components/schemas/RunResult" } }
         }
       },
@@ -415,9 +456,11 @@
           "complete":  { "type": "boolean", "description": "True when no host is still pending." },
           "pending":   { "type": "array", "items": { "type": "string" }, "description": "Hosts still running (async only)." },
           "hosts": {
-            "type": "object",
-            "description": "Async only. Map of hostname to its current status.",
-            "additionalProperties": { "$ref": "#/components/schemas/HostStatus" }
+            "description": "Async: a map of hostname to its current status. Sync: the array of hostnames the run was dispatched to.",
+            "oneOf": [
+              { "type": "object", "additionalProperties": { "$ref": "#/components/schemas/HostStatus" } },
+              { "type": "array", "items": { "type": "string" } }
+            ]
           },
           "results":   { "type": "array", "items": { "$ref": "#/components/schemas/RunResult" }, "description": "Sync only. Per-host results as returned by /run." },
           "completed": { "type": "integer", "description": "Sync only. Unix time the run completed." }
@@ -445,6 +488,8 @@
           "host":    { "type": "string" },
           "status":  { "type": "string", "enum": ["ok", "error"] },
           "version": { "type": "string" },
+          "reported_hostname": { "type": "string", "description": "The host the agent reports itself as (may differ from the registry key)." },
+          "tags":    { "type": "object", "additionalProperties": { "type": "string" }, "description": "Agent-reported tags, cached in the registry on discovery." },
           "scripts": { "type": "array", "items": { "$ref": "#/components/schemas/ScriptEntry" } },
           "error":   { "type": "string" }
         }
@@ -462,7 +507,7 @@
               "web-01": {
                 "host": "web-01",
                 "status": "ok",
-                "version": "0.2.8",
+                "version": "0.11.2",
                 "scripts": [
                   { "name": "deploy", "path": "/opt/ctrl-exec-scripts/deploy.sh", "executable": true },
                   { "name": "status", "path": "/opt/ctrl-exec-scripts/status.sh", "executable": true }

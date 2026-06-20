@@ -7,6 +7,11 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 
 ## 0.11.2 — security hardening; config errors fail clearly instead of looping
 
+- **Changed** the bundled OpenAPI spec to match the code: added the `/`,
+  `/openapi.json`, `/openapi-live.json` routes, `RunResponse.reqid`,
+  `HostCapabilities.tags`/`reported_hostname`, 404s on `/run` and `/ping`, the
+  `/status` `Authorization` header + owner-gating, and a polymorphic
+  `StatusResponse.hosts`; refreshed the stale version examples.
 - **Added** a concurrent-handler cap to the API server (`api_max_children`,
   default 64): connections beyond the cap get `503` instead of forking another
   process, bounding a connection flood (the API can be plain-HTTP and runs as
