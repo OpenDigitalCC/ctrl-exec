@@ -3,10 +3,10 @@ package Exec::Agent::Schema;
 use strict;
 use warnings;
 use JSON       qw(decode_json);
-use File::Temp qw();
 use Carp       qw();
 
-use Exec::Log qw();
+use Exec::Log    qw();
+use Exec::Digest qw();
 
 
 # Implements the agent side of the script schema sidecar contract
@@ -108,13 +108,7 @@ sub _read_sidecar {
 # existing dependency-light approach (no Digest::SHA on minimal installs).
 # Returns undef if the digest cannot be computed.
 sub _sha256_hex {
-    my ($data) = @_;
-    my ($fh, $path) = File::Temp::tempfile(UNLINK => 1);
-    binmode $fh;
-    print {$fh} $data;
-    close $fh;
-    my $out = `openssl dgst -sha256 \Q$path\E 2>/dev/null`;
-    return $out =~ /([0-9a-f]{64})/ ? $1 : undef;
+    return Exec::Digest::sha256_hex($_[0]);
 }
 
 1;

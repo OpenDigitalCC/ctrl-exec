@@ -9,6 +9,7 @@ use JSON        qw(encode_json decode_json);
 use POSIX       qw(strftime);
 use Carp        qw(croak);
 use Exec::CertInfo qw();
+use Exec::Digest   qw();
 use Exec::FileUtil qw(slurp);
 use Sys::Hostname qw(hostname);
 use Exec::Pairing::Identity qw();
@@ -799,17 +800,7 @@ sub _write_file {
 # CSR content independently so no extra round-trip is required.
 # The operator verifies both displays match before approving.
 sub _pairing_code {
-    my ($csr_pem) = @_;
-    # Use openssl for SHA256 - consistent with agent side and avoids
-    # Digest::SHA dependency. Both sides must produce identical output.
-    require File::Temp;
-    my ($tmp_fh, $tmp_path) = File::Temp::tempfile(UNLINK => 1);
-    print $tmp_fh $csr_pem;
-    close $tmp_fh;
-    my $digest = `openssl dgst -sha256 -binary \Q$tmp_path\E 2>/dev/null`;
-    die "openssl dgst failed\n" unless length($digest) == 32;
-    my $n = unpack('N', substr($digest, 0, 4)) % 1_000_000;
-    return sprintf '%06d', $n;
+    return Exec::Digest::pairing_code($_[0]);
 }
 
 # Extract the notAfter date from a PEM cert string (via Exec::CertInfo).
