@@ -168,6 +168,11 @@ sub sign_csr (%opts) {
     # would sign any subject with any key/algorithm. Reject weak keys and weak
     # self-signatures, confirm the CSR is self-consistent, and - when the caller
     # supplies expected_cn - bind the subject CN to that identity.
+    # By design, pairing does NOT pass expected_cn (renewal does): at pairing the
+    # operator approves an unknown CSR after verifying a code + host/IP, and trust
+    # is keyed on the cert SERIAL and the out-of-band dispatcher_id, never the CN -
+    # so the CN is intentionally unconstrained there. If any future feature keys
+    # trust or attribution on the agent cert CN, bind it at pairing too.
     _validate_csr($csr_path, $expected_cn);
 
     my $cert_tmp  = File::Temp->new(SUFFIX => '.crt', DIR => $ca_dir, UNLINK => 1);

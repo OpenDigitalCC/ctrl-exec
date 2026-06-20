@@ -755,7 +755,12 @@ static void handle_conn(int cfd, config_t *cfg, const char *scripts_conf,
     if (bad) { buf_add(&err, "executor: malformed request\n", 28); ecode = -1; }
     else {
         /* Re-derive path + profile from our OWN cached root-owned config; never
-         * trust the message. */
+         * trust the message. There is a check-then-exec window between
+         * path_in_dirs() (realpath) below and the later execve, but it is not
+         * reachable: scripts.conf, script_dirs and the script directories are all
+         * root-owned (per docs/SECURITY.md), so the unprivileged front-end cannot
+         * swap a symlink in that window. (Hardening option: open O_PATH|O_NOFOLLOW
+         * once and fexecve the same fd.) */
         char spath[VALLEN], pname[NAMELEN];
         profile_t *p = NULL;
         if (!find_script(scripts_conf, script, spath, sizeof(spath), pname, sizeof(pname))) {

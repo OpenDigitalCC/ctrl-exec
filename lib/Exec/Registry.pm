@@ -249,6 +249,9 @@ sub resolve_dispatch ($refs, %opts) {
     my $dir = $opts{registry_dir} // $REGISTRY_DIR;
     my (@hosts, @unknown);
     for my $ref (@$refs) {
+        # IPv4-only: ctrl-exec addresses agents by IPv4 or hostname (ip_allowed
+        # rejects ':'), so this "host:port" split assumes no colons in the host.
+        # A bare IPv6 literal would misparse - unsupported by design.
         my ($name, $oport) = $ref =~ /^(.+):(\d+)$/ ? ($1, $2) : ($ref, undef);
         my $record = eval { get_agent(hostname => $name, registry_dir => $dir) };
         unless ($record) { push @unknown, $ref; next; }
