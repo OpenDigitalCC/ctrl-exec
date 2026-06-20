@@ -560,13 +560,18 @@ else
 fi
 
 TAG="v${VERSION}"
+# The tag must point at the "release: $VERSION" commit (the one that sets
+# VERSION), NOT the current HEAD - so it is created AFTER that commit below.
+# Creating it here would tag the prior release commit (the bug that left
+# v0.12.0/v0.12.1 each one commit too early). Decide here only whether to make
+# it at all; create it after the commit.
+TAG_SKIP=0
 if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "DRY RUN: would tag $TAG (skipped)."
+    info "DRY RUN: would tag $TAG on the release commit (skipped)."
+    TAG_SKIP=1
 elif git rev-parse "$TAG" &>/dev/null 2>&1; then
     warn "Tag $TAG already exists - skipping tag creation."
-else
-    git tag -a "$TAG" -m "Release $VERSION"
-    info "Tagged: $TAG"
+    TAG_SKIP=1
 fi
 
 MAJOR=$(echo "$VERSION" | cut -d. -f1)
@@ -597,7 +602,7 @@ fi
 if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "  Tag:       $TAG  (dry run - not created)"
 else
-    echo "  Tag:       $TAG  ($COMMIT)"
+    echo "  Tag:       $TAG  (created on the release commit below)"
     echo "  Next ver:  $NEXT_VERSION  (written to NEXT_VERSION)"
 fi
 echo ""
@@ -614,6 +619,10 @@ elif [[ "$AUTO" -eq 1 ]]; then
     git add -f "$TARBALL" "${TARBALL}.sha256"
     [[ "$BUILD_DEBS" -eq 1 ]] && git add "$DIST_DIR"/ctrl-exec*_"${VERSION}"_*.deb 2>/dev/null
     git commit -m "release: $VERSION"
+    if [[ "$TAG_SKIP" -eq 0 ]]; then
+        git tag -a "$TAG" -m "Release $VERSION"   # now points at the release commit
+        info "Tagged: $TAG ($(git rev-parse --short HEAD))"
+    fi
     git push
     git push origin "$TAG"
     info "Released and pushed."
@@ -629,7 +638,10 @@ else
     fi
     echo "       git commit -m 'release: $VERSION'"
     echo ""
-    echo "  2. Push commits and tag:"
+    echo "  2. Tag the release commit (must come AFTER the commit above):"
+    echo "       git tag -a $TAG -m 'Release $VERSION'"
+    echo ""
+    echo "  3. Push commits and tag:"
     echo "       git push && git push origin $TAG"
     echo ""
     if [[ "$BUILD_DEBS" -eq 1 ]]; then
