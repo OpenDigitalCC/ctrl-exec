@@ -6,6 +6,7 @@ use File::Temp qw(tempfile tempdir);
 use File::Basename qw(dirname);
 use File::Path qw(make_path);
 use Carp qw(croak);
+use Exec::CertInfo qw();
 use Exec::FileUtil qw(slurp);
 use Exec::Log qw();
 
@@ -626,12 +627,7 @@ sub _write_file {
 }
 
 sub _cert_expiry {
-    my ($cert_path) = @_;
-    my $out = `openssl x509 -noout -enddate -in \Q$cert_path\E 2>/dev/null`;
-    return unless defined $out && $out =~ /notAfter=(.+)/;
-    my $date_str = $1;
-    chomp $date_str;
-    return $date_str;
+    return Exec::CertInfo::expiry_from_path($_[0]);
 }
 
 1;

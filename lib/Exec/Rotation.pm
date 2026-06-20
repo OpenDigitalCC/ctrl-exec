@@ -5,6 +5,7 @@ use warnings;
 use JSON        qw(encode_json decode_json);
 use POSIX       qw(strftime);
 use Carp        qw(croak);
+use Exec::CertInfo qw();
 use Exec::FileUtil qw(slurp);
 
 use Exec::CA       qw();
@@ -458,10 +459,8 @@ sub _read_cert_serial {
 
 sub _cert_days_remaining {
     my ($cert_path) = @_;
-    my $out = `openssl x509 -noout -enddate -in \Q$cert_path\E 2>/dev/null`;
-    return unless defined $out && $out =~ /notAfter=(.+)/;
-    my $date_str = $1;
-    chomp $date_str;
+    my $date_str = Exec::CertInfo::expiry_from_path($cert_path);
+    return unless defined $date_str;
 
     # Parse openssl date: "Mon DD HH:MM:SS YYYY GMT"
     my %months = qw(Jan 0 Feb 1 Mar 2 Apr 3 May 4 Jun 5

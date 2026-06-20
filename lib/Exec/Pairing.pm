@@ -8,6 +8,7 @@ use Fcntl       qw(:flock);
 use JSON        qw(encode_json decode_json);
 use POSIX       qw(strftime);
 use Carp        qw(croak);
+use Exec::CertInfo qw();
 use Exec::FileUtil qw(slurp);
 use Sys::Hostname qw(hostname);
 use Exec::Pairing::Identity qw();
@@ -811,19 +812,9 @@ sub _pairing_code {
     return sprintf '%06d', $n;
 }
 
-# Extract the notAfter date from a PEM cert string.
-# Writes to a temp file, calls openssl x509 -noout -enddate.
-# Returns the date string, or undef on failure.
+# Extract the notAfter date from a PEM cert string (via Exec::CertInfo).
 sub _cert_expiry_from_pem {
-    my ($cert_pem) = @_;
-    my ($fh, $path) = tempfile(SUFFIX => '.crt', UNLINK => 1);
-    print $fh $cert_pem;
-    close $fh;
-    my $out = `openssl x509 -noout -enddate -in \Q$path\E 2>/dev/null`;
-    return unless defined $out && $out =~ /notAfter=(.+)/;
-    my $date = $1;
-    chomp $date;
-    return $date;
+    return Exec::CertInfo::expiry_from_pem($_[0]);
 }
 
 1;

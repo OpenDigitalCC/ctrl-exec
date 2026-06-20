@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use JSON  qw(encode_json decode_json);
 use Carp  qw(croak);
+use Exec::CertInfo qw();
 
 use Exec::Log qw();
 
@@ -915,14 +916,7 @@ sub _renew_one {
 
 # Extract notAfter date string from a PEM cert via openssl subprocess.
 sub _extract_expiry {
-    my ($cert_pem) = @_;
-    require File::Temp;
-    my ($fh, $path) = File::Temp::tempfile(UNLINK => 1);
-    print $fh $cert_pem;
-    close $fh;
-    my $out = `openssl x509 -noout -enddate -in "$path" 2>/dev/null`;
-    chomp $out;
-    return $out =~ /^notAfter=(.+)$/ ? $1 : undef;
+    return Exec::CertInfo::expiry_from_pem($_[0]);
 }
 
 1;
