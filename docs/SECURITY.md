@@ -346,7 +346,7 @@ Agent-side hook
 ```
 /etc/ctrl-exec/ca.key              0600  root         CA private key
 /etc/ctrl-exec/ca.crt              0644  root         CA certificate
-/etc/ctrl-exec/dispatcher.key      0600  root         dispatcher private key
+/etc/ctrl-exec/dispatcher.key      0600  ctrl-exec    dispatcher private key (API service user reads it; root also can)
 /etc/ctrl-exec/dispatcher.crt      0644  root         dispatcher certificate
 /etc/ctrl-exec/auth-hook           0755  root         Auth hook executable
 /etc/ctrl-exec/                    0750  root:ctrl-exec
@@ -369,7 +369,7 @@ Agent-side hook
 /var/lib/ctrl-exec/pairing/        0770  root:ctrl-exec
 /var/lib/ctrl-exec/agents/         0770  root:ctrl-exec
 /var/lib/ctrl-exec/locks/          0770  root:ctrl-exec
-/var/lib/ctrl-exec/runs/           0750  root:ctrl-exec          dispatcher run/status records
+/var/lib/ctrl-exec/runs/           0770  root:ctrl-exec          dispatcher run/status records (API writes as a group member)
 /var/lib/ctrl-exec/runs/*.json     0640  root:ctrl-exec
 
 /var/lib/ctrl-exec-agent/runs/     0750  ctrl-exec-agent         async result store (agent side)
@@ -380,9 +380,14 @@ Agent-side hook
 The `ctrl-exec-agent` system user has no login shell and no home directory.
 The `ctrl-exec` group grants non-root operators read access to the registry and
 run records, so the monitoring commands (`list-agents`, `status`, `list-locks`)
-run without sudo. Operations that use the dispatcher or CA private key - `run`,
-`ping`, `maintain`, `pairing-mode`, `rotate-cert`, `approve`/`deny`, `setup-*` -
-still require root, since both keys are `0600 root`.
+run without sudo. Operations that use a private key still require root: `run` and
+`ping` read the dispatcher key (`0600 ctrl-exec` - readable only by the API
+service user and root, never the `ctrl-exec` group), and `maintain`,
+`pairing-mode`, `rotate-cert`, `approve`/`deny` and `setup-*` use the CA key
+(`0600 root`). The API server runs as the unprivileged `ctrl-exec` user, which
+owns the dispatcher key; it never needs the CA key (cert renewal is driven by
+`ced maintain`, which runs as root), so an RCE in the network-facing API is not
+root and cannot sign new certificates.
 
 Both run stores hold script stdout/stderr at rest, the same sensitivity as a
 live run's output. They are not world-readable (records `0640`, directories

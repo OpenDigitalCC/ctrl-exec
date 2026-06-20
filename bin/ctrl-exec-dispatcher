@@ -719,10 +719,11 @@ sub mode_setup_dispatcher {
 
     print "Generating dispatcher certificate...\n";
     my $result = Exec::CA::generate_dispatcher_cert(
-        ca_dir => $ca_dir,
-        cert   => $disp_crt,
-        key    => $disp_key,
-        force  => 1,
+        ca_dir    => $ca_dir,
+        cert      => $disp_crt,
+        key       => $disp_key,
+        force     => 1,
+        key_owner => $config->{service_user} // 'ctrl-exec',
     );
     print "dispatcher cert created:\n";
     print "  Key:  $result->{key}\n";

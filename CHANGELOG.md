@@ -5,6 +5,19 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
+## unreleased
+
+- **Changed** the HTTP API server to run as a dedicated unprivileged `ctrl-exec`
+  service user instead of root. The dispatcher private key is now owned by that
+  user (still `0600`, so the `ctrl-exec` group / operators still cannot read it -
+  they continue to `sudo` for `run`/`ping`); the API reads its own key to dispatch
+  and is in the `ctrl-exec` group for the runtime dirs. It never needs the CA key:
+  `/ping` no longer triggers cert renewal (renewal would need to sign), so
+  renewal is driven solely by `ced maintain` (root timer). An RCE in the
+  network-facing JSON server is therefore not root and cannot sign certificates.
+  The installer/postinst create the user and migrate the key ownership;
+  `setup-ctrl-exec` and `rotate-cert` chown newly generated keys.
+
 ## 0.11.2 — security hardening; config errors fail clearly instead of looping
 
 - **Changed** the bundled OpenAPI spec to match the code: added the `/`,

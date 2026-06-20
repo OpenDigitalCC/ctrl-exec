@@ -230,10 +230,14 @@ The HTTP API exposes the same operations on `localhost:7445`.
 curl -s http://localhost:7445/health
 ```
 
-Unlike the CLI, the API denies requests by default. To allow them on a trusted
-network set `api_auth_default = allow` in `/etc/ctrl-exec/ctrl-exec.conf`, or
-configure an auth hook to restrict them; either is read at startup, so restart
-the service after changing it.
+The API uses the same auth hook as the CLI, and the shipped hook allows every
+request (step 1), so this works out of the box on the localhost bind. Edit
+`/etc/ctrl-exec/auth-hook` to restrict it. If you remove the hook entirely, the
+API falls back to `api_auth_default` (default: `deny`) - set it to `allow` to
+permit requests without a hook. Either is read at startup, so restart the service
+after changing it.
+
+The API server runs as the unprivileged `ctrl-exec` user, not root.
 
 
 ## Platform Support

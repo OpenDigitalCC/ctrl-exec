@@ -166,6 +166,11 @@ sub ping_all {
     my $config = $opts{config} or croak "config required";
     my $reqid  = $opts{reqid}  // gen_reqid();
     my $port   = $opts{port}   // $DEFAULT_PORT;
+    # Whether to trigger cert renewal for aging certs as a side effect of pinging.
+    # Renewal signs a CSR, which needs the root-owned CA key - so callers without
+    # it (the unprivileged API server) pass renew => 0. The root CLI/maintenance
+    # paths leave it at the default.
+    my $renew  = $opts{renew}  // 1;
 
     croak "hosts must be an arrayref" unless ref $hosts eq 'ARRAY';
 
@@ -196,7 +201,7 @@ sub ping_all {
         # has a renewed cert staged (awaiting its next restart): its live expiry
         # still reads old, so re-renewing each run would just re-sign and re-stage
         # redundantly until the agent restarts.
-        if (($result->{status} // '') eq 'ok' && $result->{expiry}
+        if ($renew && ($result->{status} // '') eq 'ok' && $result->{expiry}
                 && !$result->{staged}) {
             my $cert_days = $config->{cert_days} // 365;
             if (_renewal_due($result->{expiry}, $cert_days)) {

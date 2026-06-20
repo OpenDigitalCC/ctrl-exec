@@ -146,6 +146,30 @@ subtest '_renewal_due: respects cert_days configuration' => sub {
     ok  Exec::Engine::_renewal_due($expiry, 730), 'due with cert_days=730';
 };
 
+# --- ping_all renew gating ---
+# The de-rooted API server cannot sign (no CA key), so it pings with renew => 0.
+# Stub the fan-out to yield one agent with a past-half-life cert, and _renew_one
+# to record whether renewal was attempted.
+subtest 'ping_all: renew => 0 skips renewal even for a due cert' => sub {
+    require Exec::Engine;
+    my $due = _epoch_to_openssl(time() + 100 * 86400);   # < half-life at cert_days=365
+    no warnings 'redefine';
+    local *Exec::Engine::_fan_out = sub {
+        return [ { name => 'h1', target => 'h1:7443',
+                   result => { status => 'ok', expiry => $due, staged => 0 } } ];
+    };
+    my $attempts = 0;
+    local *Exec::Engine::_renew_one = sub { $attempts++; return { status => 'ok' } };
+
+    $attempts = 0;
+    Exec::Engine::ping_all(hosts => ['h1'], config => { cert_days => 365 }, renew => 1);
+    ok $attempts, 'renew => 1 renews a due cert (CLI/maintenance path)';
+
+    $attempts = 0;
+    Exec::Engine::ping_all(hosts => ['h1'], config => { cert_days => 365 }, renew => 0);
+    is $attempts, 0, 'renew => 0 does not renew, even when due (API path)';
+};
+
 # Format an epoch as an OpenSSL notAfter string: "Jun  7 16:28:00 2028 GMT"
 sub _epoch_to_openssl {
     my ($epoch) = @_;

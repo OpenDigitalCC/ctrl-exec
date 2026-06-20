@@ -8,6 +8,14 @@ case "$1" in
             addgroup --system ctrl-exec
         fi
 
+        # Service user the API server runs as (member of the ctrl-exec group). It
+        # owns the dispatcher private key (still 0600) so the API need not run as
+        # root; group members get read-only registry/run access only.
+        if ! getent passwd ctrl-exec >/dev/null; then
+            adduser --system --no-create-home --ingroup ctrl-exec \
+                --shell /usr/sbin/nologin ctrl-exec
+        fi
+
         # Config directory.
         mkdir -p /etc/ctrl-exec
         chmod 750 /etc/ctrl-exec
@@ -31,6 +39,19 @@ case "$1" in
             cp /usr/share/ctrl-exec/examples/auth-hook.example \
                /etc/ctrl-exec/auth-hook
             chmod 755 /etc/ctrl-exec/auth-hook
+        fi
+
+        # Migration: hand an existing dispatcher private key to the ctrl-exec user
+        # (still 0600) so the now-unprivileged API can read it. setup-ctrl-exec /
+        # rotate-cert do this for newly generated keys; this covers keys created
+        # before the de-rooting. Resolve the configured key path, default to
+        # dispatcher.key, and chown only if it exists.
+        key_path=$(sed -n 's/^[[:space:]]*key[[:space:]]*=[[:space:]]*//p' \
+                   /etc/ctrl-exec/ctrl-exec.conf 2>/dev/null | head -n1)
+        [ -n "$key_path" ] || key_path=/etc/ctrl-exec/dispatcher.key
+        if [ -f "$key_path" ]; then
+            chown ctrl-exec:ctrl-exec "$key_path"
+            chmod 600 "$key_path"
         fi
         ;;
 esac

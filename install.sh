@@ -18,6 +18,7 @@ set -euo pipefail
 AGENT_USER="ctrl-exec-agent"
 AGENT_GROUP="ctrl-exec-agent"
 EXEC_GROUP="ctrl-exec"
+EXEC_USER="ctrl-exec"
 
 BIN_DIR="/usr/local/bin"
 LIB_DIR="/usr/local/lib/ctrl-exec"
@@ -623,6 +624,10 @@ install_ctrl_exec_dispatcher() {
     info "Installing the dispatcher CLI..."
 
     create_system_group "$EXEC_GROUP"
+    # Service user the API server runs as (a member of the ctrl-exec group). It
+    # owns the dispatcher private key (still 0600) so the API can read it without
+    # running as root; group members get read-only registry/run access only.
+    create_system_user "$EXEC_USER" "$EXEC_GROUP" "ctrl-exec dispatcher service user"
 
     safe_install 755 "$SOURCE_DIR/bin/ctrl-exec-dispatcher" "$BIN_DIR/ctrl-exec-dispatcher"
     sed -i "s|use lib \"\$Bin/../lib\";|use lib \"$LIB_DIR\";|" \
@@ -669,6 +674,19 @@ install_ctrl_exec_dispatcher() {
         info "Auth hook installed at $EXEC_CONF_DIR/auth-hook (always-authorise default)."
     else
         info "Auth hook already exists, not overwriting."
+    fi
+
+    # Migration: hand an existing dispatcher private key to the service user (still
+    # 0600) so the unprivileged API can read it. New keys are chowned at generation
+    # by setup-ctrl-exec/rotate-cert; this covers a re-run over a pre-de-rooting
+    # install. Resolve the configured key path, default to dispatcher.key.
+    local key_path
+    key_path=$(sed -n 's/^[[:space:]]*key[[:space:]]*=[[:space:]]*//p' \
+               "$EXEC_CONF_DIR/ctrl-exec.conf" 2>/dev/null | head -n1)
+    [[ -n "$key_path" ]] || key_path="$EXEC_CONF_DIR/dispatcher.key"
+    if [[ -f "$key_path" ]]; then
+        chown "$EXEC_USER":"$EXEC_GROUP" "$key_path"
+        chmod 600 "$key_path"
     fi
 
     # Certificate maintenance timer: periodically pings agents (triggering renewal

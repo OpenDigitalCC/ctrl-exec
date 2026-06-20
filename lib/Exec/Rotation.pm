@@ -374,11 +374,12 @@ sub _do_rotation {
     # have received the new serial.
     eval {
         Exec::CA::generate_dispatcher_cert(
-            ca_dir => $ca_dir,
-            cert   => $disp_crt,
-            key    => $disp_key,
-            days   => $cert_days,
-            force  => 1,
+            ca_dir    => $ca_dir,
+            cert      => $disp_crt,
+            key       => $disp_key,
+            days      => $cert_days,
+            force     => 1,
+            key_owner => $config->{service_user} // 'ctrl-exec',
         );
     };
     if ($@) {

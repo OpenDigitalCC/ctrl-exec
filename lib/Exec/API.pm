@@ -323,6 +323,8 @@ sub _handle_ping {
     my $results = Exec::Engine::ping_all(
         hosts  => $resolved->{hosts},
         config => $config,
+        renew  => 0,   # the API server runs unprivileged and cannot sign (no CA key);
+                       # cert renewal is driven by `ced maintain` (root) instead.
     );
 
     _send_json($conn, 200, { ok => JSON::true, results => $results });

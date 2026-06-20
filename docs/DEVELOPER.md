@@ -108,7 +108,7 @@ dispatcher host (`/etc/ctrl-exec/`)
 ca.key          CA private key (0600, root only, never leaves this host)
 ca.crt          CA certificate (distributed to agents during pairing)
 ca.serial       Serial counter for issued certs
-dispatcher.key  the dispatcher's own private key (0600)
+dispatcher.key  the dispatcher's own private key (0600, owned by the ctrl-exec service user)
 dispatcher.crt  the dispatcher's own cert, signed by CA
 auth-hook       Auth hook executable (0755)
 ```
@@ -225,7 +225,9 @@ Functions:
   with the CA, writes `dispatcher.crt` (825 days), removes the CSR.
   Guards: dies if CA does not exist, dies if `dispatcher.crt` already exists
   unless `force => 1`. Called by `bin/ced setup-ctrl-exec`.
-  Options: `ca_dir`, `force`.
+  Options: `ca_dir`, `force`, `days`, `bits`, `cert`, `key`, and `key_owner` (a
+  user name; if set, the new key is chowned to it - the dispatcher passes
+  `ctrl-exec` so the unprivileged API can read its `0600` key).
 
 
 ### `Exec::Pairing`
@@ -1190,13 +1192,17 @@ ownership.
 Entry point for the HTTP API server. Loads config, calls `Exec::API::run`.
 Installed as a systemd service (`ctrl-exec-api.service`).
 
-The service runs as `root:ctrl-exec` with `ProtectSystem=strict` and
-`ReadWritePaths=/var/lib/ctrl-exec`. (It runs as root because it reads the
-dispatcher's `0600 root` private key to dispatch to agents over mTLS - see the
-de-rooting note in the security docs.) The `ctrl-exec` group is created by the
-installer and grants the **read-only** CLI commands (`list-agents`, `status`)
-without sudo to users added to it; operations that use the dispatcher or CA key
-still require sudo.
+The service runs as the unprivileged `ctrl-exec:ctrl-exec` service user (NOT
+root) with `ProtectSystem=strict` and `ReadWritePaths=/var/lib/ctrl-exec`. That
+user owns the dispatcher private key (`0600 ctrl-exec`), so the API can read it to
+dispatch to agents over mTLS without being root; it is a member of the `ctrl-exec`
+group for the runtime dirs (registry, runs, locks). It never needs the CA key -
+cert renewal would need to sign, so `/ping` runs with `renew => 0` and renewal is
+driven by `ced maintain` (root timer) instead. An RCE in this network-facing JSON
+server is therefore not root and cannot sign certificates. The same `ctrl-exec`
+group grants the **read-only** CLI commands (`list-agents`, `status`) without sudo
+to users added to it; operations that use the dispatcher or CA key still require
+sudo.
 
 
 ## Request/Response Wire Format
@@ -1459,7 +1465,8 @@ auth hook token
   token appearing in `ps` output.
 
 file permissions
-: CA key: 0600 root. dispatcher cert/key: 0600 root. Agent cert/key: 0640
+: CA key: 0600 root. dispatcher key: 0600 ctrl-exec (the API service user; root
+  also reads it). dispatcher cert: 0644 root. Agent cert/key: 0640
   root:ctrl-exec-agent. Scripts: 0750 root:ctrl-exec-agent. The
   `ctrl-exec-agent` system user has no login shell and no home directory.
   Runtime dirs: 0770 root:ctrl-exec.

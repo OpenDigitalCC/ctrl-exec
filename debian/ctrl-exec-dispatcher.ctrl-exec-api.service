@@ -14,8 +14,14 @@ ExecStart=/usr/bin/ctrl-exec-api
 Restart=on-failure
 RestartSec=5
 
-# Run as ctrl-exec group so it can read certs and write to runtime dirs
-User=root
+# Run as the unprivileged ctrl-exec service user - NOT root. It owns the
+# dispatcher private key (0600), so it can read it to mTLS to agents, and it is in
+# the ctrl-exec group for the runtime dirs (registry, runs, locks). An RCE in this
+# network-facing JSON server is therefore not root. Cert renewal (which needs the
+# root-owned CA key) is not done here - it runs from `ced maintain` (root timer).
+# Note: api_port defaults to 7445 (unprivileged); to bind a port < 1024 add
+# AmbientCapabilities=CAP_NET_BIND_SERVICE.
+User=ctrl-exec
 Group=ctrl-exec
 
 # Security hardening

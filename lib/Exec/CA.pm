@@ -89,6 +89,18 @@ sub generate_dispatcher_cert {
 
     _genrsa($disp_key, $bits);
 
+    # Hand the private key to the service user the API runs as, so the unprivileged
+    # API server can read it. Still mode 0600 from _genrsa - only this user and
+    # root can read it, never the ctrl-exec group, so group members (operators)
+    # still cannot. key_owner is a user name; its primary group is used too.
+    if (my $owner = $opts{key_owner}) {
+        my ($uid, $gid) = (getpwnam($owner))[2, 3];
+        if (defined $uid) {
+            chown $uid, (defined $gid ? $gid : -1), $disp_key
+                or warn "ctrl-exec: could not chown $disp_key to $owner: $!\n";
+        }
+    }
+
     _run_or_die(
         'openssl', 'req', '-new',
         '-key',  $disp_key,
