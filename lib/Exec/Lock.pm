@@ -46,7 +46,7 @@ sub check_available {
             push @conflicts, "$host:$script";
         }
         # We don't hold the lock - release immediately
-        flock $fh, LOCK_UN;   # LOCK_UN = 8
+        flock $fh, LOCK_UN;
         close $fh;
     }
 
@@ -136,7 +136,7 @@ sub release {
     croak "handles must be an arrayref" unless ref $handles eq 'ARRAY';
 
     for my $fh (@$handles) {
-        flock $fh, LOCK_UN;   # LOCK_UN
+        flock $fh, LOCK_UN;
         close $fh;
     }
 

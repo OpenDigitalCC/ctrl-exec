@@ -84,7 +84,7 @@ sub run {
 
     while (1) {
         my $conn = $server->accept or next;
-        my $peer = $use_tls ? $conn->peerhost : $conn->peerhost;
+        my $peer = $conn->peerhost;
         $peer //= 'unknown';
 
         if ($live >= $max_children) {

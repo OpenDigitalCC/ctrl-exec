@@ -637,8 +637,8 @@ sub mode_self_ping {
 
     # Attempt mTLS connection to self on loopback
     print "Connecting to 127.0.0.1:$port...\n";
-    require IO::Socket::SSL;
-    require JSON;
+    require IO::Socket::SSL;   # lazy-loaded so the CLI modes stay light; JSON is
+                               # already imported at the top.
 
     my $conn = IO::Socket::SSL->new(
         PeerHost           => '127.0.0.1',

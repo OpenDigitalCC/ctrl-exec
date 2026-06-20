@@ -4,7 +4,6 @@ use strict;
 use warnings;
 use JSON  qw(encode_json decode_json);
 use Carp  qw(croak);
-use POSIX qw(WNOHANG);
 
 use Exec::Log qw();
 

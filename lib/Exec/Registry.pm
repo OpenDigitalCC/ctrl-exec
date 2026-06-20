@@ -189,28 +189,6 @@ sub list_agents {
     return [ sort { $a->{hostname} cmp $b->{hostname} } @agents ];
 }
 
-# Resolve an operator-supplied agent name to the address dispatch should
-# connect to, honouring the record's lookup_by field:
-#   lookup_by 'ip'       -> stored ip (falls back to hostname if ip is empty)
-#   lookup_by 'hostname' -> stored hostname (default)
-# Returns the supplied name unchanged when it is not a registered agent (or
-# the registry cannot be read), preserving support for ad-hoc targets. This
-# lets dispatch reach an agent by its stored IP when its reported hostname
-# does not resolve from the dispatcher.
-#
-# Required opts:
-#   hostname => $str
-sub resolve_host {
-    my (%opts) = @_;
-    my $name = $opts{hostname};
-    croak "hostname required" unless defined $name && length $name;
-    my $dir  = $opts{registry_dir} // $REGISTRY_DIR;
-
-    my $record = eval { get_agent(hostname => $name, registry_dir => $dir) };
-    return $name unless $record;
-    return _record_address($record, $name);
-}
-
 # Resolve an operator-supplied agent name to the full connect target
 # ("address" or "address:port") dispatch should use. Like resolve_host, but
 # also appends the agent's stored operational port when it differs from the

@@ -5,6 +5,8 @@ use warnings;
 use JSON   qw(encode_json);
 use POSIX  qw(WIFEXITED WEXITSTATUS EINTR EAGAIN);
 use Fcntl  qw(F_GETFL F_SETFL O_NONBLOCK);
+use Exec::Log qw();   # _write_stdin logs a stdin-timeout; load it directly rather
+                      # than relying on a caller having pulled it in first.
 
 
 # Execute a script with no shell, capture stdout/stderr/exit.
@@ -120,12 +122,6 @@ sub _write_stdin {
         }
         $offset += $n;
     }
-}
-
-sub _slurp {
-    my ($fh) = @_;
-    local $/;
-    return scalar <$fh> // '';
 }
 
 sub _slurp_utf8 {
