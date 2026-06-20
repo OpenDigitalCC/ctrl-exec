@@ -353,7 +353,10 @@ MSG
         }
         # Parent: release fd without SSL shutdown so child owns it
         $conn->close(SSL_no_shutdown => 1);
-        waitpid -1, WNOHANG();
+        # Reap ALL finished children, not just one, so exited handlers do not
+        # accumulate as zombies under a burst-then-idle load (matches the API and
+        # executor accept loops).
+        1 while waitpid(-1, WNOHANG()) > 0;
     }
 }
 

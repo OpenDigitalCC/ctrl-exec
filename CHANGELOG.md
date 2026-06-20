@@ -7,6 +7,12 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 
 ## 0.11.2 — security hardening; config errors fail clearly instead of looping
 
+- **Fixed** a registry lost-update: concurrent read-modify-write of an agent
+  record (serial status, expiry, tags - which a maintenance run can touch at
+  once) could drop a change. A registry-wide lock now serialises those updates.
+- **Changed** the agent accept loop to reap all finished children per accept
+  (not one), so request handlers cannot accumulate as zombies under bursty load -
+  matching the API and executor loops.
 - **Changed** `GET /status/{reqid}` so it can be owner-gated. The API now records
   who submitted each run and runs a `status` auth-hook check that exposes the
   reqid and the submitter (`ENVEXEC_REQID`, `ENVEXEC_SUBMITTER[_IP]`); the caller

@@ -6,6 +6,7 @@ use JSON      qw(encode_json decode_json);
 use File::Path qw(make_path);
 use File::Temp qw(tempfile);
 use File::Basename qw(dirname);
+use Fcntl     qw(:flock);
 use Carp      qw(croak);
 
 
@@ -74,6 +75,24 @@ sub register_agent {
 #   serial           => $hex      (update stored serial)
 #   serial_broadcast => $iso8601
 #   serial_confirmed => $iso8601
+# Serialize registry read-modify-write so concurrent updates do not lost-update.
+# The atomic temp+rename in _write_atomic gives torn-free reads, but two
+# processes that load the same record, change different fields and write both
+# would lose one change. A single registry-wide lock is enough: registry writes
+# (rotation broadcast, renewal expiry, discovery tags) are infrequent, not hot.
+# Best-effort: if the lock file cannot be opened the update proceeds unlocked.
+sub _locked {
+    my ($dir, $code) = @_;
+    open my $lk, '>>', "$dir/.registry.lock" or return $code->();
+    flock $lk, LOCK_EX;
+    my @r = eval { $code->() };
+    my $err = $@;
+    flock $lk, LOCK_UN;
+    close $lk;
+    die $err if $err;
+    return wantarray ? @r : $r[0];
+}
+
 sub update_agent_serial_status {
     my (%opts) = @_;
     my $hostname = $opts{hostname} or croak "hostname required";
@@ -81,17 +100,19 @@ sub update_agent_serial_status {
     my $dir      = $opts{registry_dir} // $REGISTRY_DIR;
     my $path     = "$dir/$hostname.json";
 
-    my $record = -f $path
-        ? (eval { decode_json(_slurp($path)) } // {})
-        : {};
+    _locked($dir, sub {
+        my $record = -f $path
+            ? (eval { decode_json(_slurp($path)) } // {})
+            : {};
 
-    $record->{hostname}      = $hostname;
-    $record->{serial_status} = $status;
-    $record->{dispatcher_serial}  = $opts{serial}           if defined $opts{serial};
-    $record->{serial_broadcast}   = $opts{serial_broadcast} if defined $opts{serial_broadcast};
-    $record->{serial_confirmed}   = $opts{serial_confirmed} if defined $opts{serial_confirmed};
+        $record->{hostname}      = $hostname;
+        $record->{serial_status} = $status;
+        $record->{dispatcher_serial}  = $opts{serial}           if defined $opts{serial};
+        $record->{serial_broadcast}   = $opts{serial_broadcast} if defined $opts{serial_broadcast};
+        $record->{serial_confirmed}   = $opts{serial_confirmed} if defined $opts{serial_confirmed};
 
-    _write_atomic($path, encode_json($record));
+        _write_atomic($path, encode_json($record));
+    });
 }
 
 # Update the cert expiry for an existing agent record. Merges the new expiry
@@ -109,14 +130,16 @@ sub update_expiry {
     my $dir      = $opts{registry_dir} // $REGISTRY_DIR;
     my $path     = "$dir/$hostname.json";
 
-    my $record = -f $path
-        ? (eval { decode_json(_slurp($path)) } // {})
-        : {};
+    _locked($dir, sub {
+        my $record = -f $path
+            ? (eval { decode_json(_slurp($path)) } // {})
+            : {};
 
-    $record->{hostname} = $hostname;
-    $record->{expiry}   = $opts{expiry};
+        $record->{hostname} = $hostname;
+        $record->{expiry}   = $opts{expiry};
 
-    _write_atomic($path, encode_json($record));
+        _write_atomic($path, encode_json($record));
+    });
 }
 
 # Refresh the cached tags for an existing agent. Tags are reported live by the
@@ -134,11 +157,12 @@ sub update_agent_tags {
     my $path     = "$dir/$hostname.json";
 
     return 0 unless -f $path;
-    my $record = eval { decode_json(_slurp($path)) } or return 0;
-
-    $record->{tags} = (ref $opts{tags} eq 'HASH' ? $opts{tags} : {});
-    _write_atomic($path, encode_json($record));
-    return 1;
+    return _locked($dir, sub {
+        my $record = eval { decode_json(_slurp($path)) } or return 0;
+        $record->{tags} = (ref $opts{tags} eq 'HASH' ? $opts{tags} : {});
+        _write_atomic($path, encode_json($record));
+        return 1;
+    });
 }
 
 # Return a list of all registered agents as an arrayref of hashrefs,
