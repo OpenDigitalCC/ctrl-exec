@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
-use Test::More tests => 23;
+use Test::More tests => 24;
 use File::Temp qw(tempdir);
 use IPC::Open2  qw(open2);
 use FindBin    qw($Bin);
@@ -68,6 +68,16 @@ sub stop_holder {
 {
     eval { Exec::Lock::release(hosts => [], script => 'x') };
     like $@, qr/handles required/, 'release: dies without handles';
+}
+
+# A new lock file is group-writable, so the root CLI and the unprivileged
+# ctrl-exec API (both in the ctrl-exec group via the setgid dir) can each flock
+# locks the other created.
+{
+    my $res  = Exec::Lock::acquire(hosts => ['gw'], script => 'gw', lock_dir => $dir);
+    my $mode = (stat "$dir/gw--gw.lock")[2] & 07777;
+    ok $mode & 0020, sprintf('a new lock file is group-writable (mode %04o)', $mode);
+    Exec::Lock::release(handles => $res->{handles}) if $res->{ok};
 }
 
 # --- check_available: no conflict ---

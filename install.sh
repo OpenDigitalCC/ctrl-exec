@@ -645,19 +645,29 @@ install_ctrl_exec_dispatcher() {
     chown root:"$EXEC_GROUP" "$PAIRING_DIR"
     chmod 770 "$PAIRING_DIR"
 
+    # Shared runtime dirs. setgid (2770) so files created by the root CLI and by
+    # the unprivileged ctrl-exec API alike inherit the ctrl-exec group - each can
+    # then read (and, for locks, flock) what the other wrote.
+
     # Agent registry - written by approve, read by list-agents and API
     mkdir -p "$AGENTS_DIR"
     chown root:"$EXEC_GROUP" "$AGENTS_DIR"
-    chmod 770 "$AGENTS_DIR"
+    chmod 2770 "$AGENTS_DIR"
 
     # Lock files - written during dispatch
     mkdir -p "$LOCKS_DIR"
     chown root:"$EXEC_GROUP" "$LOCKS_DIR"
-    chmod 770 "$LOCKS_DIR"
+    chmod 2770 "$LOCKS_DIR"
 
     mkdir -p "$RUNS_DIR"
     chown root:"$EXEC_GROUP" "$RUNS_DIR"
-    chmod 770 "$RUNS_DIR"
+    chmod 2770 "$RUNS_DIR"
+
+    # Migrate files created before the API was de-rooted (root-group) to the
+    # ctrl-exec group so the now-unprivileged API can read run records and flock
+    # locks the root CLI created.
+    chgrp -R "$EXEC_GROUP" "$AGENTS_DIR" "$LOCKS_DIR" "$RUNS_DIR" 2>/dev/null || true
+    find "$LOCKS_DIR" -type f -exec chmod g+w {} + 2>/dev/null || true
 
     # ctrl-exec config
     if [[ ! -f "$EXEC_CONF_DIR/ctrl-exec.conf" ]]; then

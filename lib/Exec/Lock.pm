@@ -193,8 +193,15 @@ sub _lock_path {
 
 sub _open_lock_file {
     my ($path) = @_;
+    my $existed = -e $path;
     open my $fh, '>>', $path
         or croak "Cannot open lock file '$path': $!";
+    # A lock is acquired by opening the file for write and flock-ing it. The root
+    # CLI and the unprivileged API server (both in the ctrl-exec group, via the
+    # setgid lock dir) must each be able to flock a lock the other created, so make
+    # a freshly-created lock file group-writable. Only the creator can chmod, and
+    # it is harmless if the file already existed (its creator set this).
+    chmod 0660, $path unless $existed;
     return $fh;
 }
 

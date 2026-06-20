@@ -22,11 +22,21 @@ case "$1" in
         chown root:ctrl-exec /etc/ctrl-exec
 
         # Runtime state: pairing queue, agent registry, locks, run results.
+        # setgid (2770) on the shared dirs so files created by the root CLI and by
+        # the unprivileged ctrl-exec API both inherit the ctrl-exec group - each can
+        # then read (and, for locks, flock) what the other wrote.
         for d in pairing agents locks runs; do
             mkdir -p "/var/lib/ctrl-exec/$d"
-            chmod 770 "/var/lib/ctrl-exec/$d"
+            chmod 2770 "/var/lib/ctrl-exec/$d"
             chown root:ctrl-exec "/var/lib/ctrl-exec/$d"
         done
+
+        # Migrate files created before the API was de-rooted (root-group) to the
+        # ctrl-exec group so the now-unprivileged API can read run records and
+        # flock locks the root CLI created.
+        chgrp -R ctrl-exec /var/lib/ctrl-exec/agents /var/lib/ctrl-exec/locks \
+                           /var/lib/ctrl-exec/runs 2>/dev/null || true
+        find /var/lib/ctrl-exec/locks -type f -exec chmod g+w {} + 2>/dev/null || true
 
         # Seed config and example auth hook on first install only.
         if [ ! -f /etc/ctrl-exec/ctrl-exec.conf ]; then

@@ -367,9 +367,9 @@ Agent-side hook
 
 /var/lib/ctrl-exec/                0770  root:ctrl-exec
 /var/lib/ctrl-exec/pairing/        0770  root:ctrl-exec
-/var/lib/ctrl-exec/agents/         0770  root:ctrl-exec
-/var/lib/ctrl-exec/locks/          0770  root:ctrl-exec
-/var/lib/ctrl-exec/runs/           0770  root:ctrl-exec          dispatcher run/status records (API writes as a group member)
+/var/lib/ctrl-exec/agents/         2770  root:ctrl-exec          setgid: files inherit the ctrl-exec group
+/var/lib/ctrl-exec/locks/          2770  root:ctrl-exec          setgid; lock files 0660 so root CLI + ctrl-exec API can both flock
+/var/lib/ctrl-exec/runs/           2770  root:ctrl-exec          setgid; dispatcher run/status records
 /var/lib/ctrl-exec/runs/*.json     0640  root:ctrl-exec
 
 /var/lib/ctrl-exec-agent/runs/     0750  ctrl-exec-agent         async result store (agent side)

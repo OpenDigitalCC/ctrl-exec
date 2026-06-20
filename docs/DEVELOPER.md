@@ -1469,7 +1469,9 @@ file permissions
   also reads it). dispatcher cert: 0644 root. Agent cert/key: 0640
   root:ctrl-exec-agent. Scripts: 0750 root:ctrl-exec-agent. The
   `ctrl-exec-agent` system user has no login shell and no home directory.
-  Runtime dirs: 0770 root:ctrl-exec.
+  Runtime dirs: 0770 root:ctrl-exec; the shared agents/locks/runs dirs are setgid
+  (2770) so files the root CLI and the unprivileged ctrl-exec API create both
+  inherit the ctrl-exec group (lock files 0660 so either can flock them).
 
 systemd hardening
 : The agent unit sets `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`,
