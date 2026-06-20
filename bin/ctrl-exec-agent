@@ -772,7 +772,7 @@ sub handle_connection {
         handle_run($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial);
     }
     elsif ($method eq 'POST' && $path eq '/ping') {
-        handle_ping($conn, $body, $peer, $trusted, $peer_serial);
+        handle_ping($conn, $body, $peer, $config, $trusted, $peer_serial);
     }
     elsif ($method eq 'GET' && $path eq '/capabilities') {
         handle_capabilities($conn, $peer, $allowlist, $config, $trusted, $peer_serial, $schemas);
@@ -1106,7 +1106,7 @@ sub handle_run {
 }
 
 sub handle_ping {
-    my ($conn, $body, $peer, $trusted, $peer_serial) = @_;
+    my ($conn, $body, $peer, $config, $trusted, $peer_serial) = @_;
 
     my $dispatcher = Exec::Agent::AgentPairing::dispatcher_trusted($peer_serial, $trusted);
     unless (defined $dispatcher) {
@@ -1132,11 +1132,18 @@ sub handle_ping {
         REQID      => $reqid,
     });
 
+    # Report whether a renewed cert is already staged (awaiting the next restart
+    # to be adopted), so the dispatcher does not re-renew on every maintenance run
+    # while a cert sits staged - the live expiry still reads old until restart.
+    my $staged_path = ($config && $config->{cert_staging_path})
+                   // '/var/lib/ctrl-exec-agent/agent.crt.staged';
+
     _send_json($conn, {
         status  => 'ok',
         host    => _fqdn(),
         version => $VERSION,
         expiry  => $status->{expiry} // 'unknown',
+        staged  => (-f $staged_path ? JSON::true : JSON::false),
         reqid   => $reqid,
     });
 }

@@ -22,6 +22,10 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
   (which reads `cert_staging_path` from config) instead of a hard-coded path, so a
   staging-path override is honoured. Added `cert-promote`/`maintain` failure
   patterns to the LOGGING alert reference.
+- **Changed** the agent's ping response to report `staged` (a renewed cert is
+  staged, awaiting restart), and the dispatcher to skip re-renewal while one is
+  staged - the live expiry still reads old until restart, so this avoids
+  re-signing/re-staging redundantly on every maintenance run.
 - **Changed** the OpenWrt/procd init script to gate startup on pairing state (new
   `ctrl-exec-agent paired` check): an unpaired agent logs once and stays down
   instead of respawning forever (procd has no `RestartPreventExitStatus`).

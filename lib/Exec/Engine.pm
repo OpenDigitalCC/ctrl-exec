@@ -192,8 +192,12 @@ sub ping_all {
             // { status => 'error', error => 'no response from child' };
 
         # Trigger cert renewal if the cert is past half-life. Renewal connects to
-        # the resolved target, not the canonical name.
-        if (($result->{status} // '') eq 'ok' && $result->{expiry}) {
+        # the resolved target, not the canonical name. Skip when the agent already
+        # has a renewed cert staged (awaiting its next restart): its live expiry
+        # still reads old, so re-renewing each run would just re-sign and re-stage
+        # redundantly until the agent restarts.
+        if (($result->{status} // '') eq 'ok' && $result->{expiry}
+                && !$result->{staged}) {
             my $cert_days = $config->{cert_days} // 365;
             if (_renewal_due($result->{expiry}, $cert_days)) {
                 my ($rhost, $rport) = parse_host($f->{target}, $port);
