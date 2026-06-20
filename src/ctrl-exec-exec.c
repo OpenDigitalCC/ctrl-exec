@@ -45,6 +45,24 @@
 #include <sys/un.h>
 #include <sys/mount.h>
 #include <sys/capability.h>
+#include <sys/syscall.h>
+
+/* mount_setattr(2) bits for a recursive read-only remount (kernel 5.12+).
+ * Defined locally and called via syscall() so the binary depends on neither
+ * <linux/mount.h> nor a newer glibc symbol (keeping the libc floor low, as with
+ * the manual strtol). */
+#ifndef MOUNT_ATTR_RDONLY
+#define MOUNT_ATTR_RDONLY 0x00000001
+#endif
+#ifndef AT_RECURSIVE
+#define AT_RECURSIVE 0x8000
+#endif
+struct ce_mount_attr {
+    uint64_t attr_set;
+    uint64_t attr_clr;
+    uint64_t propagation;
+    uint64_t userns_fd;
+};
 
 /* Directories the executed action must never be able to modify: the agent's
  * control plane (config, allowlist, hook, certs, trusted map) and its state.
@@ -441,6 +459,19 @@ static char *take_field(const unsigned char *buf, uint32_t total, uint32_t *off,
     return s;
 }
 
+/* Recursively make a subtree read-only via mount_setattr(2). Returns 0, or -1
+ * with errno set (ENOSYS on a pre-5.12 kernel / arch without the syscall). */
+static int mount_ro_recursive(const char *path) {
+#ifdef SYS_mount_setattr
+    struct ce_mount_attr a;
+    memset(&a, 0, sizeof(a));
+    a.attr_set = MOUNT_ATTR_RDONLY;
+    return (int)syscall(SYS_mount_setattr, AT_FDCWD, path, AT_RECURSIVE, &a, sizeof(a));
+#else
+    (void)path; errno = ENOSYS; return -1;
+#endif
+}
+
 /* ---- privileged child setup ------------------------------------------- */
 /* Apply the profile in the forked child just before exec. Returns 0 or -1.
  * COMPILE-VERIFIED; the namespace/cap/setuid paths require root + CAP_SYS_ADMIN
@@ -470,6 +501,43 @@ static int apply_profile(const profile_t *p, int allow_unpriv) {
         if (mount(d, d, NULL, MS_BIND | MS_REC, NULL) != 0) { perror("bind"); return -1; }
         if (mount(NULL, d, NULL, MS_REMOUNT | MS_BIND | MS_REC | MS_RDONLY | MS_NOSUID, NULL) != 0) {
             perror("remount ro"); return -1;
+        }
+    }
+
+    /* Optional per-profile read-only filesystem. When the profile declares
+     * `writable` paths, make the whole mount namespace read-only and carve out
+     * exactly those paths read-write - a per-script ProtectSystem=strict, beyond
+     * DAC. Opt-in: profiles with no `writable` are unaffected. Fail closed: if the
+     * confinement cannot be established, do not run the action. Done here, before
+     * the cap drop and uid switch, while we still hold CAP_SYS_ADMIN as root. */
+    if (p->nwritable > 0) {
+        if (mount_ro_recursive("/") != 0) {
+            perror("executor: read-only filesystem (writable needs kernel >= 5.12)");
+            return -1;
+        }
+        for (int i = 0; i < p->nwritable; i++) {
+            const char *w = p->writable[i];
+            if (access(w, F_OK) != 0) continue;   /* declared path absent: nothing to carve */
+            if (mount(w, w, NULL, MS_BIND | MS_REC, NULL) != 0) {
+                perror("executor: bind writable"); return -1;
+            }
+            if (mount(NULL, w, NULL, MS_REMOUNT | MS_BIND, NULL) != 0) {
+                perror("executor: remount writable rw"); return -1;
+            }
+        }
+        /* Private scratch /tmp so a confined script has somewhere to write
+         * without declaring it (like systemd PrivateTmp). Best-effort. */
+        if (mount("tmpfs", "/tmp", "tmpfs", MS_NOSUID | MS_NODEV, NULL) != 0)
+            perror("executor: private /tmp (continuing)");
+        /* Re-assert control/state dirs read-only, in case a writable path covered
+         * one: an action must never be able to write the control plane. */
+        for (int i = 0; i < N_CONTROL_DIRS; i++) {
+            const char *d = CONTROL_DIRS[i];
+            if (access(d, F_OK) != 0) continue;
+            if (mount(d, d, NULL, MS_BIND | MS_REC, NULL) != 0) { perror("bind control"); return -1; }
+            if (mount(NULL, d, NULL, MS_REMOUNT | MS_BIND | MS_REC | MS_RDONLY | MS_NOSUID, NULL) != 0) {
+                perror("remount control ro"); return -1;
+            }
         }
     }
 

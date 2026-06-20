@@ -22,6 +22,12 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
   (which reads `cert_staging_path` from config) instead of a hard-coded path, so a
   staging-path override is honoured. Added `cert-promote`/`maintain` failure
   patterns to the LOGGING alert reference.
+- **Added** per-profile read-only filesystem enforcement (the `writable` field is
+  now enforced, no longer parsed-but-inert): when a profile sets `writable`, the
+  executor makes the action's whole filesystem read-only except those paths (a
+  per-script `ProtectSystem=strict`), with a private `/tmp`. Writes elsewhere fail
+  with `EROFS` even when the profile runs as root. Opt-in; requires a Linux kernel
+  >= 5.12 and fails closed on older kernels. Validated on-host.
 - **Changed** the agent's ping response to report `staged` (a renewed cert is
   staged, awaiting restart), and the dispatcher to skip re-renewal while one is
   staged - the live expiry still reads old until restart, so this avoids

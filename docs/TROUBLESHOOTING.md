@@ -142,13 +142,18 @@ If a script genuinely needs to write through restrictive ownership, add
 `CAP_DAC_OVERRIDE` to that profile deliberately - and treat it as a meaningful
 grant, because it removes filesystem permission as a guard rail.
 
-a note on the `writable` field
-: The `writable = /path:/path` field is currently parsed and validated but not
-  yet enforced - the executor does not bind those paths read-write or restrict
-  writes to them. Write access today is governed entirely by filesystem
-  ownership and the capability set, as above. Per-profile writable filesystems
-  are a planned hardening step; until then, do not rely on `writable` to confine
-  a script.
+the `writable` field - per-profile read-only filesystem
+: When a profile sets `writable = /path:/path`, the executor makes the action's
+  whole filesystem **read-only** except those paths (which are remounted
+  read-write), plus a private `/tmp`. It is a per-script `ProtectSystem=strict`:
+  the script may write only the declared paths, and writes elsewhere fail with
+  `EROFS` - even when the profile runs as root, because the action holds no
+  `CAP_SYS_ADMIN` to remount. The control/state dirs stay read-only regardless.
+  This is enforced only through the executor (it needs the mount namespace), and
+  requires a Linux kernel >= 5.12; on an older kernel a profile that declares
+  `writable` fails closed (the action will not run). A profile with no `writable`
+  is unaffected - write access then follows filesystem ownership and the
+  capability set, as above.
 
 
 ## Configuration pitfalls

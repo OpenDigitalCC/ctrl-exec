@@ -93,12 +93,11 @@ sub _validate_config {
     #
     # Normalise security profiles ([profile <name>] blocks): caps -> arrayref of
     # CAP_* names, writable -> arrayref of absolute dirs, run_as validated,
-    # no_new_privileges -> bool (default on). The executor enforces caps, run_as
-    # and no_new_privileges before exec; the `writable` field is parsed and
-    # validated here but is NOT yet enforced by the executor (only the control
-    # dirs are bind-remounted read-only). The implicit most-restrictive 'default'
-    # profile is supplied by the agent and need not be defined here (defining
-    # [profile default] overrides it).
+    # no_new_privileges -> bool (default on). The executor enforces all of these
+    # before exec: caps, run_as, no_new_privileges, and - when `writable` is set -
+    # a read-only filesystem with those paths carved out read-write (plus a private
+    # /tmp). The implicit most-restrictive 'default' profile is supplied by the
+    # agent and need not be defined here (defining [profile default] overrides it).
     if (ref $config->{profiles} eq 'HASH') {
         for my $pname (sort keys %{ $config->{profiles} }) {
             my $p = $config->{profiles}{$pname};

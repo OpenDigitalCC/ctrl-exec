@@ -211,24 +211,6 @@ MSG
         }
     }
 
-    # The `writable` profile field is parsed and validated but NOT yet enforced
-    # (only the control dirs are bind-remounted read-only). Warn so it is not
-    # mistaken for confinement: a profile declaring `writable` constrains nothing
-    # - writes obey filesystem ownership and the capability set. See
-    # docs/TROUBLESHOOTING.md and the usefulness-review note in TODO.
-    if (ref $config->{profiles} eq 'HASH') {
-        my @decl = grep {
-            ref $config->{profiles}{$_}{writable} eq 'ARRAY'
-                && @{ $config->{profiles}{$_}{writable} }
-        } sort keys %{ $config->{profiles} };
-        if (@decl) {
-            warn "ctrl-exec-agent: profile(s) " . join(', ', @decl) . " declare a "
-               . "'writable' path set, but writable is NOT yet enforced - it does "
-               . "not confine the script. Writes obey filesystem ownership and the "
-               . "capability set; do not rely on writable for confinement.\n";
-        }
-    }
-
     my $revoked_path = $config->{revoked_serials}
                     // '/etc/ctrl-exec-agent/revoked-serials';
     my $revoked = Exec::Agent::AgentPairing::load_revoked_serials(
