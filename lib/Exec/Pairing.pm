@@ -29,6 +29,22 @@ my $PAIRING_DIR = '/var/lib/ctrl-exec/pairing';
 # pre-read cap.
 my $MAX_PAIR_BODY = 64 * 1024;
 
+# Cache of the dispatcher's served-cert serial, keyed by path + mtime. approve
+# reads it on every approval; long-running interactive pairing mode re-forked
+# openssl per approval. The cert changes only on rotation, which rewrites the
+# file (new mtime) and invalidates the entry, so the cache is always correct.
+my %DISP_SERIAL_CACHE;
+sub _cached_disp_serial {
+    my ($cert_path) = @_;
+    return '' unless defined $cert_path && -f $cert_path;
+    my $mtime = (stat $cert_path)[9] // 0;
+    my $c = $DISP_SERIAL_CACHE{$cert_path};
+    return $c->{serial} if $c && $c->{mtime} == $mtime;
+    my $serial = Exec::CertInfo::serial_from_path($cert_path) // '';
+    $DISP_SERIAL_CACHE{$cert_path} = { mtime => $mtime, serial => $serial };
+    return $serial;
+}
+
 
 # Build a rate-limit config hashref for the pairing port from the dispatcher
 # config. The pairing port reuses the operational-port volume limiter
@@ -194,14 +210,20 @@ sub run_pairing_mode {
                 $conn->close(SSL_no_shutdown => 1);
 
                 if ($interactive) {
-                    # Brief pause so the child can write the queue file
-                    # before we read it for display.
-                    # Known limitation: this is a timing assumption, not a
-                    # synchronisation guarantee. On a heavily loaded system
-                    # the child may not have written the file within 1 second.
-                    # A pipe-based signal from child to parent would be more
-                    # robust but significantly complicates the fork pattern.
-                    sleep 1;
+                    # Wait (bounded) for the child to write the new queue file,
+                    # then prompt. The child writes it early in
+                    # _handle_pair_request (before it blocks awaiting approve/deny),
+                    # so polling for the file to appear normally returns in tens of
+                    # milliseconds - faster than the old fixed 1s sleep, and more
+                    # robust than a timing assumption: it waits (up to ~1s) until
+                    # the request is actually queued, without complicating the
+                    # fork/select loop with a child->parent pipe. A rejected
+                    # request (no file written) simply falls through at the cap.
+                    my $before = () = glob "$pairing_dir/*.json";
+                    for (1 .. 20) {
+                        last if (() = glob "$pairing_dir/*.json") > $before;
+                        select undef, undef, undef, 0.05;
+                    }
                     _interactive_prompt($log_fn);
                 }
             }
@@ -355,12 +377,11 @@ sub approve_request {
     my $ca_pem = Exec::CA::read_ca_cert(ca_dir => $ca_dir);
 
     # Read the dispatcher cert serial so the agent can store it and use it
-    # to restrict /capabilities to the genuine ctrl-exec only.
-    my $disp_cert = $dispatcher_cert;
-    my $disp_serial = '';
-    if (-f $disp_cert) {
-        $disp_serial = Exec::CertInfo::serial_from_path($disp_cert) // '';
-    }
+    # to restrict /capabilities to the genuine ctrl-exec only. Cached by
+    # path+mtime so a run of interactive approvals does not re-fork openssl each
+    # time (the cert only changes on rotation, which changes the file's mtime).
+    my $disp_cert   = $dispatcher_cert;
+    my $disp_serial = _cached_disp_serial($disp_cert);
     # An empty serial means the agent is paired but trusts no serial for this
     # dispatcher, so it rejects every subsequent request as a "serial mismatch".
     # That is almost always a wrong/missing 'cert' path - surface it now, at the

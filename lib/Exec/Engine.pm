@@ -342,6 +342,14 @@ sub _fan_out {
     my ($entries, $max, $worker) = @_;
     $max = 1 unless $max && $max >= 1;
 
+    # Preload the HTTP/TLS stack ONCE in the parent so every forked worker
+    # inherits it (copy-on-write) instead of each compiling LWP and
+    # IO::Socket::SSL afresh - for a large fan-out that is N-1 redundant module
+    # compiles saved. Every worker in this codebase is an HTTP client, so this is
+    # always wanted. (Reusing a TLS session across hosts - a persistent worker
+    # pool - is a larger change left as future work.)
+    eval { require LWP::UserAgent; require IO::Socket::SSL; require Exec::TLS; 1 };
+
     my @pending = @$entries;
     my %pipes;       # pid => { fh, name, target }
     my @out;
