@@ -63,55 +63,30 @@ sub dispatch_all {
         MODE   => $async ? 'async' : 'sync',
     });
 
-    my @results;
-    my %pipes;
-
-    for my $entry (@entries) {
-        my ($name, $target) = @$entry;
+    my $max_par = $opts{max_parallel} // $config->{max_parallel} // 64;
+    my $fanned  = _fan_out(\@entries, $max_par, sub {
+        my ($name, $target) = @_;
         my ($host, $hport)  = parse_host($target, $port);
-        pipe my $r, my $w or die "pipe: $!";
+        return _dispatch_one(
+            host     => $host,
+            port     => $hport,
+            script   => $script,
+            args     => $args,
+            reqid    => $reqid,
+            config   => $config,
+            username => $username,
+            token    => $token,
+            async    => $async,
+        );
+    });
 
-        my $pid = fork();
-        die "fork: $!" unless defined $pid;
-
-        if ($pid == 0) {
-            close $r;
-            my $result = _dispatch_one(
-                host     => $host,
-                port     => $hport,
-                script   => $script,
-                args     => $args,
-                reqid    => $reqid,
-                config   => $config,
-                username => $username,
-                token    => $token,
-                async    => $async,
-            );
-            print $w encode_json($result);
-            close $w;
-            exit 0;
-        }
-
-        close $w;
-        $pipes{$pid} = { fh => $r, name => $name, target => $target };
-    }
-
-    while (%pipes) {
-        my $pid = waitpid -1, 0;
-        last if $pid <= 0;
-        next unless exists $pipes{$pid};
-
-        my $fh   = $pipes{$pid}{fh};
-        my $name = $pipes{$pid}{name};
-        my $raw  = do { local $/; <$fh> };
-        close $fh;
-
-        my $result = eval { decode_json($raw) }
+    my @results;
+    for my $f (@$fanned) {
+        my $result = $f->{result}
             // { script => $script, exit => -1,
                  error => 'no response from child', reqid => $reqid };
-        _canonicalise($result, $name);
+        _canonicalise($result, $f->{name});
         push @results, $result;
-        delete $pipes{$pid};
     }
 
     return \@results;
@@ -149,48 +124,24 @@ sub result_all {
 
     my @entries = map { [ _host_entry($_) ] } @$hosts;
 
-    my @results;
-    my %pipes;
-
-    for my $entry (@entries) {
-        my ($name, $target) = @$entry;
+    my $max_par = $opts{max_parallel} // $config->{max_parallel} // 64;
+    my $fanned  = _fan_out(\@entries, $max_par, sub {
+        my ($name, $target) = @_;
         my ($host, $hport)  = parse_host($target, $port);
-        pipe my $r, my $w or die "pipe: $!";
+        return _result_one(
+            host   => $host,
+            port   => $hport,
+            reqid  => $reqid,
+            config => $config,
+        );
+    });
 
-        my $pid = fork();
-        die "fork: $!" unless defined $pid;
-
-        if ($pid == 0) {
-            close $r;
-            my $result = _result_one(
-                host   => $host,
-                port   => $hport,
-                reqid  => $reqid,
-                config => $config,
-            );
-            print $w encode_json($result);
-            close $w;
-            exit 0;
-        }
-
-        close $w;
-        $pipes{$pid} = { fh => $r, name => $name, target => $target };
-    }
-
-    while (%pipes) {
-        my $pid = waitpid -1, 0;
-        last if $pid <= 0;
-        next unless exists $pipes{$pid};
-
-        my $fh  = $pipes{$pid}{fh};
-        my $raw = do { local $/; <$fh> };
-        close $fh;
-
-        my $result = eval { decode_json($raw) }
+    my @results;
+    for my $f (@$fanned) {
+        my $result = $f->{result}
             // { status => 'error', error => 'no response from child', reqid => $reqid };
-        _canonicalise($result, $pipes{$pid}{name});
+        _canonicalise($result, $f->{name});
         push @results, $result;
-        delete $pipes{$pid};
     }
 
     return \@results;
@@ -223,57 +174,34 @@ sub ping_all {
 
     my @entries = map { [ _host_entry($_) ] } @$hosts;
 
-    my @results;
-    my %pipes;
-
-    for my $entry (@entries) {
-        my ($name, $target) = @$entry;
+    my $max_par = $opts{max_parallel} // $config->{max_parallel} // 64;
+    my $fanned  = _fan_out(\@entries, $max_par, sub {
+        my ($name, $target) = @_;
         my ($host, $hport)  = parse_host($target, $port);
-        pipe my $r, my $w or die "pipe: $!";
+        return _ping_one(
+            host   => $host,
+            port   => $hport,
+            reqid  => $reqid,
+            config => $config,
+        );
+    });
 
-        my $pid = fork();
-        die "fork: $!" unless defined $pid;
-
-        if ($pid == 0) {
-            close $r;
-            my $result = _ping_one(
-                host   => $host,
-                port   => $hport,
-                reqid  => $reqid,
-                config => $config,
-            );
-            print $w encode_json($result);
-            close $w;
-            exit 0;
-        }
-
-        close $w;
-        $pipes{$pid} = { fh => $r, name => $name, target => $target };
-    }
-
-    while (%pipes) {
-        my $pid = waitpid -1, 0;
-        last if $pid <= 0;
-        next unless exists $pipes{$pid};
-
-        my $fh  = $pipes{$pid}{fh};
-        my $raw = do { local $/; <$fh> };
-        close $fh;
-
-        my $result = eval { decode_json($raw) }
+    my @results;
+    for my $f (@$fanned) {
+        my $result = $f->{result}
             // { status => 'error', error => 'no response from child' };
 
-        # Trigger cert renewal if cert is past half-life. Renewal connects to
+        # Trigger cert renewal if the cert is past half-life. Renewal connects to
         # the resolved target, not the canonical name.
         if (($result->{status} // '') eq 'ok' && $result->{expiry}) {
             my $cert_days = $config->{cert_days} // 365;
             if (_renewal_due($result->{expiry}, $cert_days)) {
-                my ($rhost, $rport) = parse_host($pipes{$pid}{target}, $port);
+                my ($rhost, $rport) = parse_host($f->{target}, $port);
                 eval {
                     _renew_one(
                         host   => $rhost,
                         port   => $rport,
-                        name   => $pipes{$pid}{name},   # registry key, not the resolved address
+                        name   => $f->{name},   # registry key, not the resolved address
                         config => $config,
                         reqid  => gen_reqid(),
                     );
@@ -288,9 +216,8 @@ sub ping_all {
             }
         }
 
-        _canonicalise($result, $pipes{$pid}{name});
+        _canonicalise($result, $f->{name});
         push @results, $result;
-        delete $pipes{$pid};
     }
 
     return \@results;
@@ -321,47 +248,23 @@ sub capabilities_all {
 
     my @entries = map { [ _host_entry($_) ] } @$hosts;
 
-    my @results;
-    my %pipes;
-
-    for my $entry (@entries) {
-        my ($name, $target) = @$entry;
+    my $max_par = $opts{max_parallel} // $config->{max_parallel} // 64;
+    my $fanned  = _fan_out(\@entries, $max_par, sub {
+        my ($name, $target) = @_;
         my ($host, $hport)  = parse_host($target, $port);
-        pipe my $r, my $w or die "pipe: $!";
+        return _capabilities_one(
+            host   => $host,
+            port   => $hport,
+            config => $config,
+        );
+    });
 
-        my $pid = fork();
-        die "fork: $!" unless defined $pid;
-
-        if ($pid == 0) {
-            close $r;
-            my $result = _capabilities_one(
-                host   => $host,
-                port   => $hport,
-                config => $config,
-            );
-            print $w encode_json($result);
-            close $w;
-            exit 0;
-        }
-
-        close $w;
-        $pipes{$pid} = { fh => $r, name => $name, target => $target };
-    }
-
-    while (%pipes) {
-        my $pid = waitpid -1, 0;
-        last if $pid <= 0;
-        next unless exists $pipes{$pid};
-
-        my $fh  = $pipes{$pid}{fh};
-        my $raw = do { local $/; <$fh> };
-        close $fh;
-
-        my $result = eval { decode_json($raw) }
+    my @results;
+    for my $f (@$fanned) {
+        my $result = $f->{result}
             // { status => 'error', error => 'no response from child' };
-        _canonicalise($result, $pipes{$pid}{name});
+        _canonicalise($result, $f->{name});
         push @results, $result;
-        delete $pipes{$pid};
     }
 
     return \@results;
@@ -419,6 +322,56 @@ sub gen_reqid {
 }
 
 # --- private ---
+
+# Fan out a per-host worker across @$entries (each [name, target]) with at most
+# $max children alive at once, collecting each child's JSON result. This bounds
+# the fork/fd/memory cost of a large fleet: a 500-host operation no longer forks
+# 500 TLS clients simultaneously (which would exhaust the default 1024 fd limit
+# before the host cap). $worker->($name, $target) runs in the child and returns
+# a result hashref, JSON-encoded over a pipe. Returns an arrayref of
+# { name => $name, target => $target, result => $decoded_or_undef } in completion
+# order; callers supply their own fallback for an undef result and canonicalise.
+sub _fan_out {
+    my ($entries, $max, $worker) = @_;
+    $max = 1 unless $max && $max >= 1;
+
+    my @pending = @$entries;
+    my %pipes;       # pid => { fh, name, target }
+    my @out;
+
+    while (@pending || %pipes) {
+        while (@pending && keys(%pipes) < $max) {
+            my ($name, $target) = @{ shift @pending };
+            pipe my $r, my $w or die "pipe: $!";
+            my $pid = fork();
+            die "fork: $!" unless defined $pid;
+            if ($pid == 0) {
+                close $r;
+                my $result = $worker->($name, $target);
+                print $w encode_json($result);
+                close $w;
+                exit 0;
+            }
+            close $w;
+            $pipes{$pid} = { fh => $r, name => $name, target => $target };
+        }
+
+        my $pid = waitpid -1, 0;
+        last if $pid <= 0;
+        next unless exists $pipes{$pid};
+        my $fh  = $pipes{$pid}{fh};
+        my $raw = do { local $/; <$fh> };
+        close $fh;
+        push @out, {
+            name   => $pipes{$pid}{name},
+            target => $pipes{$pid}{target},
+            result => scalar eval { decode_json($raw) },
+        };
+        delete $pipes{$pid};
+    }
+
+    return \@out;
+}
 
 sub _dispatch_one {
     my (%opts) = @_;
@@ -779,41 +732,23 @@ sub rotate_all {
     croak "action must be add or remove" unless $action eq 'add' || $action eq 'remove';
 
     my @entries = map { [ _host_entry($_) ] } @$hosts;
-    my (@results, %pipes);
 
-    for my $entry (@entries) {
-        my ($name, $target) = @$entry;
+    my $max_par = $opts{max_parallel} // $config->{max_parallel} // 64;
+    my $fanned  = _fan_out(\@entries, $max_par, sub {
+        my ($name, $target) = @_;
         my ($host, $hport)  = parse_host($target, $port);
-        pipe my $r, my $w or die "pipe: $!";
-        my $pid = fork();
-        die "fork: $!" unless defined $pid;
-        if ($pid == 0) {
-            close $r;
-            my $result = _rotate_one(
-                host => $host, port => $hport,
-                serial => $serial, action => $action, config => $config,
-            );
-            print $w encode_json($result);
-            close $w;
-            exit 0;
-        }
-        close $w;
-        $pipes{$pid} = { fh => $r, name => $name };
-    }
+        return _rotate_one(
+            host => $host, port => $hport,
+            serial => $serial, action => $action, config => $config,
+        );
+    });
 
-    while (%pipes) {
-        my $pid = waitpid -1, 0;
-        last if $pid <= 0;
-        next unless exists $pipes{$pid};
-        my $fh   = $pipes{$pid}{fh};
-        my $name = $pipes{$pid}{name};
-        my $raw  = do { local $/; <$fh> };
-        close $fh;
-        my $result = eval { decode_json($raw) }
+    my @results;
+    for my $f (@$fanned) {
+        my $result = $f->{result}
             // { status => 'error', exit => -1, error => 'no response from child' };
-        $result->{host} = $name;          # report by the registry name, not the resolved address
+        $result->{host} = $f->{name};     # report by the registry name, not the resolved address
         push @results, $result;
-        delete $pipes{$pid};
     }
     return \@results;
 }
@@ -929,11 +864,16 @@ sub _renew_one {
         or die "invalid JSON in renew response";
     my $csr_pem = $data->{csr} or die "no CSR in renew response";
 
-    # Sign the CSR
+    # Sign the CSR, binding the subject CN to the agent's known identity (its
+    # registry name == its cert CN by the pairing invariant). This stops a
+    # compromised agent returning a CSR for a different identity and having it
+    # signed - the renewal would then fail closed rather than mint a cert that
+    # impersonates another host.
     my $cert_pem = Exec::CA::sign_csr(
-        csr_pem => $csr_pem,
-        ca_dir  => $config->{ca_dir} // '/etc/ctrl-exec',
-        days    => $config->{cert_days} // 365,
+        csr_pem     => $csr_pem,
+        ca_dir      => $config->{ca_dir} // '/etc/ctrl-exec',
+        days        => $config->{cert_days} // 365,
+        expected_cn => $name,
     );
     my $ca_pem = Exec::CA::read_ca_cert(
         ca_dir => $config->{ca_dir} // '/etc/ctrl-exec',
