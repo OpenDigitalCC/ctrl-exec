@@ -122,6 +122,12 @@ sub _validate_config {
             if (defined $p->{run_as} && length $p->{run_as}) {
                 croak "Profile '$pname': invalid run_as '$p->{run_as}' in '$path'"
                     unless $p->{run_as} =~ /^(?:[A-Za-z_][A-Za-z0-9_-]*|\d+)$/;
+                # Bound a numeric uid/gid to 32 bits, matching the C executor
+                # (ctrl-exec-exec.c set_profile_field): a value that does not fit
+                # uid_t would be rejected by the executor at load, so reject it
+                # here too rather than let the two parsers disagree.
+                croak "Profile '$pname': run_as '$p->{run_as}' out of range in '$path'"
+                    if $p->{run_as} =~ /^\d+$/ && $p->{run_as} > 0xFFFFFFFF;
             }
             else {
                 delete $p->{run_as};

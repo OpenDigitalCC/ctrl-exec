@@ -78,6 +78,11 @@ sub submit {
 
     make_path($runs_dir) unless -d $runs_dir;
 
+    # Opportunistic TTL sweep on each new submit so the result store cannot grow
+    # unbounded (the common case needs no separate timer). Bounded to async-submit
+    # frequency; uses the default 24h TTL.
+    purge_expired($runs_dir);
+
     # Acquire the per-script concurrency lock before writing any record. If a
     # job for this script is already detached, refuse without clobbering the
     # store. A blank script name carries no concurrency guarantee (callers

@@ -10,11 +10,6 @@ cert = /etc/ctrl-exec-agent/agent.crt
 key  = /etc/ctrl-exec-agent/agent.key
 ca   = /etc/ctrl-exec-agent/ca.crt
 
-# Pairing port (default: 7444).
-# Must match the --port value passed to ctrl-exec-agent request-pairing
-# and the port used by ctrl-exec pairing-mode on the ctrl-exec host.
-# pairing_port = 7444
-
 # Trusted dispatchers (written automatically at pairing time).
 # Path to the map of dispatcher cert serials this agent accepts, each with the
 # dispatcher's stable identity. One entry per line: "<hex-serial> <id>".

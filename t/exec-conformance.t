@@ -98,6 +98,12 @@ my @fixtures = (
         scripts => "s = /opt/s.sh profile=x\n",
         names   => [qw(s)],
     },
+    {
+        label   => 'config error: out-of-range numeric run_as (both must reject)',
+        agent   => $REQUIRED . "[profile big]\nrun_as = 99999999999999999999\n",
+        scripts => "s = /opt/s.sh profile=big\n",
+        names   => [qw(s)],
+    },
 );
 
 for my $fx (@fixtures) {

@@ -64,9 +64,4 @@ sub _level {
     return $levels{uc($level // 'INFO')} // _LOG_INFO;
 }
 
-sub close_log {
-    closelog() if $opened;
-    $opened = 0;
-}
-
 1;
