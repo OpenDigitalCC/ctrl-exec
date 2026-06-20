@@ -146,6 +146,22 @@ my $dir = tempdir(CLEANUP => 1);
     ok !ref($hosts->[0]),        'list_hostnames: returns plain strings not hashrefs';
 }
 
+# list_hostnames derives names from the registry filenames (the key) without
+# decoding each record (PERF-002), so it still lists an agent whose JSON is
+# momentarily unreadable - and pays no JSON-parse cost per file.
+{
+    my $tmp = File::Temp::tempdir(CLEANUP => 1);
+    Exec::Registry::register_agent(
+        registry_dir => $tmp, hostname => 'good-host', ip => '10.0.0.1', reqid => 'aa');
+    open my $fh, '>', "$tmp/corrupt-host.json" or die $!;
+    print $fh "{ this is not valid json";
+    close $fh;
+
+    my $hosts = Exec::Registry::list_hostnames(registry_dir => $tmp);
+    is_deeply $hosts, ['corrupt-host', 'good-host'],
+        'list_hostnames lists names from filenames, undeterred by unparseable content';
+}
+
 # --- record completeness ---
 
 {

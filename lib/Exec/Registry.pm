@@ -351,12 +351,30 @@ sub tags_match {
     return 1;
 }
 
-# Return list of hostnames only - convenience for building host lists
-# to pass to Engine functions.
+# Return list of hostnames only - convenience for building host lists to pass
+# to Engine functions (the /discovery and /openapi-live default host set).
+#
+# The registry key IS the filename ("<hostname>.json", kept in sync by
+# register_agent/edit_agent), so derive the names straight from the directory
+# entries WITHOUT opening and JSON-decoding every record. At fleet scale this
+# turns an O(fleet) parse-every-file sweep on each discovery request into a
+# single readdir - the per-request full scan was the dominant cost flagged for
+# this path. (A registry-wide index/pagination for list_agents is deferred: the
+# API server forks per request, so an in-process cache would not survive across
+# requests, and an on-disk index adds a consistency burden.)
 sub list_hostnames {
     my (%opts) = @_;
-    my $agents = list_agents(%opts);
-    return [ map { $_->{hostname} } @$agents ];
+    my $dir = $opts{registry_dir} // $REGISTRY_DIR;
+    return [] unless -d $dir;
+
+    opendir my $dh, $dir or croak "Cannot open registry dir '$dir': $!";
+    my @names;
+    while (my $f = readdir $dh) {
+        next unless $f =~ /^(.+)\.json$/;
+        push @names, $1;
+    }
+    closedir $dh;
+    return [ sort @names ];
 }
 
 # --- private ---
