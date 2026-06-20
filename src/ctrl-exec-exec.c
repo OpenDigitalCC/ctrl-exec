@@ -711,8 +711,13 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
     return 0;
 }
 
-/* Handle one connection: read request, resolve, run, write response. */
-static void handle_conn(int cfd, const char *agent_conf, const char *scripts_conf,
+/* Handle one connection: read request, resolve, run, write response. The parsed
+ * agent.conf (cfg) is supplied by the serve loop - parsed once at startup and
+ * reloaded only on mtime change - so each forked handler does not re-parse it or
+ * re-allocate the large config_t per connection. The security property is
+ * unchanged: path and profile are re-derived from this OWN root-owned config,
+ * never from the message. */
+static void handle_conn(int cfd, config_t *cfg, const char *scripts_conf,
                         int allow_unpriv) {
     uint32_t total;
     if (read_u32(cfd, &total) != 0 || total == 0 || total > MAX_FRAME) return;
@@ -749,17 +754,15 @@ static void handle_conn(int cfd, const char *agent_conf, const char *scripts_con
     int ecode = -1; buf_t out = {0}, err = {0};
     if (bad) { buf_add(&err, "executor: malformed request\n", 28); ecode = -1; }
     else {
-        /* Re-derive path + profile from our OWN config; never trust the message. */
-        config_t *c = calloc(1, sizeof(*c));
+        /* Re-derive path + profile from our OWN cached root-owned config; never
+         * trust the message. */
         char spath[VALLEN], pname[NAMELEN];
         profile_t *p = NULL;
-        if (!c || parse_agent_conf(agent_conf, c) != 0) {
-            buf_add(&err, "executor: config error\n", 23);
-        } else if (!find_script(scripts_conf, script, spath, sizeof(spath), pname, sizeof(pname))) {
+        if (!find_script(scripts_conf, script, spath, sizeof(spath), pname, sizeof(pname))) {
             buf_add(&err, "executor: script not permitted\n", 31);
-        } else if (!path_in_dirs(spath, c)) {
+        } else if (!path_in_dirs(spath, cfg)) {
             buf_add(&err, "executor: script not in script_dirs\n", 36);
-        } else if (!(p = find_profile(c, pname))) {
+        } else if (!(p = find_profile(cfg, pname))) {
             /* No built-in fallback: an undefined profile (including 'default'
              * when [profile default] is not configured) is refused, never run
              * under an implicit root context. */
@@ -768,7 +771,6 @@ static void handle_conn(int cfd, const char *agent_conf, const char *scripts_con
             argv[0] = spath;                          /* argv[0] = resolved path */
             run_with_profile(p, spath, argv, indata, inlen, allow_unpriv, &ecode, &out, &err);
         }
-        free(c);
     }
 
     int32_t ec = (int32_t)ecode;
@@ -807,6 +809,18 @@ static int cmd_serve(const char *sockpath, const char *agent_conf,
     if (chmod(sockpath, 0600) != 0) perror("chmod");
     if (listen(sfd, 16) != 0) { perror("listen"); return 1; }
 
+    /* Parse agent.conf ONCE here, not per connection. Each forked handler then
+     * inherits the parsed config through fork (copy-on-write) instead of doing a
+     * fresh ~8MB calloc + parse on every request. Reloaded below only when
+     * agent.conf's mtime changes, so an admin edit still takes effect. */
+    config_t *cfg = calloc(1, sizeof(*cfg));
+    if (!cfg || parse_agent_conf(agent_conf, cfg) != 0) {
+        fprintf(stderr, "ctrl-exec-exec: cannot parse '%s'\n", agent_conf);
+        free(cfg); close(sfd); return 1;
+    }
+    struct stat cst;
+    time_t cfg_mtime = (stat(agent_conf, &cst) == 0) ? cst.st_mtime : 0;
+
     for (;;) {
         int cfd = accept(sfd, NULL, NULL);
         if (cfd < 0) { if (errno == EINTR) continue; perror("accept"); break; }
@@ -816,11 +830,26 @@ static int cmd_serve(const char *sockpath, const char *agent_conf,
             (uc.uid != peer_uid && uc.uid != 0)) {
             close(cfd); continue;             /* reject: not the front-end uid */
         }
+
+        /* Reload agent.conf if it changed on disk (cheap stat per connection).
+         * Parse into a fresh config and swap only on success, so a mid-edit /
+         * broken file leaves the last-good config in place (fail-safe). */
+        if (stat(agent_conf, &cst) == 0 && cst.st_mtime != cfg_mtime) {
+            cfg_mtime = cst.st_mtime;
+            config_t *nc = calloc(1, sizeof(*nc));
+            if (nc && parse_agent_conf(agent_conf, nc) == 0) {
+                free(cfg); cfg = nc;
+            } else {
+                free(nc);   /* keep serving with the previous valid config */
+            }
+        }
+
         pid_t pid = fork();
-        if (pid == 0) { close(sfd); handle_conn(cfd, agent_conf, scripts_conf, allow_unpriv); close(cfd); _exit(0); }
+        if (pid == 0) { close(sfd); handle_conn(cfd, cfg, scripts_conf, allow_unpriv); close(cfd); _exit(0); }
         close(cfd);
         while (waitpid(-1, NULL, WNOHANG) > 0) {}   /* reap finished handlers */
     }
+    free(cfg);
     close(sfd);
     return 0;
 }

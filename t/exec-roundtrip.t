@@ -111,6 +111,23 @@ subtest 'oversized output is capped, not buffered unboundedly (PERF-004)' => sub
     like $r->{stdout}, qr/\[output truncated\]/, 'truncation marker appended';
 };
 
+subtest 'agent.conf is reloaded on mtime change (PERF-003)' => sub {
+    # Rewrite agent.conf to REMOVE [profile default], bumping mtime so the serve
+    # loop's stat-based reload picks it up. The next request for the unannotated
+    # 'echo' script (-> profile 'default', now undefined) must be refused -
+    # proving the cached config was reloaded, not stale. (Run last: it disables
+    # the default profile the earlier subtests rely on.)
+    open my $a, '>', $agent_conf or die $!;
+    print $a "port = 7443\ncert = /x\nkey = /y\nca = /z\nscript_dirs = $TMP\n";  # no [profile default]
+    close $a;
+    utime time + 10, time + 10, $agent_conf;     # force a distinct mtime
+
+    my $r = Exec::Agent::ExecClient::run(
+        socket => $sock, reqid => 'reload', script => 'echo', args => ['x'], stdin => "y\n");
+    like $r->{stderr}, qr/undefined profile/,
+        'removing [profile default] takes effect on the next request';
+};
+
 kill 'TERM', $pid;
 waitpid $pid, 0;
 done_testing;
