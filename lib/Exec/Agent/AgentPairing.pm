@@ -7,8 +7,10 @@ use File::Basename qw(dirname);
 use File::Path qw(make_path);
 use Carp qw(croak);
 use Exec::CertInfo qw();
+use Exec::Cmd      qw();
 use Exec::FileUtil qw(slurp);
 use Exec::Log qw();
+use Exec::Random qw();
 
 
 # Generate a private key and CSR using openssl
@@ -502,20 +504,13 @@ sub serial_to_hex {
 }
 
 sub _gen_nonce {
-    # Use /dev/urandom for cryptographically unpredictable nonces.
-    # Perl's rand() is not cryptographically random and must not be used
-    # for nonces intended to prevent replay attacks.
-    open my $fh, '<:raw', '/dev/urandom'
-        or croak "Cannot open /dev/urandom: $!";
-    read $fh, my $bytes, 16;
-    close $fh;
-    return unpack 'H*', $bytes;
+    # 16 bytes of /dev/urandom (via Exec::Random) - replay-guard nonces must be
+    # cryptographically unpredictable, so rand() must not be used.
+    return Exec::Random::hex_bytes(16);
 }
 
 sub _run_or_die {
-    my @cmd = @_;
-    system(@cmd) == 0
-        or croak "Command failed (@cmd): $?";
+    return Exec::Cmd::run_or_die(@_);
 }
 
 # Validate a candidate (renewed) cert before adopting it: it must verify against

@@ -11,6 +11,7 @@ use Carp        qw(croak);
 use Exec::CertInfo qw();
 use Exec::Digest   qw();
 use Exec::FileUtil qw(slurp);
+use Exec::Random   qw();
 use Sys::Hostname qw(hostname);
 use Exec::Pairing::Identity qw();
 
@@ -759,12 +760,7 @@ sub _send_raw {
 }
 
 sub _gen_reqid {
-    open my $fh, '<:raw', '/dev/urandom'
-        or die "Cannot open /dev/urandom: $!";
-    my $buf;
-    sysread $fh, $buf, 8;
-    close $fh;
-    return unpack 'H*', $buf;
+    return Exec::Random::hex_bytes(8);
 }
 
 # Delete pending .json request files older than 10 minutes that have no

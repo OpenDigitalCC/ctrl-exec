@@ -6,6 +6,7 @@ use File::Temp  qw(tempfile tempdir);
 use File::Path  qw(make_path);
 use Carp        qw(croak);
 use Exec::FileUtil qw(slurp);
+use Exec::Cmd      qw();
 
 
 my $CA_DIR   = '/etc/ctrl-exec';
@@ -274,34 +275,7 @@ sub _run_or_capture {
 }
 
 sub _run_or_die {
-    my @cmd = @_;
-
-    # Capture openssl stderr by redirecting fd 2 at the OS level.
-    # open(local *STDERR, ...) only redirects Perl's STDERR glob; system()
-    # inherits the original fd 2 from the OS regardless of that redirect.
-    # POSIX::dup2 operates on raw file descriptors so the child sees the
-    # redirect.
-    my ($err_fh, $err_path) = tempfile(UNLINK => 1);
-    my $err_fileno = fileno($err_fh);
-
-    require POSIX;
-    my $saved_fd2 = POSIX::dup(2)
-        or croak "Cannot dup stderr: $!";
-    POSIX::dup2($err_fileno, 2)
-        or do { POSIX::close($saved_fd2); croak "Cannot redirect stderr: $!" };
-    close $err_fh;
-
-    my $rc = system(@cmd);
-
-    # Restore fd 2 before any further output
-    POSIX::dup2($saved_fd2, 2);
-    POSIX::close($saved_fd2);
-
-    if ($rc != 0) {
-        my $stderr = slurp($err_path);
-        $stderr =~ s/\s+$//;
-        croak "Command failed (@cmd): exit $?\n$stderr";
-    }
+    return Exec::Cmd::run_or_die(@_);
 }
 
 sub _write_file {
