@@ -366,15 +366,20 @@ Operational signals worth alerting on:
 ## Known Limitations
 
 Request result access
-: `GET /status/{reqid}` returns stored run results to any authenticated caller,
-  not only the original submitter. Result access is not logged with the caller's
-  identity. Reqid format provides limited enumeration resistance (see reqid
-  entropy below). Sensitive results should not be left in the result store;
-  design scripts to minimise what they return via stdout if the results will be
-  stored. This limitation applies to the dispatcher-side API result store. The
-  agent-side async result store is different: as of 0.9.0 it is partitioned per
-  owner and the agent's `GET /result/<reqid>` is owner-gated, returning
-  `404 unknown` to any dispatcher other than the one that submitted the run.
+: `GET /status/{reqid}` is owner-gateable by the auth hook. The API records who
+  submitted each run (username + source IP) and runs a `status` auth check that
+  hands the hook the run id (`ENVEXEC_REQID`) and the recorded submitter
+  (`ENVEXEC_SUBMITTER`, `ENVEXEC_SUBMITTER_IP`); the caller authenticates with an
+  `Authorization: Bearer <token>` header. A hook can therefore return a run's
+  output only to the submitter (or any caller it authorises), and an unauthorised
+  request receives `404` - it cannot distinguish "not yours" from "no such run".
+  With NO hook configured, the unguessable 64-bit reqid is the capability:
+  possession authorises (the `api_auth_default` applies, as for every route).
+  This mirrors the agent's owner-gated `GET /result/<reqid>`. Caveats: result
+  access is still not logged with the caller's identity, and runs recorded before
+  this change carry no submitter - a hook that requires one should treat an empty
+  `ENVEXEC_SUBMITTER` as legacy and decide accordingly. Sensitive results should
+  still be minimised in script stdout if they will be stored.
 
 Rate state persistence
 : Rate limit state is held in memory and cleared on SIGHUP or agent restart.

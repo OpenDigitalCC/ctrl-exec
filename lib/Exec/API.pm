@@ -161,6 +161,7 @@ sub _handle_connection {
     # before the auth gate. Both limits reject before any body is read.
     my $content_length = 0;
     my $header_count   = 0;
+    my $auth_token     = '';   # Authorization: Bearer <token>, for GET /status
     while (my $line = <$conn>) {
         $line =~ s/\r?\n$//;
         last if $line eq '';
@@ -171,6 +172,9 @@ sub _handle_connection {
         }
         if ($line =~ /^Content-Length:\s*(\d+)/i) {
             $content_length = $1;
+        }
+        elsif ($line =~ /^Authorization:\s*Bearer\s+(\S+)/i) {
+            $auth_token = $1;
         }
     }
 
@@ -242,7 +246,7 @@ sub _handle_connection {
         _handle_discovery($conn, $peer, $body, $config);
     }
     elsif ($path =~ m{^/status/([a-f0-9]+)$} && $method eq 'GET') {
-        _handle_status($conn, $1, $config);
+        _handle_status($conn, $1, $peer, $auth_token, $config);
     }
     else {
         _send_error($conn, 404, 'not found', "no route for $method $path");
@@ -391,6 +395,7 @@ sub _handle_run {
         # reqid -> host map; the caller polls GET /status/<reqid> for results.
         Exec::RunStore::record_async(
             reqid => $reqid, script => $script, dispatch_results => $results,
+            submitter => { username => $username, source_ip => $peer },
         );
         _send_json($conn, 202, {
             ok => JSON::true, reqid => $reqid, async => JSON::true, results => $results,
@@ -400,6 +405,7 @@ sub _handle_run {
 
     Exec::RunStore::record_sync(
         reqid => $reqid, script => $script, hosts => $hosts, results => $results,
+        submitter => { username => $username, source_ip => $peer },
     );
 
     _send_json($conn, 200, { ok => JSON::true, reqid => $reqid, results => $results });
@@ -655,7 +661,7 @@ sub _build_live_spec {
 }
 
 sub _handle_status {
-    my ($conn, $reqid, $config) = @_;
+    my ($conn, $reqid, $peer, $auth_token, $config) = @_;
 
     Exec::RunStore::purge();
 
@@ -676,7 +682,32 @@ sub _handle_status {
         return;
     }
 
-    _send_json($conn, 200, { ok => JSON::true, %$record });
+    # Per-result authorization. The blanket pre-route gate runs before the reqid
+    # is even parsed and has no notion of who submitted the run; this check gives
+    # the hook the reqid and the recorded submitter so it can owner-gate - return
+    # a run's output only to a caller it authorises (e.g. one whose token maps to
+    # the submitter, or from the submitter's IP). With no hook configured the
+    # api_auth_default applies (the same default the pre-route gate enforced), so
+    # possession of the unguessable 64-bit reqid remains the capability.
+    my $auth = Exec::Auth::check(
+        action    => 'status',
+        reqid     => $reqid,
+        submitter => $record->{submitter},
+        token     => $auth_token,
+        source_ip => $peer,
+        config    => $config,
+    );
+    unless ($auth->{ok}) {
+        # Deny as 404, not 403: do not reveal to an unauthorised caller that the
+        # reqid exists (no distinction between "not yours" and "no such run").
+        _send_error($conn, 404, 'not found', "no result for reqid $reqid");
+        return;
+    }
+
+    # Never echo the internal submitter record back to the caller.
+    my %public = %$record;
+    delete $public{submitter};
+    _send_json($conn, 200, { ok => JSON::true, %public });
 }
 
 sub _parse_body {

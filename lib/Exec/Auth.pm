@@ -60,6 +60,11 @@ sub check {
     my $caller    = $opts{caller}    // 'api';   # 'api' | 'cli'
     my $dispatcher        = $opts{dispatcher}        // '';
     my $dispatcher_serial = $opts{dispatcher_serial} // '';
+    # For result-access ('status') checks: the run id being read, and the
+    # recorded submitter, so a hook can owner-gate (compare the caller to who
+    # submitted the run).
+    my $reqid     = $opts{reqid}     // '';
+    my $submitter = $opts{submitter};   # hashref { username, source_ip } or undef
 
     croak "hosts must be an arrayref" unless ref $hosts eq 'ARRAY';
     croak "args must be an arrayref"  unless ref $args  eq 'ARRAY';
@@ -132,6 +137,8 @@ sub check {
         source_ip         => $source_ip,
         dispatcher        => $dispatcher,
         dispatcher_serial => $dispatcher_serial,
+        reqid             => $reqid,
+        submitter         => $submitter,
     );
 
     my $hook_timeout = $config->{auth_hook_timeout} // 10;
@@ -197,6 +204,8 @@ sub _build_context {
         source_ip         => $opts{source_ip},
         dispatcher        => $opts{dispatcher}        // '',
         dispatcher_serial => $opts{dispatcher_serial} // '',
+        reqid             => $opts{reqid}             // '',
+        submitter         => $opts{submitter},
         timestamp         => strftime('%Y-%m-%dT%H:%M:%SZ', gmtime),
     };
 }
@@ -225,6 +234,12 @@ sub _run_hook {
     # which rotates. Empty when the caller did not resolve a dispatcher.
     $ENV{ENVEXEC_DISPATCHER}        = $context->{dispatcher}        // '';
     $ENV{ENVEXEC_DISPATCHER_SERIAL} = $context->{dispatcher_serial} // '';
+    # Result-access ('status') context: the run id being read and who submitted
+    # it, so a hook can owner-gate (e.g. deny unless the caller matches the
+    # submitter). Empty on non-status actions and on runs recorded before this.
+    $ENV{ENVEXEC_REQID}        = $context->{reqid} // '';
+    $ENV{ENVEXEC_SUBMITTER}    = ($context->{submitter} && $context->{submitter}{username})  // '';
+    $ENV{ENVEXEC_SUBMITTER_IP} = ($context->{submitter} && $context->{submitter}{source_ip}) // '';
     $ENV{ENVEXEC_TIMESTAMP} = $context->{timestamp};
 
     # Fork: child execs hook with JSON on stdin, parent waits.

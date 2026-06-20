@@ -7,6 +7,13 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 
 ## 0.11.2 — security hardening; config errors fail clearly instead of looping
 
+- **Changed** `GET /status/{reqid}` so it can be owner-gated. The API now records
+  who submitted each run and runs a `status` auth-hook check that exposes the
+  reqid and the submitter (`ENVEXEC_REQID`, `ENVEXEC_SUBMITTER[_IP]`); the caller
+  authenticates with `Authorization: Bearer`, an unauthorised request gets `404`
+  (no existence disclosure), and the submitter is stripped from responses. With
+  no hook, the unguessable reqid remains the capability. Previously any caller
+  holding a reqid could read any run's output and a hook could not gate it.
 - **Added** hands-free agent-cert renewal, with the trust boundary drawn at the
   private key. The agent implements `POST /renew` (CSR from its existing key -
   key continuity preserved) and `POST /renew-complete`: it validates the signed

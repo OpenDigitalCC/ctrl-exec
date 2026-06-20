@@ -42,6 +42,8 @@ sub record_sync {
         results   => $opts{results} // [],
         completed => time(),
         complete  => JSON::true,
+        # Who submitted the run, so /status can owner-gate via the auth hook.
+        ($opts{submitter} ? (submitter => $opts{submitter}) : ()),
     });
     return 1;
 }
@@ -80,6 +82,8 @@ sub record_async {
         mode    => 'async',
         hosts   => \%hosts,
         created => time(),
+        # Who submitted the run, so /status can owner-gate via the auth hook.
+        ($opts{submitter} ? (submitter => $opts{submitter}) : ()),
     };
     _summarise($record);
     _write($runs_dir, $reqid, $record);
