@@ -49,6 +49,8 @@ sub run_script {
         close $stdout_w;
         close $stderr_w;
 
+        _sanitise_env();
+
         # exec without shell - args passed as list
         exec { $script_path } $script_path, @$args
             or POSIX::_exit(127);
@@ -136,6 +138,24 @@ sub _slurp_utf8 {
 sub _error {
     my ($msg) = @_;
     return { stdout => '', stderr => $msg, exit => -1 };
+}
+
+# Replace the environment with a minimal, known-safe set before exec. The agent
+# runs no shell, but allowlisted scripts are commonly shell/perl/python, for
+# which an inherited PATH/LD_*/BASH_ENV/IFS/PERL5LIB would be live attack
+# surface. Request context reaches the script on stdin (JSON), never via env.
+# A small whitelist is preserved from the agent's own (operator-controlled,
+# systemd-supplied) environment; everything else, including the dangerous
+# loader/shell variables, is dropped.
+sub _sanitise_env {
+    my %keep;
+    for my $k (qw(HOME LANG LC_ALL TZ TERM USER LOGNAME)) {
+        $keep{$k} = $ENV{$k} if exists $ENV{$k};
+    }
+    %ENV = (
+        PATH => '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+        %keep,
+    );
 }
 
 1;

@@ -20,12 +20,15 @@ use Getopt::Long               qw(GetOptions);
 
 our $VERSION = 'UNINSTALLED';
 
-my $CONFIG_PATH    = '/etc/ctrl-exec-agent/agent.conf';
-my $ALLOWLIST_PATH = '/etc/ctrl-exec-agent/scripts.conf';
+# our (not my) so a unit test loading the modulino can redirect them.
+our $CONFIG_PATH    = '/etc/ctrl-exec-agent/agent.conf';
+our $ALLOWLIST_PATH = '/etc/ctrl-exec-agent/scripts.conf';
 
 # --- entry point ---
-
-main();
+# Modulino: run as a program normally, but when the file is loaded (require/do)
+# by a unit test, `caller` is true and main() is skipped, so the individual
+# handler subs (handle_run, handle_capabilities, ...) can be exercised directly.
+main() unless caller;
 
 sub main {
     my ($mode, %opts);
@@ -1034,28 +1037,22 @@ sub handle_capabilities {
     # map is rejected - this closes lateral reconnaissance from a compromised
     # agent peer. The resolved identity also attributes the discovery.
     #
-    # If the map is empty (agent not yet paired, or pre-map pairing), the check
-    # is skipped with a warning. Re-pair to enable it.
+    # Fail closed when the map is empty (agent not yet paired, or its map was
+    # lost): an empty map means no dispatcher is trusted, so the allowlist - the
+    # script names, paths and schemas - is not disclosed to any CA-signed peer.
+    # This matches /run, /ping, /rotate-serial and /result, which all hard-deny
+    # on an unresolved dispatcher. Re-pair to repopulate the map.
     my $dispatcher = Exec::Agent::AgentPairing::dispatcher_trusted($peer_serial, $trusted);
-    if (%$trusted) {
-        unless (defined $dispatcher) {
-            Exec::Log::log_action('WARNING', {
-                ACTION      => 'capabilities-deny',
-                PEER        => $peer,
-                PEER_SERIAL => $peer_serial,
-                REASON      => 'serial-mismatch',
-            });
-            _send_raw($conn, 403, encode_json({ error => 'forbidden' }));
-            return;
-        }
-    }
-    else {
+    unless (defined $dispatcher) {
         Exec::Log::log_action('WARNING', {
-            ACTION => 'capabilities-no-serial',
-            PEER   => $peer,
-            REASON => 'no trusted dispatchers stored - re-pair to enable restriction',
+            ACTION      => 'capabilities-deny',
+            PEER        => $peer,
+            PEER_SERIAL => $peer_serial,
+            REASON      => (%$trusted ? 'serial-mismatch'
+                                      : 'no trusted dispatchers stored'),
         });
-        $dispatcher = '';
+        _send_raw($conn, 403, encode_json({ error => 'forbidden' }));
+        return;
     }
 
     # Auth hook - called after serial check, before building scripts list.
@@ -1354,3 +1351,5 @@ Options:
   --version                      Print version and exit
 END
 }
+
+1;   # modulino: true return so the file can be require'd by a unit test

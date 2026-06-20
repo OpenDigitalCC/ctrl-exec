@@ -10,12 +10,13 @@
  * namespace with the control/audit dirs read-only, capability set, run_as,
  * no_new_privileges).
  *
- * THIS FILE, PHASE 2a: the config parser and `resolve` subcommand only. The
- * `resolve` mode is what the shared conformance test exercises - it must produce
- * exactly the security decision the Perl front-end (Exec::Agent::Config) makes
- * for the same files, or the executor would apply a different privilege than the
- * front-end believes. The socket server and the privileged exec path land in
- * phase 2b and reuse this parser.
+ * THIS FILE contains the config parser plus three subcommands: `resolve` (the
+ * security decision, exercised by the shared conformance test), the socket
+ * server (`serve`), and the privileged exec path that runs under a profile.
+ * The `resolve` mode must produce exactly the security decision the Perl
+ * front-end (Exec::Agent::Config) makes for the same files, or the executor
+ * would apply a different privilege than the front-end believes; the socket
+ * server and the exec path reuse the same parser so they agree by construction.
  *
  * Deliberately dependency-light and bounded: fixed caps on counts/lengths,
  * full-line comments only (matching the Perl parser), no inline-# stripping.
@@ -139,6 +140,16 @@ static int set_profile_field(profile_t *p, const char *k, const char *v,
                 if (!(isalpha((unsigned char)v[0]) || v[0] == '_')) ok = 0;
                 for (const char *q = v + 1; ok && *q; q++)
                     if (!(isalnum((unsigned char)*q) || *q == '_' || *q == '-')) ok = 0;
+            } else {
+                /* All-digits uid/gid: bound it at load time so it cannot wrap
+                 * to 0 (root) - or any unintended id - when the executor later
+                 * truncates it to uid_t/gid_t at apply time. */
+                unsigned long n = 0;
+                for (const char *q = v; ok && *q; q++) {
+                    if (n > (ULONG_MAX - 9) / 10) { ok = 0; break; }
+                    n = n * 10 + (unsigned long)(*q - '0');
+                }
+                if (ok && (unsigned long)(uid_t)n != n) ok = 0;
             }
             if (!ok) {
                 fprintf(stderr, "Profile '%s': invalid run_as '%s' in '%s'\n",
@@ -489,7 +500,19 @@ static int apply_profile(const profile_t *p, int allow_unpriv) {
                     fprintf(stderr, "executor: unknown run_as '%s'\n", p->run_as);
                     return -1;
                 }
+                if (v > (ULONG_MAX - 9) / 10) {
+                    fprintf(stderr, "executor: run_as '%s' out of range\n", p->run_as);
+                    return -1;
+                }
                 v = v * 10 + (unsigned long)(*q - '0');
+            }
+            /* Never let a large numeric run_as silently truncate (e.g. to uid 0,
+             * root). Config load applies the same bound, but re-check here: the
+             * executor must not trust that the value reaching it was validated. */
+            if ((unsigned long)(uid_t)v != v || (unsigned long)(gid_t)v != v) {
+                fprintf(stderr, "executor: run_as '%s' out of range for uid/gid\n",
+                        p->run_as);
+                return -1;
             }
             uid = (uid_t)v; gid = (gid_t)v;
         }
@@ -561,7 +584,17 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
                     path, strerror(errno));
             _exit(126);
         }
-        execv(path, argv);
+        /* Sanitised environment: the executor never trusts its own inherited
+         * env for the action. The script receives request context on stdin
+         * (not via the environment), so a minimal PATH avoids passing the
+         * loader and shell variables (LD_PRELOAD, LD_LIBRARY_PATH, BASH_ENV,
+         * IFS, PERL5LIB, ...) as attack surface to script interpreters running
+         * under the profile. */
+        char *const clean_env[] = {
+            (char *)"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            NULL
+        };
+        execve(path, argv, clean_env);
         dprintf(2, "executor: exec '%s' failed: %s\n", path, strerror(errno));
         _exit(127);
     }

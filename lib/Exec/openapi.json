@@ -3,7 +3,7 @@
   "info": {
     "title": "ctrl-exec API",
     "description": "REST gateway for the ctrl-exec mTLS remote script execution system. Provides programmatic access to the run, ping, discovery, and health endpoints. Authentication is delegated to the configured auth hook on the ctrl-exec host; pass credentials in the request body.",
-    "version": "0.2.8",
+    "version": "0.11.2",
     "license": {
       "name": "AGPL-3.0-only"
     },

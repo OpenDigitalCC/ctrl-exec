@@ -134,7 +134,8 @@ sub check {
         dispatcher_serial => $dispatcher_serial,
     );
 
-    my $exit_code = _run_hook($hook, $context);
+    my $hook_timeout = $config->{auth_hook_timeout} // 10;
+    my $exit_code = _run_hook($hook, $context, $hook_timeout);
 
     if ($exit_code == AUTH_OK) {
         Exec::Log::log_action('INFO', {
@@ -204,7 +205,8 @@ sub _build_context {
 # Returns the hook's exit code.
 # On exec failure returns AUTH_DENIED.
 sub _run_hook {
-    my ($hook, $context) = @_;
+    my ($hook, $context, $timeout) = @_;
+    $timeout //= 10;
 
     my $json_in = encode_json($context);
 
@@ -254,14 +256,38 @@ sub _run_hook {
     # Without this, a broken pipe would kill the current process (the forked
     # API request handler). The write simply fails silently instead.
     local $SIG{PIPE} = 'IGNORE';
-    print $stdin_w $json_in;
-    close $stdin_w;
 
-    waitpid $pid, 0;
+    # Bound the hook's run time. A hook that hangs - e.g. blocking on an
+    # unreachable identity service - must not wedge the forked request handler
+    # forever. On timeout the hook is killed and the request fails closed.
+    my $exit_code;
+    my $ok = eval {
+        local $SIG{ALRM} = sub { die "hook-timeout\n" };
+        alarm($timeout);
+        print $stdin_w $json_in;
+        close $stdin_w;
+        waitpid $pid, 0;
+        alarm(0);
+        # If waitpid was raced (ret -1), $? is -1 and ($? >> 8) & 0xff = 255 -
+        # guarded against by the local SIGCHLD = DEFAULT above.
+        $exit_code = ($? >> 8) & 0xff;
+        1;
+    };
+    alarm(0);
 
-    # Extract exit code from $?. If waitpid was raced (ret -1), $? is -1
-    # and ($? >> 8) & 0xff = 255 - guarded against by the local SIGCHLD above.
-    return ($? >> 8) & 0xff;
+    unless ($ok) {
+        # Timeout (or any unexpected die): KILL the hook - uncatchable, so the
+        # reap returns promptly and leaves no zombie - and deny.
+        kill 'KILL', $pid;
+        waitpid $pid, 0;
+        Exec::Log::log_action('WARNING', {
+            ACTION  => 'auth-hook-timeout',
+            TIMEOUT => $timeout,
+        });
+        return AUTH_DENIED;
+    }
+
+    return $exit_code;
 }
 
 1;

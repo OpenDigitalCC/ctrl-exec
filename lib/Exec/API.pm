@@ -16,6 +16,12 @@ use Exec::RunStore qw();
 my $OPENAPI_PATH = '/usr/local/lib/ctrl-exec/Exec/openapi.json';
 my $VERSION_FILE = '/usr/local/lib/ctrl-exec/VERSION';
 
+# Request bounds, mirroring the agent server (bin/ctrl-exec-agent). Without
+# these an attacker-supplied Content-Length or a flood of header lines is read
+# into memory before the auth gate runs - a pre-authentication DoS.
+my $MAX_HEADERS = 32;
+my $MAX_BODY    = 1_048_576;   # 1 MiB; the largest legitimate body is well under
+
 my $VERSION = do {
     if (open my $fh, '<', $VERSION_FILE) {
         my $v = <$fh>; chomp $v; $v;
@@ -150,14 +156,28 @@ sub _handle_connection {
     $method = uc($method // '');
     $path   = $path // '/';
 
-    # Read headers
+    # Read headers, bounded by header count and declared body size so an
+    # oversized Content-Length or a flood of header lines cannot exhaust memory
+    # before the auth gate. Both limits reject before any body is read.
     my $content_length = 0;
+    my $header_count   = 0;
     while (my $line = <$conn>) {
         $line =~ s/\r?\n$//;
         last if $line eq '';
+        if (++$header_count > $MAX_HEADERS) {
+            _send_error($conn, 431, 'request header fields too large',
+                        "more than $MAX_HEADERS header lines");
+            return;
+        }
         if ($line =~ /^Content-Length:\s*(\d+)/i) {
             $content_length = $1;
         }
+    }
+
+    if ($content_length > $MAX_BODY) {
+        _send_error($conn, 413, 'payload too large',
+                    "body exceeds $MAX_BODY bytes");
+        return;
     }
 
     # Read body
@@ -703,6 +723,8 @@ sub _status_phrase {
         403 => 'Forbidden',
         404 => 'Not Found',
         409 => 'Conflict',
+        413 => 'Payload Too Large',
+        431 => 'Request Header Fields Too Large',
         500 => 'Internal Server Error',
     );
     return $phrases{$code} // 'Unknown';

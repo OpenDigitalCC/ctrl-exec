@@ -21,6 +21,11 @@ ca   = /etc/ctrl-exec/ca.crt
 # production use. Comment out to disable auth entirely.
 auth_hook = /etc/ctrl-exec/auth-hook
 
+# Max seconds to wait for the auth hook to finish (default: 10). A hook that
+# exceeds this is killed and the request is denied (fail closed), so a hook that
+# blocks on an unreachable identity service cannot wedge the request.
+# auth_hook_timeout = 10
+
 # Read timeout in seconds: maximum time to wait for a script to complete (default: 60).
 # Scripts that exceed this will be reported as a timeout failure.
 # read_timeout = 60
