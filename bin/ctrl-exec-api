@@ -7,6 +7,7 @@ use lib "$Bin/../lib";
 
 use Exec::Log qw();
 use Exec::API qw();
+use Exec::DispatcherConfig qw();
 use Getopt::Long    qw(GetOptions);
 
 our $VERSION = 'UNINSTALLED';
@@ -27,20 +28,7 @@ sub main {
 }
 
 sub load_config {
-    my ($path) = @_;
-    open my $fh, '<', $path
-        or die "Cannot open config '$path': $!\n";
-    my %config;
-    while (my $line = <$fh>) {
-        chomp $line;
-        next if $line =~ /^\s*[#\s]/;
-        $config{$1} = $2 if $line =~ /^\s*(\w+)\s*=\s*(.+?)\s*$/;
-    }
-    close $fh;
-    for my $k (qw(cert key ca)) {
-        die "Missing '$k' in $path\n" unless $config{$k};
-    }
-    return \%config;
+    return Exec::DispatcherConfig::load_config($_[0]);
 }
 
 sub usage {

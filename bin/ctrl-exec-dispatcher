@@ -8,6 +8,7 @@ use lib "$Bin/../lib";
 use Exec::Log     qw();
 use Exec::Engine  qw();
 use Exec::Auth    qw();
+use Exec::DispatcherConfig qw();
 use Exec::Lock    qw();
 use Exec::RunStore qw();
 use Exec::Pairing qw();
@@ -955,19 +956,7 @@ sub _lock_error {
 }
 
 sub _load_config {
-    open my $fh, '<', $CONFIG_PATH
-        or die "Cannot open config '$CONFIG_PATH': $!\n";
-    my %config;
-    while (my $line = <$fh>) {
-        chomp $line;
-        next if $line =~ /^\s*[#\s]/;
-        $config{$1} = $2 if $line =~ /^\s*(\w+)\s*=\s*(.+?)\s*$/;
-    }
-    close $fh;
-    for my $k (qw(cert key ca)) {
-        die "Missing '$k' in $CONFIG_PATH\n" unless $config{$k};
-    }
-    return \%config;
+    return Exec::DispatcherConfig::load_config($CONFIG_PATH);
 }
 
 ## This dispatcher's stable identity (ctrl-exec.conf 'dispatcher_id', else
