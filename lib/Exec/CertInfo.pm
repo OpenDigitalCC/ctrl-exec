@@ -3,7 +3,10 @@ package Exec::CertInfo;
 # Shared cert inspection. The "openssl x509 -noout -enddate -> notAfter" parse was
 # reimplemented in four modules with subtly different quoting (one interpolated
 # the temp path unquoted). Consolidated here so the shell-quoting and parse live
-# in one place.
+# in one place. This module is also the single home for serial canonicalisation
+# (serial_to_hex) - the trust key behind every dispatcher-trusted/serial-revoked
+# decision. serial_to_hex is intentionally NOT in @EXPORT_OK: every caller uses
+# the fully-qualified name, matching the project's no-default-exports convention.
 
 use strict;
 use warnings;
@@ -42,12 +45,16 @@ sub serial_to_hex {
     $serial =~ s/^0x//i;
     $serial =~ s/^serial=//i;
 
-    # Strip colon separators (e.g. DE:AD:BE:EF from IO::Socket::SSL).
-    # OpenSSL prepends a 00 byte to positive-integer DER serials; strip it.
+    # Strip colon separators (e.g. DE:AD:BE:EF from IO::Socket::SSL or a serial
+    # pasted from `openssl x509 -text`). A colon form is always hex bytes, so it
+    # must use the SAME leading-zero strip as the plain-hex branch below - not a
+    # byte-pair strip, which diverges for any serial whose top byte is 0x01-0x0f
+    # (e.g. "00:0a" -> "0a" but the live plain-hex "0a" -> "a", a silent
+    # trust-key mismatch). One strip, one canonical form.
     if ($serial =~ /:/) {
         $serial =~ s/://g;
         $serial = lc $serial;
-        $serial =~ s/^(?:00)+(?=.{2})//;  # strip leading 00 bytes (keep at least 2 hex chars)
+        $serial =~ s/\A0+(?=[0-9a-f])//;
         return $serial;
     }
 
@@ -71,8 +78,8 @@ sub serial_to_hex {
     # `openssl x509 -serial` and Net::SSLeay::P_ASN1_INTEGER_get_hex emit minimal
     # hex with no leading zero, so without this strip '00aabb...' (stored) never
     # matches a live 'aabb...' and every request from that dispatcher is rejected
-    # as a serial mismatch. (The colon-separated branch above already strips its
-    # leading 00 byte; this keeps the plain-hex branch consistent with it.)
+    # as a serial mismatch. (The colon-separated branch above strips leading
+    # zeros the same way, so both branches yield one canonical form.)
     if ($serial =~ /\A[0-9a-f]+\z/) {
         $serial =~ s/\A0+(?=[0-9a-f])//;
         return $serial;

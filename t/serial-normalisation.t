@@ -1,14 +1,16 @@
 #!/usr/bin/perl
 # t/serial-normalisation.t
 #
-# Unit tests for serial_to_hex, serial_revoked, and load_revoked_serials
-# in Exec::Agent::AgentPairing.
+# Unit tests for serial_to_hex (the single serial canonicaliser, now in
+# Exec::CertInfo) plus serial_revoked / load_revoked_serials in
+# Exec::Agent::AgentPairing.
 #
-# serial_to_hex is a private function (_serial_to_hex is how handle_capabilities
-# calls it) but is also called as serial_to_hex from serial_revoked. Tests
-# call it as Exec::CertInfo::serial_to_hex, which is the public
-# name. If the agent code is calling _serial_to_hex that is a separate bug
-# noted in SECURITY-FINDINGS.md.
+# serial_to_hex lives in Exec::CertInfo and is called by fully-qualified name
+# (Exec::CertInfo::serial_to_hex) from every reader - the agent's trust check,
+# the dispatcher's approve/rotate readers, and serial_revoked. It is the one key
+# behind every dispatcher-trusted/serial-revoked decision, so every input form
+# (decimal, plain hex, 0x/serial= prefixed, colon-separated) must collapse to a
+# single canonical hex string.
 
 use strict;
 use warnings;
@@ -156,6 +158,36 @@ subtest 'serial_to_hex: colon-separated with leading zero byte 00:DE:AD:BE:EF' =
 subtest 'serial_to_hex: colon-separated lowercase ca:fe:ba:be' => sub {
     my $result = Exec::CertInfo::serial_to_hex('ca:fe:ba:be');
     is $result, 'cafebabe', 'lowercase colon-separated normalised';
+};
+
+# Regression (CG-001): the colon branch and the plain-hex branch must strip
+# leading zeros IDENTICALLY. For any serial whose top significant byte is
+# 0x01-0x0f the old colon branch (whole-00-byte strip) diverged from the
+# plain-hex branch (all-leading-zero strip): "00:0a" -> "0a" but live "0a" -> "a",
+# a silent trust-key mismatch. openssl x509 -text prints serials in colon form,
+# so an operator pasting one into the revoked/trusted file hit this. Every input
+# form of the same value must now collapse to one key.
+subtest 'serial_to_hex: odd-nibble value canonicalises equal across all forms' => sub {
+    # value 0x0a (10): plain, padded, colon, 0x-prefixed, decimal
+    my $canon = 'a';
+    is Exec::CertInfo::serial_to_hex('0a'),    $canon, 'plain hex 0a -> a';
+    is Exec::CertInfo::serial_to_hex('00:0a'), $canon, 'colon 00:0a -> a (was 0a)';
+    is Exec::CertInfo::serial_to_hex('0A'),    $canon, 'uppercase 0A -> a';
+    is Exec::CertInfo::serial_to_hex('0x0a'),  $canon, '0x0a -> a';
+    is Exec::CertInfo::serial_to_hex('10'),    $canon, 'decimal 10 -> a';
+
+    # value 0x010a (266): a leading zero NIBBLE inside the high byte
+    my $canon2 = '10a';
+    is Exec::CertInfo::serial_to_hex('010a'),     $canon2, 'plain 010a -> 10a';
+    is Exec::CertInfo::serial_to_hex('00:01:0a'), $canon2, 'colon 00:01:0a -> 10a';
+    is Exec::CertInfo::serial_to_hex('266'),      $canon2, 'decimal 266 -> 10a';
+};
+
+# A colon form is hex BYTES, never decimal: "00:10" is byte 0x10 = 16 = hex "10",
+# it must NOT be read as decimal 10 (-> "a"). Guards against a naive "strip
+# colons then fall through the decimal branch" fix.
+subtest 'serial_to_hex: colon form is hex bytes, not decimal' => sub {
+    is Exec::CertInfo::serial_to_hex('00:10'), '10', 'colon 00:10 -> 10 (hex byte), not a';
 };
 
 # ---------------------------------------------------------------------------
