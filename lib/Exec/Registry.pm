@@ -92,25 +92,56 @@ sub _locked {
     return wantarray ? @r : $r[0];
 }
 
+# Apply one serial-status update (read-modify-write of a single record). NOT
+# locked - the caller holds the registry lock. $u is a hashref:
+#   { hostname, status, serial?, serial_broadcast?, serial_confirmed? }
+sub _apply_serial_update {
+    my ($dir, $u) = @_;
+    my $hostname = $u->{hostname};
+    my $path     = "$dir/$hostname.json";
+
+    my $record = -f $path
+        ? (eval { decode_json(slurp($path)) } // {})
+        : {};
+
+    $record->{hostname}      = $hostname;
+    $record->{serial_status} = $u->{status};
+    $record->{dispatcher_serial}  = $u->{serial}           if defined $u->{serial};
+    $record->{serial_broadcast}   = $u->{serial_broadcast} if defined $u->{serial_broadcast};
+    $record->{serial_confirmed}   = $u->{serial_confirmed} if defined $u->{serial_confirmed};
+
+    write_atomic($path, encode_json($record));
+}
+
 sub update_agent_serial_status {
     my (%opts) = @_;
     my $hostname = $opts{hostname} or croak "hostname required";
     my $status   = $opts{status}   or croak "status required";
     my $dir      = $opts{registry_dir} // $REGISTRY_DIR;
-    my $path     = "$dir/$hostname.json";
 
-    _locked($dir, sub {
-        my $record = -f $path
-            ? (eval { decode_json(slurp($path)) } // {})
-            : {};
+    _locked($dir, sub { _apply_serial_update($dir, { %opts }) });
+}
 
-        $record->{hostname}      = $hostname;
-        $record->{serial_status} = $status;
-        $record->{dispatcher_serial}  = $opts{serial}           if defined $opts{serial};
-        $record->{serial_broadcast}   = $opts{serial_broadcast} if defined $opts{serial_broadcast};
-        $record->{serial_confirmed}   = $opts{serial_confirmed} if defined $opts{serial_confirmed};
+# Apply a BATCH of serial-status updates under a SINGLE registry lock, instead
+# of taking the registry-wide lock once per agent. A fleet-wide rotation touches
+# every agent (mark-pending, then confirm, then retire/stale), so the per-agent
+# lock+RMW was an O(n) storm of lock acquisitions and rename()s through one
+# mutex that stalls concurrent dispatch resolves. Each update is the same
+# hashref _apply_serial_update takes. Returns the count applied. No-op for an
+# empty list (so it does not even open the lock).
+sub update_serials_bulk {
+    my ($updates, %opts) = @_;
+    my $dir = $opts{registry_dir} // $REGISTRY_DIR;
+    return 0 unless $updates && @$updates;
 
-        write_atomic($path, encode_json($record));
+    return _locked($dir, sub {
+        my $n = 0;
+        for my $u (@$updates) {
+            next unless $u->{hostname} && $u->{status};
+            _apply_serial_update($dir, $u);
+            $n++;
+        }
+        return $n;
     });
 }
 

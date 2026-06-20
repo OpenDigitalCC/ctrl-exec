@@ -119,13 +119,12 @@ sub expire_stale_agents {
     my $agents = Exec::Registry::list_agents(
         registry_dir => $config->{registry_dir},
     );
-    for my $agent (@$agents) {
-        next unless ($agent->{serial_status} // '') eq 'pending';
-        Exec::Registry::update_agent_serial_status(
-            hostname     => $agent->{hostname},
-            status       => 'stale',
-            registry_dir => $config->{registry_dir},
-        );
+    my @stale = grep { ($_->{serial_status} // '') eq 'pending' } @$agents;
+    Exec::Registry::update_serials_bulk(
+        [ map { { hostname => $_->{hostname}, status => 'stale' } } @stale ],
+        registry_dir => $config->{registry_dir},
+    );
+    for my $agent (@stale) {
         Exec::Log::log_action('WARNING', {
             ACTION   => 'serial-stale',
             AGENT    => $agent->{hostname},
@@ -197,16 +196,17 @@ sub broadcast_serial {
     }
 
     my @report;
+    my @confirmed;
+    my $confirmed_at = _now_iso8601();
     for my $r (@$results) {
         my $host = $r->{host};
         if (($r->{exit} // -1) == 0) {
-            Exec::Registry::update_agent_serial_status(
+            push @confirmed, {
                 hostname         => $host,
                 status           => 'current',
                 serial           => $serial,
-                serial_confirmed => _now_iso8601(),
-                registry_dir     => $config->{registry_dir},
-            );
+                serial_confirmed => $confirmed_at,
+            };
             push @report, { hostname => $host, status => 'ok' };
             Exec::Log::log_action('INFO', {
                 ACTION => 'serial-confirmed',
@@ -223,6 +223,10 @@ sub broadcast_serial {
             });
         }
     }
+
+    # Persist every confirmation under one registry lock.
+    Exec::Registry::update_serials_bulk(
+        \@confirmed, registry_dir => $config->{registry_dir});
 
     return \@report;
 }
@@ -424,14 +428,15 @@ sub _do_rotation {
     my $agents = Exec::Registry::list_agents(
         registry_dir => $config->{registry_dir},
     );
-    for my $agent (@$agents) {
-        Exec::Registry::update_agent_serial_status(
-            hostname         => $agent->{hostname},
+    # One lock acquisition for the whole fleet, not one per agent.
+    Exec::Registry::update_serials_bulk(
+        [ map { {
+            hostname         => $_->{hostname},
             status           => 'pending',
             serial_broadcast => $now,
-            registry_dir     => $config->{registry_dir},
-        );
-    }
+        } } @$agents ],
+        registry_dir => $config->{registry_dir},
+    );
 
     Exec::Log::log_action('INFO', {
         ACTION          => 'cert-rotated',

@@ -282,4 +282,47 @@ subtest 'update_agent_serial_status: absent agent creates new minimal record' =>
     is $r->{hostname}, 'new-from-update', 'hostname set in new record';
 };
 
+# ---------------------------------------------------------------------------
+# update_serials_bulk: many records under a single lock (PERF-006)
+# ---------------------------------------------------------------------------
+
+subtest 'update_serials_bulk: applies every update and merges per record' => sub {
+    my $dir = tempdir(CLEANUP => 1);
+
+    # Two existing records (to confirm merge preserves other fields) + one
+    # absent host (to confirm it is created, as rotation's mark-pending needs).
+    for my $h (qw(bulk-a bulk-b)) {
+        Exec::Registry::register_agent(
+            registry_dir => $dir, hostname => $h, ip => '10.0.0.9', reqid => 'aa');
+    }
+
+    my $n = Exec::Registry::update_serials_bulk([
+        { hostname => 'bulk-a', status => 'current',
+          serial => 'deadbeef', serial_confirmed => '2026-06-20T00:00:00Z' },
+        { hostname => 'bulk-b', status => 'pending', serial_broadcast => '2026-06-20T00:00:00Z' },
+        { hostname => 'bulk-new', status => 'pending' },
+    ], registry_dir => $dir);
+
+    is $n, 3, 'three updates applied';
+
+    my $a = read_record($dir, 'bulk-a');
+    is $a->{serial_status}, 'current',  'bulk-a status set';
+    is $a->{dispatcher_serial}, 'deadbeef', 'bulk-a serial set';
+    is $a->{ip}, '10.0.0.9', 'bulk-a ip preserved (merge, not overwrite)';
+
+    my $b = read_record($dir, 'bulk-b');
+    is $b->{serial_status}, 'pending', 'bulk-b status set';
+    is $b->{serial_broadcast}, '2026-06-20T00:00:00Z', 'bulk-b broadcast time set';
+
+    ok -f "$dir/bulk-new.json", 'absent host created by bulk update';
+    is read_record($dir, 'bulk-new')->{serial_status}, 'pending', 'new record status';
+};
+
+subtest 'update_serials_bulk: empty list is a no-op' => sub {
+    my $dir = tempdir(CLEANUP => 1);
+    is Exec::Registry::update_serials_bulk([], registry_dir => $dir), 0,
+        'empty batch applies nothing';
+    ok !-e "$dir/.registry.lock", 'empty batch does not even open the lock';
+};
+
 done_testing;
