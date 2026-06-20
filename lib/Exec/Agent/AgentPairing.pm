@@ -6,6 +6,7 @@ use File::Temp qw(tempfile tempdir);
 use File::Basename qw(dirname);
 use File::Path qw(make_path);
 use Carp qw(croak);
+use Exec::FileUtil qw(slurp);
 use Exec::Log qw();
 
 
@@ -35,8 +36,8 @@ sub generate_key_and_csr {
         '-subj',    "/CN=$hostname",
     );
 
-    my $key_pem = _slurp($key_file);
-    my $csr_pem = _slurp($csr_file);
+    my $key_pem = slurp($key_file);
+    my $csr_pem = slurp($csr_file);
 
     return { key_pem => $key_pem, csr_pem => $csr_pem };
 }
@@ -62,7 +63,7 @@ sub generate_csr_only {
         '-subj', "/CN=$hostname",
     );
 
-    my $csr_pem = _slurp($csr_file);
+    my $csr_pem = slurp($csr_file);
     return { csr_pem => $csr_pem };
 }
 
@@ -583,7 +584,7 @@ sub promote_staged_cert {
 
     return { ok => 1, promoted => 0 } unless -f $staged_path;
 
-    my $cert_pem = eval { _slurp($staged_path) };
+    my $cert_pem = eval { slurp($staged_path) };
     return { ok => 0, error => "cannot read staged cert: $@" } unless defined $cert_pem;
 
     my ($valid, $reason) = validate_cert(
@@ -619,25 +620,9 @@ sub _ensure_owned_dir {
     chmod 0750, $dir;
 }
 
-sub _slurp {
-    my ($path) = @_;
-    open my $fh, '<', $path or croak "Cannot read '$path': $!";
-    local $/;
-    return scalar <$fh>;
-}
-
 sub _write_file {
     my ($path, $content, $mode) = @_;
-    my $dir = dirname($path);
-    croak "Directory '$dir' does not exist" unless -d $dir;
-
-    my ($tmp_fh, $tmp_path) = tempfile(DIR => $dir, UNLINK => 0);
-    print $tmp_fh $content;
-    close $tmp_fh;
-
-    chmod $mode, $tmp_path;
-    rename $tmp_path, $path
-        or do { unlink $tmp_path; croak "rename failed for '$path': $!" };
+    return Exec::FileUtil::write_atomic($path, $content, mode => $mode, make_dir => 0);
 }
 
 sub _cert_expiry {

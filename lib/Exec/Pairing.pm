@@ -8,6 +8,7 @@ use Fcntl       qw(:flock);
 use JSON        qw(encode_json decode_json);
 use POSIX       qw(strftime);
 use Carp        qw(croak);
+use Exec::FileUtil qw(slurp);
 use Sys::Hostname qw(hostname);
 use Socket      qw(getaddrinfo getnameinfo
                    AI_NUMERICHOST NI_NAMEREQD NI_NUMERICHOST NIx_NOSERV);
@@ -289,7 +290,7 @@ sub list_requests {
         next unless $f =~ /^([a-f0-9]+)\.json$/;
         my $id   = $1;
         my $path = "$dir/$f";
-        my $data = eval { decode_json(_slurp($path)) };
+        my $data = eval { decode_json(slurp($path)) };
         next if $@;
         push @requests, $data;
     }
@@ -321,7 +322,7 @@ sub approve_request {
     my $req_file = "$pairing_dir/$reqid.json";
     -f $req_file or croak "No pending request '$reqid'";
 
-    my $req = decode_json(_slurp($req_file));
+    my $req = decode_json(slurp($req_file));
 
     # Dispatch-resolution preferences: operator override (approve flags) wins
     # over the agent-suggested/reported value in the request; then the default.
@@ -436,7 +437,7 @@ sub deny_request {
     my $req_file = "$pairing_dir/$reqid.json";
     -f $req_file or croak "No pending request '$reqid'";
 
-    my $req = eval { decode_json(_slurp($req_file)) } // {};
+    my $req = eval { decode_json(slurp($req_file)) } // {};
 
     # Write denial so any waiting child can respond to agent
     my $resp_file = "$pairing_dir/$reqid.denied";
@@ -829,14 +830,14 @@ sub _handle_pair_request {
 
     while (time < $deadline) {
         if (-f $resp_approved) {
-            my $resp = _slurp($resp_approved);
+            my $resp = slurp($resp_approved);
             _send_raw($conn, $resp);
             unlink $resp_approved;
             unlink "$pairing_dir/$reqid.json";
             return;
         }
         if (-f $resp_denied) {
-            my $resp = _slurp($resp_denied);
+            my $resp = slurp($resp_denied);
             _send_raw($conn, $resp);
             unlink $resp_denied;
             return;
@@ -881,18 +882,9 @@ sub _expire_stale_requests {
     closedir $dh;
 }
 
-sub _slurp {
-    my ($path) = @_;
-    open my $fh, '<', $path or croak "Cannot read '$path': $!";
-    local $/;
-    return scalar <$fh>;
-}
-
 sub _write_file {
     my ($path, $content) = @_;
-    open my $fh, '>', $path or croak "Cannot write '$path': $!";
-    print $fh $content;
-    close $fh;
+    return Exec::FileUtil::write_atomic($path, $content);
 }
 
 # Compute a 6-digit confirmation code from a CSR PEM string.

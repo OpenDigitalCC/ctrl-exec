@@ -3,11 +3,9 @@ package Exec::Rotation;
 use strict;
 use warnings;
 use JSON        qw(encode_json decode_json);
-use File::Path  qw(make_path);
-use File::Temp  qw(tempfile);
-use File::Basename qw(dirname);
 use POSIX       qw(strftime);
 use Carp        qw(croak);
+use Exec::FileUtil qw(slurp);
 
 use Exec::CA       qw();
 use Exec::Registry qw();
@@ -91,7 +89,7 @@ sub load_state {
     my (%opts) = @_;
     my $path = $opts{path} // $ROTATION_FILE;
     return undef unless -f $path;
-    my $data = eval { decode_json(_slurp($path)) };
+    my $data = eval { decode_json(slurp($path)) };
     if ($@) {
         Exec::Log::log_action('ERR', {
             ACTION => 'rotation-state-corrupt',
@@ -496,23 +494,9 @@ sub _now_iso8601 {
     return strftime('%Y-%m-%dT%H:%M:%SZ', gmtime);
 }
 
-sub _slurp {
-    my ($path) = @_;
-    open my $fh, '<', $path or croak "Cannot read '$path': $!";
-    local $/;
-    return scalar <$fh>;
-}
-
 sub _write_atomic {
     my ($path, $content) = @_;
-    my $dir = dirname($path);
-    make_path($dir) unless -d $dir;
-    my ($tmp_fh, $tmp_path) = tempfile(DIR => $dir, UNLINK => 0);
-    print $tmp_fh $content;
-    close $tmp_fh;
-    chmod 0640, $tmp_path;
-    rename $tmp_path, $path
-        or do { unlink $tmp_path; croak "Cannot write '$path': $!" };
+    return Exec::FileUtil::write_atomic($path, $content, mode => 0640);
 }
 
 1;

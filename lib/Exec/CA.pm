@@ -5,6 +5,7 @@ use warnings;
 use File::Temp  qw(tempfile tempdir);
 use File::Path  qw(make_path);
 use Carp        qw(croak);
+use Exec::FileUtil qw(slurp);
 
 
 my $CA_DIR   = '/etc/ctrl-exec';
@@ -184,7 +185,7 @@ sub sign_csr {
         '-days',      $days,
     );
 
-    my $cert_pem = _slurp($cert_path);
+    my $cert_pem = slurp($cert_path);
 
     if ($out_path) {
         _write_file($out_path, $cert_pem, 0644);
@@ -197,7 +198,7 @@ sub sign_csr {
 sub read_ca_cert {
     my (%opts) = @_;
     my $ca_dir = $opts{ca_dir} // $CA_DIR;
-    return _slurp("$ca_dir/ca.crt");
+    return slurp("$ca_dir/ca.crt");
 }
 
 # --- private helpers ---
@@ -269,7 +270,7 @@ sub _run_or_capture {
     POSIX::close($saved_fd1);
 
     croak "Command failed (@cmd): exit $?" if $rc != 0;
-    return _slurp($out_path);
+    return slurp($out_path);
 }
 
 sub _run_or_die {
@@ -297,25 +298,15 @@ sub _run_or_die {
     POSIX::close($saved_fd2);
 
     if ($rc != 0) {
-        my $stderr = _slurp($err_path);
+        my $stderr = slurp($err_path);
         $stderr =~ s/\s+$//;
         croak "Command failed (@cmd): exit $?\n$stderr";
     }
 }
 
-sub _slurp {
-    my ($path) = @_;
-    open my $fh, '<', $path or croak "Cannot read '$path': $!";
-    local $/;
-    return scalar <$fh>;
-}
-
 sub _write_file {
     my ($path, $content, $mode) = @_;
-    open my $fh, '>', $path or croak "Cannot write '$path': $!";
-    print $fh $content;
-    close $fh;
-    chmod $mode, $path;
+    return Exec::FileUtil::write_atomic($path, $content, mode => $mode);
 }
 
 sub _write_serial {

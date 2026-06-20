@@ -9,6 +9,7 @@ use File::Basename qw(dirname);
 use Fcntl      qw(LOCK_EX LOCK_NB);
 use POSIX      qw(setsid strftime);
 use Carp       qw(croak);
+use Exec::FileUtil qw(slurp_maybe);
 
 use Exec::Agent::Runner qw();
 use Exec::Log qw();
@@ -140,7 +141,7 @@ sub result {
     $runs_dir //= $DEFAULT_RUNS_DIR;
     my $file = _record_path($runs_dir, $owner, $reqid);
     return undef unless -f $file;
-    return eval { decode_json(_slurp($file)) };
+    return eval { decode_json(slurp_maybe($file)) };
 }
 
 # True if a run record belongs to the dispatcher whose stable identity is $id.
@@ -275,13 +276,6 @@ sub _write_record {
             ERROR  => "cannot write $path: $!",
         });
     }
-}
-
-sub _slurp {
-    my ($path) = @_;
-    open my $fh, '<', $path or return undef;
-    local $/;
-    return scalar <$fh>;
 }
 
 1;

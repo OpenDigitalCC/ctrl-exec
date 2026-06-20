@@ -6,6 +6,7 @@ use JSON       qw(encode_json decode_json);
 use File::Path qw(make_path);
 use File::Temp qw(tempfile);
 use Carp       qw(croak);
+use Exec::FileUtil qw(slurp_maybe);
 
 use Exec::Log    qw();
 use Exec::Engine qw();
@@ -97,7 +98,7 @@ sub load {
     return undef unless _valid_reqid($reqid);
     my $file = "$runs_dir/$reqid.json";
     return undef unless -f $file;
-    return eval { decode_json(_slurp($file)) };
+    return eval { decode_json(slurp_maybe($file)) };
 }
 
 # Aggregate the current status of an async run: fetch results from every host
@@ -245,13 +246,6 @@ sub _write {
             ERROR  => "cannot write $path: $!",
         });
     }
-}
-
-sub _slurp {
-    my ($path) = @_;
-    open my $fh, '<', $path or return undef;
-    local $/;
-    return scalar <$fh>;
 }
 
 1;
