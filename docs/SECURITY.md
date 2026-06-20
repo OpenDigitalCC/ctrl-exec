@@ -378,7 +378,11 @@ Agent-side hook
 ```
 
 The `ctrl-exec-agent` system user has no login shell and no home directory.
-The `ctrl-exec` group grants CLI access to non-root operators.
+The `ctrl-exec` group grants non-root operators read access to the registry and
+run records, so the monitoring commands (`list-agents`, `status`, `list-locks`)
+run without sudo. Operations that use the dispatcher or CA private key - `run`,
+`ping`, `maintain`, `pairing-mode`, `rotate-cert`, `approve`/`deny`, `setup-*` -
+still require root, since both keys are `0600 root`.
 
 Both run stores hold script stdout/stderr at rest, the same sensitivity as a
 live run's output. They are not world-readable (records `0640`, directories

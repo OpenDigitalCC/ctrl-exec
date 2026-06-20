@@ -1191,8 +1191,12 @@ Entry point for the HTTP API server. Loads config, calls `Exec::API::run`.
 Installed as a systemd service (`ctrl-exec-api.service`).
 
 The service runs as `root:ctrl-exec` with `ProtectSystem=strict` and
-`ReadWritePaths=/var/lib/ctrl-exec`. The `ctrl-exec` group is created by the
-installer and grants CLI access without sudo to users added to it.
+`ReadWritePaths=/var/lib/ctrl-exec`. (It runs as root because it reads the
+dispatcher's `0600 root` private key to dispatch to agents over mTLS - see the
+de-rooting note in the security docs.) The `ctrl-exec` group is created by the
+installer and grants the **read-only** CLI commands (`list-agents`, `status`)
+without sudo to users added to it; operations that use the dispatcher or CA key
+still require sudo.
 
 
 ## Request/Response Wire Format

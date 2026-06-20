@@ -132,13 +132,22 @@ their version in the `.deb` itself.
 
 ### ctrl-exec group
 
-Both methods create a `ctrl-exec` system group. Add yourself to it for CLI
-access without sudo:
+Both methods create a `ctrl-exec` system group. Add yourself to it to run the
+**read-only** dispatcher commands without sudo:
 
 ```bash
 sudo usermod -aG ctrl-exec $USER
 # Log out and back in (or run `newgrp ctrl-exec`) for the group to take effect
 ```
+
+The group grants read access to the registry and run records, so monitoring
+commands - `list-agents`, `status`, `list-locks`, `list-requests`,
+`serial-status` - work without sudo. Commands that **contact agents** (`run`,
+`ping`, `maintain`) use the dispatcher's private key (`0600 root`), and commands
+that **manage the CA or certificates** (`setup-ca`, `setup-ctrl-exec`,
+`pairing-mode`, `approve`/`deny`, `rotate-cert`) use the CA key (`0600 root`);
+both classes require `sudo`. This keeps the dispatcher's and CA's private keys
+readable only by root, not by every operator in the group.
 
 
 ## Running the Tests
@@ -322,10 +331,11 @@ correct behaviour, since the agent's own cert is not a dispatcher cert.
 A successful `self-ping` confirms the port is listening, TLS is working,
 and the agent is enforcing serial policy.
 
-Then verify from the dispatcher host:
+Then verify from the dispatcher host (`ping` contacts the agent over mTLS using
+the dispatcher's root-owned key, so it runs with `sudo`):
 
 ```bash
-ced ping <agent-hostname>
+sudo ced ping <agent-hostname>
 ```
 
 Expected output:
@@ -454,6 +464,12 @@ alternative to a fixed `--ip`.
 
 
 ## CLI Reference
+
+The examples below omit `sudo` for brevity, but commands that contact agents
+(`run`, `ping`, `maintain`) or manage certificates (`setup-*`, `pairing-mode`,
+`rotate-cert`, `approve`/`deny`) use root-owned keys and must be run with `sudo`.
+The read-only commands (`list-agents`, `status`, `list-locks`) work without sudo
+for `ctrl-exec` group members - see *ctrl-exec group* above.
 
 ### Run
 

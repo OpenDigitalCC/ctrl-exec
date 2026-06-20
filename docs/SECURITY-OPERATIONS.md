@@ -27,10 +27,13 @@ Treat the dispatcher host as a privileged infrastructure node:
 - Apply OS-level hardening (no unnecessary services, up-to-date packages)
 - Do not run untrusted workloads on the dispatcher host
 
-The `ctrl-exec` group grants CLI access to the dispatcher binary and read
-access to the agent registry at `/var/lib/ctrl-exec/agents/`. This includes
-each agent's hostname and IP address. Membership of the `ctrl-exec` group
-is a privilege; treat it accordingly.
+The `ctrl-exec` group grants read access to the agent registry at
+`/var/lib/ctrl-exec/agents/` and the run records, so the read-only CLI commands
+(`list-agents`, `status`, `list-locks`) work without sudo. The registry includes
+each agent's hostname and IP address. Operations that use the dispatcher or CA
+private key (`run`/`ping`, `pairing-mode`, `rotate-cert`, `setup-*`) require root,
+since both keys are `0600 root`. Membership of the `ctrl-exec` group is a
+privilege; treat it accordingly.
 
 
 ## Token and Credential Lifecycle

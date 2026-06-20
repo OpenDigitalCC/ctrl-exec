@@ -144,14 +144,20 @@ Either method gives you `ced` (dispatcher) and `cea` (agent) on `PATH`, the
 These steps are the same whichever way you installed. Run each block on the
 host named in its heading.
 
-**1. Dispatcher host - create the PKI and grant CLI access**
+**1. Dispatcher host - create the PKI and grant monitoring access**
 
 ```bash
 sudo ced setup-ca          # one-time: create the deployment CA
 sudo ced setup-ctrl-exec   # create the dispatcher's own TLS certificate
-sudo usermod -aG ctrl-exec $USER
+sudo usermod -aG ctrl-exec $USER   # run the read-only commands (list-agents, status) without sudo
 newgrp ctrl-exec           # apply the new group to this shell (or re-login)
 ```
+
+> The `ctrl-exec` group grants read access to the registry and run records, so
+> monitoring commands (`list-agents`, `status`, `list-locks`) work without sudo.
+> Commands that contact agents (`run`, `ping`) or manage the CA/certs
+> (`setup-*`, `pairing-mode`, `rotate-cert`, `approve`/`deny`) use root-owned
+> keys and require `sudo`.
 
 > **Auth hook (optional).** With no auth hook configured, the dispatcher CLI
 > allows every `run`/`ping` - fine for an isolated trial. To restrict who may
@@ -201,11 +207,14 @@ sudo systemctl enable --now ctrl-exec-agent
 **5. Dispatcher host - verify**
 
 ```bash
-ced ping <agent-hostname>
-ced run <agent-hostname> logger -- -t test "hello from ctrl-exec"
+sudo ced ping <agent-hostname>
+sudo ced run <agent-hostname> logger -- -t test "hello from ctrl-exec"
 ```
 
-`ced list-agents` shows every paired agent and the address dispatch will use.
+`run` and `ping` contact agents over mTLS using the dispatcher's private key
+(root-owned `0600`), so they run with `sudo`. The read-only commands work without
+sudo for `ctrl-exec` group members - e.g. `ced list-agents` shows every paired
+agent and the address dispatch will use.
 
 ### Optional: API server
 
