@@ -219,6 +219,43 @@ subtest 'ip_allowed: unknown peer returns 0' => sub {
        0, "'unknown' peer does not match any entry";
 };
 
+# ---------------------------------------------------------------------------
+# Octet validation + canonicalisation at load (CG-004): a zero-padded or
+# malformed dotted-quad must not silently fail open by never matching.
+# ---------------------------------------------------------------------------
+
+subtest 'load_config: zero-padded octets are canonicalised, so they match' => sub {
+    my $path = write_conf("allowed_ips = 10.00.0.0/16\n");
+    my $c = Exec::Agent::Config::load_config($path);
+    is $c->{allowed_ips}[0], '10.0.0.0/16',
+        'leading zeros stripped to canonical form';
+    is Exec::Agent::Config::ip_allowed('10.0.5.5', $c->{allowed_ips}), 1,
+        'canonicalised entry matches a real peer (was a silent no-match)';
+};
+
+subtest 'load_config: zero-padded exact IP canonicalised and matches' => sub {
+    my $path = write_conf("allowed_ips = 192.168.001.010\n");
+    my $c = Exec::Agent::Config::load_config($path);
+    is $c->{allowed_ips}[0], '192.168.1.10', 'exact IP canonicalised';
+    is Exec::Agent::Config::ip_allowed('192.168.1.10', $c->{allowed_ips}), 1,
+        'canonical entry matches the canonical peer';
+};
+
+subtest 'load_config: malformed octets are warned-and-dropped' => sub {
+    # 999 is out of range; "10.0/16" has too few octets; "a.b.c.d" non-numeric.
+    my $path = write_conf("allowed_ips = 999.1.1.1, 10.0/16, a.b.c.d, 192.168.1.10\n");
+    my $c = Exec::Agent::Config::load_config($path);
+    is_deeply $c->{allowed_ips}, ['192.168.1.10'],
+        'only the one well-formed entry survives; malformed ones dropped';
+};
+
+subtest 'load_config: all-malformed allowed_ips leaves the key undefined' => sub {
+    my $path = write_conf("allowed_ips = 999.999.999.999, nonsense\n");
+    my $c = Exec::Agent::Config::load_config($path);
+    ok !exists $c->{allowed_ips},
+        'no surviving entries -> key removed (fail closed, not open)';
+};
+
 # Restore stderr
 open STDERR, '>&', $saved_stderr;
 

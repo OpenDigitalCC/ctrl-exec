@@ -145,14 +145,20 @@ sub _validate_config {
     }
 
     # Parse allowed_ips from comma-separated string into arrayref.
-    # Validate CIDR prefix lengths at load time; reject invalid entries with a
-    # warning so ip_allowed only ever sees well-formed entries.
+    # Validate CIDR prefix lengths AND the dotted-quad itself at load time,
+    # rejecting invalid entries with a warning so ip_allowed only ever sees
+    # well-formed, canonical entries. Canonicalising the octets here (stripping
+    # leading zeros) is what makes ip_allowed's string-eq match safe: the live
+    # peer IP from the socket is canonical, so a zero-padded config entry like
+    # "10.00.0.0/16" would otherwise compare "00" ne "0" and silently never
+    # match - failing open by omission. We normalise instead, or warn-and-drop.
     if (my $raw = $config->{allowed_ips}) {
         my @candidates = grep { length } map { s/^\s+|\s+$//gr } split /,/, $raw;
         my @entries;
         for my $entry (@candidates) {
+            my ($addr, $prefix_len);
             if ($entry =~ m{/}) {
-                my (undef, $prefix_len) = split m{/}, $entry, 2;
+                ($addr, $prefix_len) = split m{/}, $entry, 2;
                 unless (defined $prefix_len && $prefix_len =~ /^\d+$/ &&
                         grep { $prefix_len == $_ } (8, 16, 24)) {
                     Exec::Log::log_action('WARNING', {
@@ -163,7 +169,20 @@ sub _validate_config {
                     next;
                 }
             }
-            push @entries, $entry;
+            else {
+                $addr = $entry;
+            }
+            my $canon_addr = _normalize_ipv4($addr);
+            unless (defined $canon_addr) {
+                Exec::Log::log_action('WARNING', {
+                    ACTION => 'config-warn',
+                    ENTRY  => $entry,
+                    MSG    => 'malformed IPv4 address',
+                });
+                next;
+            }
+            push @entries,
+                defined $prefix_len ? "$canon_addr/$prefix_len" : $canon_addr;
         }
         if (@entries) {
             $config->{allowed_ips} = \@entries;
@@ -348,11 +367,28 @@ sub _path_in_dirs {
     return 0;
 }
 
+# Canonicalise an IPv4 dotted-quad: exactly four numeric octets, each 0-255,
+# with insignificant leading zeros stripped ("10.00.0.0" -> "10.0.0.0"). Returns
+# the canonical string, or undef if the address is not a well-formed IPv4. Used
+# at config load so ip_allowed only ever compares canonical octets.
+sub _normalize_ipv4 {
+    my ($addr) = @_;
+    return undef unless defined $addr;
+    my @oct = split /\./, $addr, -1;
+    return undef unless @oct == 4;
+    for my $o (@oct) {
+        return undef unless $o =~ /^\d{1,3}$/ && $o <= 255;
+    }
+    return join '.', map { $_ + 0 } @oct;
+}
+
 # Check whether a peer IP is permitted by the allowed_ips list.
 # Returns 1 if the IP matches any entry, 0 otherwise.
 # Supports exact IPs and CIDR prefixes /8, /16, /24 only.
-# Invalid entries are filtered out at config load time; none reach here.
-# IPv6 addresses (containing ':') return 0 silently.
+# Invalid entries are filtered out and canonicalised at config load time, so
+# every entry here is a well-formed dotted-quad with no leading zeros; the live
+# peer IP from the socket is likewise canonical, so string-eq octet matching is
+# sound. IPv6 addresses (containing ':') return 0 silently.
 sub ip_allowed {
     my ($ip, $allowed_ref) = @_;
 
