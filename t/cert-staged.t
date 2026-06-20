@@ -29,4 +29,16 @@ close $s;
 
 is system(@cmd) >> 8, 0, 'cert-staged exits 0 when a cert is staged';
 
+# `paired` exits 0 only when cert + key + CA all exist (the procd init gate).
+my @paired = ($^X, "-I$Bin/../lib", $agent, '--config', $conf, 'paired');
+is system(@paired) >> 8, 1, 'paired exits 1 when cert/key/CA are missing';
+
+my $conf2 = "$dir/paired.conf";
+for my $f (qw(c k a)) { open my $h, '>', "$dir/$f" or die $!; close $h }
+open my $c2, '>', $conf2 or die $!;
+print $c2 "port = 7443\ncert = $dir/c\nkey = $dir/k\nca = $dir/a\n";
+close $c2;
+is system($^X, "-I$Bin/../lib", $agent, '--config', $conf2, 'paired') >> 8, 0,
+    'paired exits 0 when cert/key/CA all exist';
+
 done_testing;

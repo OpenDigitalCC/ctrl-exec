@@ -66,6 +66,7 @@ sub main {
         'self-ping'       => \&mode_self_ping,
         'promote-cert'    => \&mode_promote_cert,
         'cert-staged'     => \&mode_cert_staged,
+        'paired'          => \&mode_paired,
     );
 
     my $handler = $dispatch{$mode}
@@ -130,6 +131,20 @@ sub mode_cert_staged {
     my $staged = $config->{cert_staging_path}
               // '/var/lib/ctrl-exec-agent/agent.crt.staged';
     exit(-f $staged ? 0 : 1);
+}
+
+# Exit 0 if the agent is paired (its cert, key and CA all exist), else exit 1.
+# The procd init script gates startup on this: unlike systemd's
+# RestartPreventExitStatus=78, procd would otherwise respawn an unpaired agent
+# forever (serve exits 78 with no cert).
+sub mode_paired {
+    my ($opts) = @_;
+    my $config = eval { Exec::Agent::Config::load_config($CONFIG_PATH) };
+    exit 1 unless $config;
+    for my $f ($config->{cert}, $config->{key}, $config->{ca}) {
+        exit 1 unless defined $f && -f $f;
+    }
+    exit 0;
 }
 
 sub mode_serve {

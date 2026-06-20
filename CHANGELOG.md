@@ -22,6 +22,10 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
   (which reads `cert_staging_path` from config) instead of a hard-coded path, so a
   staging-path override is honoured. Added `cert-promote`/`maintain` failure
   patterns to the LOGGING alert reference.
+- **Changed** the OpenWrt/procd init script to gate startup on pairing state (new
+  `ctrl-exec-agent paired` check): an unpaired agent logs once and stays down
+  instead of respawning forever (procd has no `RestartPreventExitStatus`).
+  Documented a `cert-staged` cron snippet for hands-free renewal adoption there.
 - **Changed** the three servers (API, agent, pairing) to share one `Exec::Http`
   response writer, removing the drifted hand-rolled status-phrase tables (413 and
   500 were inconsistent across them). No wire change beyond the phrase text.

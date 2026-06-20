@@ -18,6 +18,15 @@ start_service() {
     [ -f "$AGENT_BIN" ]  || { logger -t ctrl-exec-agent "Binary not found: $AGENT_BIN"; return 1; }
     [ -f "$AGENT_CONF" ] || { logger -t ctrl-exec-agent "Config not found: $AGENT_CONF"; return 1; }
 
+    # Gate startup on pairing state. procd has no RestartPreventExitStatus, so an
+    # unpaired agent (serve exits 78, no cert) would respawn forever and spam the
+    # log. If not paired, log once and do not open an instance; the operator runs
+    # 'request-pairing' then '/etc/init.d/ctrl-exec-agent start'.
+    if ! "$AGENT_BIN" paired 2>/dev/null; then
+        logger -t ctrl-exec-agent "Not paired - not starting. Pair with: ctrl-exec-agent request-pairing --dispatcher <host>, then start again."
+        return 1
+    fi
+
     # Adopt a renewed cert staged while the agent was running. This runs as root
     # (start_service does, before procd drops the command to the agent user), so
     # it can promote the staged cert into the root-owned live path - the procd

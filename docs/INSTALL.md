@@ -791,14 +791,20 @@ are unaffected until their next renewal.
 
 > **OpenWrt / non-systemd hosts.** The restart-to-adopt mechanism above relies on
 > systemd timers and the `ExecStartPre` promote step, which procd does not
-> provide. On OpenWrt an agent still *stages* a renewed cert, but it is **not
-> adopted automatically**: restart the agent yourself to promote and load it -
-> `/etc/init.d/ctrl-exec-agent restart` (the init script promotes any staged cert
-> at start), or add a cron entry that restarts when
-> `/var/lib/ctrl-exec-agent/agent.crt.staged` exists. Because the default cert
-> lifetime is a year and staging happens at half-life, a periodic (e.g. monthly)
-> restart is ample. Pick a `cert_days` comfortably longer than your restart
-> cadence so a staged cert is always adopted before the live one expires.
+> provide. The init script *does* promote any staged cert at start (so a manual
+> `/etc/init.d/ctrl-exec-agent restart` adopts it), but nothing triggers that
+> restart automatically. Add a cron entry that restarts only when a cert is
+> staged (`cert-staged` exits 0 when one is, honouring `cert_staging_path`):
+>
+> ```cron
+> # adopt a staged renewed cert (check daily at 04:00)
+> 0 4 * * * ctrl-exec-agent cert-staged && /etc/init.d/ctrl-exec-agent restart
+> ```
+>
+> Because the default cert lifetime is a year and staging happens at half-life, a
+> daily (or even monthly) check is ample. Pick a `cert_days` comfortably longer
+> than your restart cadence so a staged cert is always adopted before the live one
+> expires.
 
 
 ## Dispatcher Redundancy
