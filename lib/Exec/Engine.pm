@@ -548,15 +548,7 @@ sub _result_one {
             };
         }
 
-        my $err;
-        if ($resp && $resp->code == 403) {
-            my $body = eval { decode_json($resp->content) } // {};
-            $err = 'forbidden: ' . ($body->{error} // $resp->status_line);
-        }
-        else {
-            $err = _transport_error($@ || ($resp ? $resp->status_line : 'no response'),
-                                    $host, $port);
-        }
+        my $err = _classify_error($resp, $@, $host, $port);
         Exec::Log::log_action('ERR', {
             ACTION => 'result',
             TARGET => "$host:$port",
@@ -611,18 +603,9 @@ sub _ping_one {
     my $rtt = sprintf '%.0fms', (Time::HiRes::time() - $t0) * 1000;
 
     if ($@ || !$resp || !$resp->is_success) {
-        my $err;
-        if ($resp && $resp->code == 403) {
-            my $body = eval { decode_json($resp->content) } // {};
-            $err = 'forbidden: ' . ($body->{error} // $resp->status_line);
-        }
-        elsif ($resp && $resp->code == 413) {
-            $err = 'request too large';
-        }
-        else {
-            $err = _transport_error($@ || ($resp ? $resp->status_line : 'no response'),
-                                    $host, $port);
-        }
+        my $err = ($resp && $resp->code == 413)
+            ? 'request too large'
+            : _classify_error($resp, $@, $host, $port);
         Exec::Log::log_action('ERR', {
             ACTION => 'ping',
             TARGET => "$host:$port",
@@ -694,6 +677,23 @@ sub _capabilities_one {
     });
 
     return $result;
+}
+
+# Classify a failed agent response into an error string: a 403 surfaces the
+# agent's forbidden reason (its trusted-serial gate), anything else is a
+# transport-level failure. Shared by the per-host workers with this exact
+# 403-or-transport split (ping/rotate/result); callers handle any
+# endpoint-specific code (a ping's 413, a result's 404) before calling this.
+# $at is the request eval's $@, captured at the call site before the decode
+# below can clobber it.
+sub _classify_error {
+    my ($resp, $at, $host, $port) = @_;
+    if ($resp && $resp->code == 403) {
+        my $body = eval { decode_json($resp->content) } // {};
+        return 'forbidden: ' . ($body->{error} // $resp->status_line);
+    }
+    return _transport_error($at || ($resp ? $resp->status_line : 'no response'),
+                            $host, $port);
 }
 
 # Translate a raw transport failure (LWP status_line or $@) into a concise,
@@ -783,10 +783,7 @@ sub _rotate_one {
     my $rtt = sprintf '%.0fms', (Time::HiRes::time() - $t0) * 1000;
 
     if ($@ || !$resp || !$resp->is_success) {
-        my $err = ($resp && $resp->code == 403)
-            ? 'forbidden: ' . ((eval { decode_json($resp->content) } // {})->{error}
-                               // $resp->status_line)
-            : _transport_error($@ || ($resp ? $resp->status_line : 'no response'), $host, $port);
+        my $err = _classify_error($resp, $@, $host, $port);
         return { host => $host, status => 'error', exit => -1, error => $err, rtt => $rtt };
     }
 
