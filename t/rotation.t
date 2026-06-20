@@ -461,6 +461,50 @@ subtest 'broadcast_serial: no current_serial in state returns empty arrayref' =>
     is scalar @$result, 0,   'empty arrayref when no current_serial';
 };
 
+subtest 'broadcast_serial: reports ok/failed per agent, confirms only successes (TC-005)' => sub {
+    my $dir     = tempdir(CLEANUP => 1);
+    my $regDir  = "$dir/agents";
+    my $rotFile = "$dir/rotation.json";
+    make_path($regDir);
+
+    for my $h (qw(agent-01 agent-02)) {
+        write_file("$regDir/$h.json", encode_json({
+            hostname => $h, ip => '10.0.0.1',
+            serial_status => 'pending', dispatcher_serial => 'oldhex',
+        }));
+    }
+    write_file($rotFile, encode_json({ current_serial => 'newhex0123' }));
+
+    require Exec::Engine;
+    require Exec::Log;
+    no warnings 'redefine';
+    # Stub the remote broadcast: agent-01 accepts, agent-02 rejects.
+    local *Exec::Engine::rotate_all = sub {
+        return [
+            { host => 'agent-01', exit => 0 },
+            { host => 'agent-02', exit => 1, error => 'boom' },
+        ];
+    };
+    local *Exec::Log::log_action = sub {};
+
+    my $report = Exec::Rotation::broadcast_serial(config => config(
+        rotation_file => $rotFile, registry_dir => $regDir, dispatcher_id => 'disp-1',
+    ));
+
+    is ref $report, 'ARRAY', 'returns a report arrayref';
+    my %by = map { $_->{hostname} => $_ } @$report;
+    is $by{'agent-01'}{status}, 'ok',     'accepting agent reported ok';
+    is $by{'agent-02'}{status}, 'failed', 'rejecting agent reported failed';
+    like $by{'agent-02'}{error}, qr/boom/, 'failed agent carries its error string';
+
+    # Only the confirmed agent is marked current; the failed one stays pending -
+    # a mis-report here would let an operator believe the fleet converged.
+    is read_record($regDir, 'agent-01')->{serial_status}, 'current',
+        'confirmed agent marked current in the registry';
+    is read_record($regDir, 'agent-02')->{serial_status}, 'pending',
+        'failed agent left pending, not falsely confirmed';
+};
+
 # ---------------------------------------------------------------------------
 # _do_rotation
 # ---------------------------------------------------------------------------
