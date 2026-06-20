@@ -12,10 +12,12 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
   `HostCapabilities.tags`/`reported_hostname`, 404s on `/run` and `/ping`, the
   `/status` `Authorization` header + owner-gating, and a polymorphic
   `StatusResponse.hosts`; refreshed the stale version examples.
-- **Added** a concurrent-handler cap to the API server (`api_max_children`,
-  default 64): connections beyond the cap get `503` instead of forking another
-  process, bounding a connection flood (the API can be plain-HTTP and runs as
-  root). The agent is unchanged - it is mTLS-gated and per-IP rate-limited.
+- **Added** a concurrent-handler cap to both servers: the API (`api_max_children`,
+  default 64) returns `503` above the cap, and the agent (`max_children`, default
+  256) closes the connection above the cap on top of its per-IP rate limit -
+  bounding an aggregate connection flood.
+- **Fixed** a registry lost-update in `edit_agent` too (now under the same lock as
+  the other read-modify-write updates).
 - **Changed** the three servers (API, agent, pairing) to share one `Exec::Http`
   response writer, removing the drifted hand-rolled status-phrase tables (413 and
   500 were inconsistent across them). No wire change beyond the phrase text.

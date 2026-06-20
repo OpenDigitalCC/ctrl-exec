@@ -286,6 +286,13 @@ MSG
         PORT   => $config->{port},
     });
 
+    # Aggregate concurrent-handler cap, on top of the per-IP rate limit below.
+    # The agent only accepts CA-signed peers, so this is defence-in-depth against
+    # a many-peer flood. Generous default; configurable via max_children. $live is
+    # kept exact - reaped synchronously in this loop (no async SIGCHLD handler).
+    my $max_children = $config->{max_children} // 256;
+    my $live = 0;
+
     while (1) {
         my $conn = $server->accept;
 
@@ -336,6 +343,18 @@ MSG
         }
         Exec::RateLimit::record_connection($peer, \%rate_state, $rate_config);
 
+        # Reap ALL finished children before admitting this one, dropping them
+        # from the live count (also stops exited handlers accumulating as zombies
+        # under bursty-then-idle load; matches the API and executor loops).
+        $live-- while waitpid(-1, WNOHANG()) > 0;
+
+        if ($live >= $max_children) {
+            $conn->close(SSL_no_shutdown => 1);
+            Exec::Log::log_action('WARNING',
+                { ACTION => 'overload', PEER => $peer, LIVE => $live });
+            next;
+        }
+
         # Read peer cert serial before forking - after the parent closes its
         # copy of $conn the SSL object becomes invalid in the child.
         my $peer_serial = _peer_serial($conn);
@@ -352,12 +371,9 @@ MSG
             $conn->close;
             exit 0;
         }
-        # Parent: release fd without SSL shutdown so child owns it
+        # Parent: count the live child and release fd without SSL shutdown.
+        $live++;
         $conn->close(SSL_no_shutdown => 1);
-        # Reap ALL finished children, not just one, so exited handlers do not
-        # accumulate as zombies under a burst-then-idle load (matches the API and
-        # executor accept loops).
-        1 while waitpid(-1, WNOHANG()) > 0;
     }
 }
 

@@ -321,28 +321,30 @@ sub edit_agent {
     my $dir      = $opts{registry_dir} // $REGISTRY_DIR;
     my $path     = "$dir/$hostname.json";
 
-    croak "No registry entry for '$hostname'" unless -f $path;
-    my $record = eval { decode_json(_slurp($path)) }
-        or croak "Registry entry for '$hostname' is unreadable";
+    return _locked($dir, sub {
+        croak "No registry entry for '$hostname'" unless -f $path;
+        my $record = eval { decode_json(_slurp($path)) }
+            or croak "Registry entry for '$hostname' is unreadable";
 
-    $record->{ip}        = $opts{ip}                       if defined $opts{ip};
-    $record->{port}      = _norm_port($opts{port})         if defined $opts{port};
-    $record->{lookup_by} = _norm_lookup_by($opts{lookup_by}) if defined $opts{lookup_by};
+        $record->{ip}        = $opts{ip}                       if defined $opts{ip};
+        $record->{port}      = _norm_port($opts{port})         if defined $opts{port};
+        $record->{lookup_by} = _norm_lookup_by($opts{lookup_by}) if defined $opts{lookup_by};
 
-    my $new = $opts{new_name};
-    if (defined $new && length $new && $new ne $hostname) {
-        valid_agent_name($new)
-            or croak "invalid agent name '$new' (use letters, digits, '.', '-', '_')";
-        croak "agent '$new' already exists" if -f "$dir/$new.json";
+        my $new = $opts{new_name};
+        if (defined $new && length $new && $new ne $hostname) {
+            valid_agent_name($new)
+                or croak "invalid agent name '$new' (use letters, digits, '.', '-', '_')";
+            croak "agent '$new' already exists" if -f "$dir/$new.json";
 
-        $record->{hostname} = $new;
-        _write_atomic("$dir/$new.json", encode_json($record));
-        unlink $path or croak "Cannot remove old registry entry '$path': $!";
+            $record->{hostname} = $new;
+            _write_atomic("$dir/$new.json", encode_json($record));
+            unlink $path or croak "Cannot remove old registry entry '$path': $!";
+            return $record;
+        }
+
+        _write_atomic($path, encode_json($record));
         return $record;
-    }
-
-    _write_atomic($path, encode_json($record));
-    return $record;
+    });
 }
 
 # Parse a --tags filter string into a hashref of wanted tag key => value.

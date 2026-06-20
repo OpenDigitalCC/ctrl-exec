@@ -104,6 +104,11 @@ executor_socket = /run/ctrl-exec-agent/exec.sock
 # rate_limit_volume = 10/60/300
 # rate_limit_probe  = 3/600/3600
 
+# Max concurrent request handlers (default: 256). Connections beyond this are
+# closed without forking, bounding an aggregate flood on top of the per-IP rate
+# limit. Only a flood reaches it; raise only if you sustain more in-flight runs.
+# max_children = 256
+
 # Agent tags - reported in /capabilities response and ctrl-exec discovery.
 # Use to group and filter agents by environment, role, location, etc.
 #
