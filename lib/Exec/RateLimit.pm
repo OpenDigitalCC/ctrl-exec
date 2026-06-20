@@ -4,6 +4,20 @@ use strict;
 use warnings;
 use Exec::Log qw();
 
+# Parse a "limit/window/block" rate spec (e.g. "10/60/300") into a validated
+# [limit, window, block] arrayref of integers, or undef if malformed. Shared by
+# the dispatcher pairing config and the agent config, which each built the same
+# split-and-validate-three-ints inline.
+sub parse_limit_spec {
+    my ($raw) = @_;
+    return undef unless defined $raw;
+    my ($limit, $window, $block) = split m{/}, $raw, 3;
+    return undef unless defined $limit  && $limit  =~ /^\d+$/
+                     && defined $window && $window =~ /^\d+$/
+                     && defined $block  && $block  =~ /^\d+$/;
+    return [ int($limit), int($window), int($block) ];
+}
+
 # Volume threshold: connections within the short window
 use constant VOLUME_WINDOW   => 60;
 use constant VOLUME_LIMIT    => 10;

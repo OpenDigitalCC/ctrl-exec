@@ -43,13 +43,8 @@ sub build_rate_config {
     }
 
     if (my $raw = $config->{pairing_rate_limit_volume}) {
-        my ($limit, $window, $block) = split m{/}, $raw, 3;
-        if (defined $limit  && $limit  =~ /^\d+$/ &&
-            defined $window && $window =~ /^\d+$/ &&
-            defined $block  && $block  =~ /^\d+$/) {
-            $rl{volume_limit}  = int($limit);
-            $rl{volume_window} = int($window);
-            $rl{volume_block}  = int($block);
+        if (my $t = Exec::RateLimit::parse_limit_spec($raw)) {
+            @rl{qw(volume_limit volume_window volume_block)} = @$t;
         }
         # Malformed value: fall back to defaults silently.
     }

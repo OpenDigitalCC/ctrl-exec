@@ -5,6 +5,7 @@ use warnings;
 use Carp qw(croak);
 use Cwd  qw(abs_path);
 use Exec::Log qw();
+use Exec::RateLimit qw();
 
 
 # Load and validate agent.conf
@@ -188,13 +189,8 @@ sub _validate_config {
         for my $param (qw(volume probe)) {
             my $key = "rate_limit_$param";
             if (my $raw = $config->{$key}) {
-                my ($limit, $window, $block) = split m{/}, $raw, 3;
-                if (defined $limit  && $limit  =~ /^\d+$/ &&
-                    defined $window && $window =~ /^\d+$/ &&
-                    defined $block  && $block  =~ /^\d+$/) {
-                    $rl{"${param}_limit"}  = int($limit);
-                    $rl{"${param}_window"} = int($window);
-                    $rl{"${param}_block"}  = int($block);
+                if (my $t = Exec::RateLimit::parse_limit_spec($raw)) {
+                    @rl{"${param}_limit", "${param}_window", "${param}_block"} = @$t;
                 }
                 else {
                     Exec::Log::log_action('WARNING', {
