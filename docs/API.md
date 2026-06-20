@@ -49,7 +49,7 @@ endpoints and spec URLs programmatically.
 ```json
 {
   "name": "ctrl-exec-api",
-  "version": "0.2.8",
+  "version": "0.12.1",
   "spec": "/openapi.json",
   "live_spec": "/openapi-live.json",
   "endpoints": [
@@ -72,7 +72,7 @@ endpoints and spec URLs programmatically.
 Returns the API server version. Use for liveness checks.
 
 ```json
-{ "ok": true, "version": "0.2.8" }
+{ "ok": true, "version": "0.12.1" }
 ```
 
 ---
@@ -103,7 +103,7 @@ Response:
 {
   "ok": true,
   "results": [
-    { "host": "web-01", "status": "ok",    "rtt": "12ms", "expiry": "Jan 15 12:00:00 2026 GMT", "version": "0.2.8" },
+    { "host": "web-01", "status": "ok",    "rtt": "12ms", "expiry": "Jan 15 12:00:00 2026 GMT", "version": "0.12.1" },
     { "host": "web-02", "status": "error", "rtt": "60001ms", "error": "read timeout after 60s" }
   ]
 }
@@ -291,7 +291,7 @@ Response:
   "ok": true,
   "hosts": {
     "web-01": {
-      "host": "web-01", "status": "ok", "version": "0.2.8",
+      "host": "web-01", "status": "ok", "version": "0.12.1",
       "tags": { "env": "production", "role": "web" },
       "scripts": [
         { "name": "deploy", "path": "/opt/ctrl-exec-scripts/deploy.sh", "executable": true }
@@ -364,7 +364,7 @@ containing spaces or newlines.
 ## OpenAPI spec
 
 The static OpenAPI 3.1 spec is installed at
-`/usr/local/lib/ctrl-exec/ctrl-exec/openapi.json` and served verbatim from
+`/usr/local/lib/ctrl-exec/Exec/openapi.json` and served verbatim from
 `GET /openapi.json`. The version field is stamped with the release version at
 install time.
 
@@ -390,7 +390,7 @@ On each request:
    `RunRequest`, and `DiscoveryRequest` schemas.
 5. Injects an `enum` array into the `script` field in `RunRequest` - all
    script names seen across reachable agents, deduplicated and sorted.
-6. Stamps `info.version` with an epoch suffix in the form `0.2.8+1737123456`.
+6. Stamps `info.version` with an epoch suffix in the form `0.12.1+1737123456`.
    Any existing epoch suffix is stripped first so repeated requests do not
    accumulate suffixes.
 7. Encodes and serves the result in memory. No file is written to disk.
@@ -421,7 +421,7 @@ current scope.
 
 ## `Exec::API` module
 
-Implemented in `lib/ctrl-exec/API.pm`. Public interface:
+Implemented in `lib/Exec/API.pm`. Public interface:
 
 `run(%opts)`
 : Required: `config`. Starts the server and blocks until SIGTERM or SIGINT.

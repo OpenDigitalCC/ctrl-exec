@@ -42,7 +42,6 @@ Each test file corresponds to one module:
 | `t/auth-hook.t` | `Exec::Auth` (hook exit codes and env) |
 | `t/lock.t` | `Exec::Lock` |
 | `t/log.t` | `Exec::Log` |
-| `t/output.t` | `Exec::Output` |
 | `t/pairing-csr.t` | `Exec::Agent::AgentPairing` (key/CSR/nonce) |
 | `t/pairing-ctrl-exec.t` | `Exec::Pairing` (queue/stale expiry) |
 | `t/rate-limit.t` | `Exec::RateLimit` |

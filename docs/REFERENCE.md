@@ -558,6 +558,16 @@ Key settings:
 `timeout`
 : Deprecated alias for `read_timeout`. Accepted for backward compatibility.
 
+`max_parallel`
+: Maximum concurrent agent connections per fan-out operation (run/ping/discovery
+  over a fleet). Default: 64. Bounds how many TLS clients are forked at once so a
+  large fleet does not exhaust file descriptors; hosts beyond the cap queue. Read
+  by `Exec::Engine`.
+
+  ```
+  max_parallel = 64
+  ```
+
 `api_port`
 : Port for the `ctrl-exec-api` HTTP server. Default: 7445.
 

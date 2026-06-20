@@ -524,7 +524,7 @@ The API server listens on port 7445. All bodies are JSON with
 ### Endpoints
 
 `GET /health`
-: Liveness check. No auth. Returns `{ "ok": true, "version": "0.1" }`.
+: Liveness check. No auth. Returns `{ "ok": true, "version": "0.12.1" }`.
 
 `POST /ping`
 : Body: `{ "hosts": [...], "username": "...", "token": "..." }`.

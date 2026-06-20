@@ -709,31 +709,6 @@ Functions:
   Closes all filehandles, releasing all flocks.
 
 
-### `Exec::Output`
-
-Output formatting for CLI tables. Extracted from `bin/ctrl-exec-dispatcher` to enable
-independent unit testing. All functions write to stdout.
-
-Functions:
-
-`format_run_results(\@results)`
-: Prints a table of run results with columns: HOST, EXIT, STDOUT, STDERR.
-  Whitespace-only stdout is suppressed. Appends a newline to stdout/stderr
-  content if not already terminated.
-
-`format_ping_results(\@results)`
-: Prints a table of ping results with columns: HOST, STATUS, RTT, CERT EXPIRY,
-  VERSION.
-
-`format_agent_list(\@agents)`
-: Prints a table of registered agents with columns: HOSTNAME, IP, PAIRED,
-  CERT EXPIRY.
-
-`format_discovery(\%hosts)`
-: Formats the output of a discovery operation, listing each host with its
-  scripts, tags, and status.
-
-
 ### `Exec::API`
 
 HTTP API server. Listens on `api_port` (default 7445). TLS is enabled if
@@ -749,7 +724,7 @@ the same reason as in the pairing server - see the note in `Exec::Pairing`.
 Endpoints:
 
 `GET /health`
-: No auth. Returns `{ ok: true, version: "0.1" }`. Use for liveness checks.
+: No auth. Returns `{ ok: true, version: "0.12.1" }`. Use for liveness checks.
 
 `POST /ping`
 : Body: `{ hosts, username?, token? }`. Runs auth hook, then pings all hosts
@@ -781,6 +756,83 @@ Functions:
 
 `run(%opts)`
 : Required: `config`. Starts the server and blocks until SIGTERM or SIGINT.
+
+
+### `Exec::CertInfo`
+
+Shared cert inspection and the single home for serial canonicalisation - the
+trust key behind every dispatcher-trusted/serial-revoked decision. Exports
+`serial_to_hex` (NOT in `@EXPORT_OK` - intentionally called by fully-qualified
+name), `serial_from_path`, `expiry_from_path`, `expiry_from_pem`, `expiry_epoch`.
+
+
+### `Exec::Digest`
+
+SHA-256 helpers. `pairing_code` derives the short human-comparable pairing
+confirmation code; `sha256_hex` returns the hex digest of a string.
+
+
+### `Exec::Cmd`
+
+`run_or_die(@cmd)` runs an external command (list form, no shell) and dies with
+its captured stderr on a non-zero exit, redirecting fd 2 at the OS level so the
+child's real error reaches the die text.
+
+
+### `Exec::Random`
+
+`hex_bytes($n)` returns `$n` cryptographically-unpredictable bytes as lowercase
+hex. The one `/dev/urandom` reader; fails closed (croaks) on a short read, with
+no `rand()` fallback. Used for nonces and reqids.
+
+
+### `Exec::DispatcherConfig`
+
+`load_config($path)` loads the dispatcher's flat `key = value` config (shared by
+`ctrl-exec-dispatcher` and `ctrl-exec-api`). Dies unless `cert`, `key`, and `ca`
+are present.
+
+
+### `Exec::Pairing::Identity`
+
+Source-IP identity diagnostics for pairing: forward-confirmed reverse DNS
+(`reverse_lookup`) and the operator-facing `identity_lines` /
+`identity_recommendation` derived from it. A self-contained leaf split out of
+`Exec::Pairing`.
+
+
+### `Exec::Http`
+
+One place for the HTTP/1.0 JSON response framing shared by the three small
+servers. `send_raw($conn, $code, $body)` writes an already-serialised body;
+`send_json($conn, $code, $data)` encodes `$data` first.
+
+
+### `Exec::FileUtil`
+
+File IO helpers. `slurp`/`slurp_maybe` read a file (the latter tolerating
+absence); `write_atomic` is the atomic writer (temp file + rename).
+
+
+### `Exec::TLS`
+
+`hardening()` returns the shared `IO::Socket::SSL` hardening options (TLS 1.2/1.3
+only, AEAD ciphers) spliced into every ctrl-exec listener and client so the
+policy cannot drift between endpoints.
+
+
+### `Exec::RateLimit`
+
+Connection and failure rate limiting. `parse_limit_spec` parses a limit string;
+`check`, `record_connection`, and `record_failure` track and enforce per-source
+limits.
+
+
+### `Exec::RunStore`
+
+The dispatcher's run store. Records sync (`record_sync`) and async
+(`record_async`) runs keyed by reqid under `/var/lib/ctrl-exec/runs`, and
+`load`/`aggregate`/`purge` for status retrieval and TTL expiry.
 
 
 ### `Exec::Agent::Config`
@@ -899,10 +951,11 @@ dispatcher's 10-minute poll window, so the agent gets a proper denial response
 rather than a socket timeout.
 
 Nonce
-: `request_pairing` generates a 32-hex-character nonce via `_gen_nonce`, sends
-  it in the pairing payload, and verifies that the nonce in the approval
-  response matches before storing the delivered certs. Mismatched nonce returns
-  `{ ok => 0, error => 'nonce mismatch in pairing response' }`.
+: `submit_pairing_request` generates a 32-hex-character nonce via `_gen_nonce`
+  and sends it in the pairing payload. `await_pairing_result` then verifies that
+  the nonce in the approval response matches before returning the delivered
+  certs. Mismatched nonce returns
+  `{ ok => 0, error => 'nonce mismatch in pairing result' }`.
 
 Functions:
 
@@ -916,11 +969,26 @@ Functions:
   Returns `{ csr_pem }`. Required: `hostname`, `key_path`. Dies if the key
   file does not exist.
 
-`request_pairing(%opts)`
-: Connects to the dispatcher's pairing port, sends `{ hostname, csr, nonce }`,
-  waits for response, verifies nonce. Returns `{ ok => 1, cert_pem, ca_pem }`
-  or `{ ok => 0, error }`.
-  Options: `ctrl-exec` (required), `csr_pem`, `hostname`, `port` (default 7444).
+Pairing is a two-phase API. `submit_pairing_request` opens the connection and
+sends the request; `await_pairing_result` reads the (possibly long-delayed)
+approval or denial on the still-open socket. They are split because the
+dispatcher holds the connection open while an operator approves the request,
+so the caller can do other work between the two calls.
+
+`submit_pairing_request(%opts)`
+: Connects to the dispatcher's pairing port over TLS, generates a nonce, and
+  sends `{ hostname, csr, nonce, ... }`. Reads the immediate
+  `{ status: pending, reqid }` acknowledgement and leaves the socket open.
+  Returns `{ ok => 1, reqid, sock, nonce }` or `{ ok => 0, error }`.
+  Options: `ctrl-exec` (required - the dispatcher host), `csr_pem` (required),
+  `hostname` (required), `port` (default 7444), `ca_cert`, `lookup_by`,
+  `agent_port`.
+
+`await_pairing_result(%opts)`
+: Reads the final approval/denial response on the socket returned by
+  `submit_pairing_request`, verifies the nonce, and closes the socket. Returns
+  `{ ok => 1, cert_pem, ca_pem, dispatcher_serial, dispatcher_id }` or
+  `{ ok => 0, error }`. Options: `sock` (required), `nonce` (required).
 
 `store_certs(%opts)`
 : Writes `agent.crt` (0640), `agent.key` (0640), `ca.crt` (0644) to `cert_dir`.
@@ -943,10 +1011,43 @@ Functions:
   This is the per-request trust gate; callers refuse the request on `undef`.
 
 HTTP response reading
-: `request_pairing` reads headers line-by-line until the blank separator,
-  extracts `Content-Length`, then calls `read()` for exactly that many bytes.
-  Reading to EOF would block - the dispatcher child holds the connection open
-  while polling and does not close it when sending the response.
+: `submit_pairing_request` and `await_pairing_result` read headers
+  line-by-line until the blank separator, extract `Content-Length`, then call
+  `read()` for exactly that many bytes. Reading to EOF would block - the
+  dispatcher child holds the connection open while polling and does not close
+  it when sending the response.
+
+
+### `Exec::Agent::Server`
+
+The agent's HTTP request handlers, extracted from `bin/ctrl-exec-agent`. Owns
+`handle_connection` and the per-endpoint handlers (`handle_run`, `handle_ping`,
+`handle_capabilities`, `handle_rotate_serial`, `handle_renew`, `handle_result`,
+...) plus their response helpers. The runtime version is threaded in from the
+bin.
+
+
+### `Exec::Agent::AsyncRunner`
+
+Detached (setsid + double-fork) execution of allowlisted scripts with a
+persisted run store under `/var/lib/ctrl-exec-agent/runs`. `submit` spawns and
+records a job; `result`/`owned_by` read it back; `purge_expired` applies the
+TTL. A second async run of the same script is refused via a per-script flock.
+
+
+### `Exec::Agent::ExecClient`
+
+Front-end -> executor client. `run(%opts)` hands an authorised run to the
+privileged executor (`ctrl-exec-exec`) over its unix socket using the
+length-prefixed wire framing and parses the captured result back.
+
+
+### `Exec::Agent::Schema`
+
+Agent side of the script-schema sidecar contract (`docs/SCHEMA-SIDECAR.md`).
+`load_for_allowlist` reads the optional sidecar beside each allowlisted script,
+derives a stable `schema_version`, and returns both for advertisement on
+`/capabilities`. Core transports the body without interpreting it.
 
 
 ## `bin/ctrl-exec-dispatcher`
@@ -1242,14 +1343,14 @@ Ping request (`POST /ping`):
 Ping response:
 
 ```json
-{ "status": "ok", "host": "agent-host-02", "version": "0.1", "expiry": "Jun  7 16:28:00 2027 GMT", "reqid": "b7c3d1e40001" }
+{ "status": "ok", "host": "agent-host-02", "version": "0.12.1", "expiry": "Jun  7 16:28:00 2027 GMT", "reqid": "b7c3d1e40001" }
 ```
 
 Capabilities response (`GET /capabilities`):
 
 ```json
 {
-  "status": "ok", "host": "agent-host-01", "version": "0.1",
+  "status": "ok", "host": "agent-host-01", "version": "0.12.1",
   "tags": { "env": "prod", "role": "db" },
   "scripts": [
     { "name": "backup-mysql", "path": "/opt/ctrl-exec-scripts/backup-mysql.sh", "executable": true }
@@ -1308,7 +1409,7 @@ API endpoints (caller → ctrl-exec-api, port 7445):
   "ok": true,
   "hosts": {
     "agent-host-01": {
-      "status": "ok", "version": "0.1", "rtt": "68ms",
+      "status": "ok", "version": "0.12.1", "rtt": "68ms",
       "tags": { "env": "prod", "role": "db" },
       "scripts": [{ "name": "backup-mysql", "path": "/opt/scripts/backup-mysql.sh", "executable": true }]
     }
@@ -1586,10 +1687,12 @@ Adding a new API endpoint
 Adding a new dispatcher CLI mode
 : Add an entry to the `%dispatch` hash in `main()` in `bin/ctrl-exec-dispatcher`.
   Add a `mode_*` function. Keep network logic in Engine; keep output formatting
-  in `Exec::Output`; keep the mode function thin.
+  in the inline `_format_*` helpers in `bin/ctrl-exec-dispatcher` (e.g.
+  `_format_run_results`, `_format_ping_results`, `_format_status`); keep the
+  mode function thin.
 
 Adding a new library module
-: Place in `lib/ctrl-exec/` or `lib/ctrl-exec/Agent/`. Use `use strict;
+: Place in `lib/Exec/` or `lib/Exec/Agent/` (package `Exec::...`). Use `use strict;
   use warnings;`. All callers use `Module::function()` syntax - nothing exported
   by default. Private helpers prefixed `_`. Add a corresponding test in `t/`.
 
