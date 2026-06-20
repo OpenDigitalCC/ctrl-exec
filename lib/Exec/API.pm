@@ -68,15 +68,33 @@ sub run {
         exit 0;
     };
 
-    # Reap children as they finish
+    # Bound concurrent request handlers so a connection flood cannot fork
+    # unbounded processes (handlers run as the service user; on a non-loopback
+    # api_bind this is the exposed surface). The default is generous - only a
+    # flood reaches it - and configurable via api_max_children. $live is kept
+    # accurate by one increment per fork and one decrement per reap; the order
+    # of the two (parent vs SIGCHLD) does not matter, each happens exactly once.
+    my $max_children = $config->{api_max_children} // 64;
+    my $live = 0;
+
+    # Reap children as they finish.
     $SIG{CHLD} = sub {
-        while (waitpid(-1, WNOHANG) > 0) {}
+        while (waitpid(-1, WNOHANG) > 0) { $live-- }
     };
 
     while (1) {
         my $conn = $server->accept or next;
         my $peer = $use_tls ? $conn->peerhost : $conn->peerhost;
         $peer //= 'unknown';
+
+        if ($live >= $max_children) {
+            Exec::Log::log_action('WARNING',
+                { ACTION => 'api-overload', PEER => $peer, LIVE => $live });
+            _send_error($conn, 503, 'service unavailable',
+                        'too many concurrent requests');
+            $conn->close;
+            next;
+        }
 
         my $pid = fork();
         unless (defined $pid) {
@@ -98,7 +116,8 @@ sub run {
             exit 0;
         }
 
-        # Parent: release our copy of the connection
+        # Parent: count the live child and release our copy of the connection
+        $live++;
         if ($use_tls) {
             $conn->close(SSL_no_shutdown => 1);
         } else {

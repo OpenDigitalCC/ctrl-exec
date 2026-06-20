@@ -7,6 +7,10 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 
 ## 0.11.2 — security hardening; config errors fail clearly instead of looping
 
+- **Added** a concurrent-handler cap to the API server (`api_max_children`,
+  default 64): connections beyond the cap get `503` instead of forking another
+  process, bounding a connection flood (the API can be plain-HTTP and runs as
+  root). The agent is unchanged - it is mTLS-gated and per-IP rate-limited.
 - **Changed** the three servers (API, agent, pairing) to share one `Exec::Http`
   response writer, removing the drifted hand-rolled status-phrase tables (413 and
   500 were inconsistent across them). No wire change beyond the phrase text.

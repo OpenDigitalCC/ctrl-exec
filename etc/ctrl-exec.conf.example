@@ -65,6 +65,12 @@ auth_hook = /etc/ctrl-exec/auth-hook
 # When a hook is configured this setting has no effect.
 api_auth_default = deny
 
+# Max concurrent request handlers (default: 64). Connections beyond this are
+# refused with 503 rather than forking another process, bounding a connection
+# flood. Raise only if you genuinely sustain more than this many in-flight API
+# requests.
+# api_max_children = 64
+
 # Generic auth denials (default off).
 # When enabled, the API returns a generic 403 ("forbidden") for denied run,
 # ping, and discovery requests, withholding the specific denial reason and

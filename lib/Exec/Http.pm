@@ -21,6 +21,7 @@ my %PHRASE = (
     413 => 'Content Too Large',
     431 => 'Request Header Fields Too Large',
     500 => 'Internal Server Error',
+    503 => 'Service Unavailable',
 );
 
 # Write a raw (already-serialised) JSON body as an HTTP/1.0 response.
