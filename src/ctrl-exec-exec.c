@@ -613,6 +613,14 @@ static int apply_profile(const profile_t *p, int allow_unpriv) {
     return 0;
 }
 
+/* Per-stream cap on captured stdout/stderr. The request frame is bounded
+ * (MAX_FRAME) but the action's output was not: a chatty or runaway allowlisted
+ * script (a log dump, `yes`, a misbehaving job) could grow the ROOT executor's
+ * RSS without bound until OOM. Cap each stream and keep draining the pipe past
+ * the cap (so the child never blocks on a full pipe), appending a one-time
+ * truncation marker. 16 MiB matches the request cap. */
+#define MAX_OUTPUT  (16 * 1024 * 1024)
+
 /* Grow-on-demand byte buffer. */
 typedef struct { char *p; size_t len, cap; } buf_t;
 static int buf_add(buf_t *b, const char *d, size_t n) {
@@ -671,6 +679,7 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
 
     int fds[2] = { o[0], e[0] };
     buf_t *bufs[2] = { out, err };
+    int trunc[2] = { 0, 0 };
     int open_n = 2;
     while (open_n > 0) {
         fd_set rd; FD_ZERO(&rd); int mx = -1;
@@ -681,8 +690,18 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
             if (fds[i] >= 0 && FD_ISSET(fds[i], &rd)) {
                 char tmp[8192];
                 ssize_t r = read(fds[i], tmp, sizeof(tmp));
-                if (r > 0) buf_add(bufs[i], tmp, (size_t)r);
-                else { close(fds[i]); fds[i] = -1; open_n--; }
+                if (r > 0) {
+                    buf_t *b = bufs[i];
+                    if (b->len < MAX_OUTPUT) {
+                        size_t room = MAX_OUTPUT - b->len;
+                        buf_add(b, tmp, (size_t)r < room ? (size_t)r : room);
+                    } else if (!trunc[i]) {
+                        buf_add(b, "\n[output truncated]\n", 20);
+                        trunc[i] = 1;
+                    }
+                    /* Past the cap: keep reading to drain the pipe so the child
+                     * never blocks on a full pipe, but discard the data. */
+                } else { close(fds[i]); fds[i] = -1; open_n--; }
             }
         }
     }
