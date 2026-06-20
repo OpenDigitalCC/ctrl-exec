@@ -290,6 +290,34 @@ subtest 'run_pairing_mode: accepts max_queue parameter' => sub {
 };
 
 # ---------------------------------------------------------------------------
+# Body size cap (SEC-001): the unauthenticated pairing port must reject an
+# oversized declared Content-Length BEFORE reading the body, or a hostile
+# client can force the child to buffer arbitrary memory.
+# ---------------------------------------------------------------------------
+
+subtest 'oversized Content-Length is rejected before the body is read' => sub {
+    my $dir = tempdir(CLEANUP => 1);
+    # Declare a body far larger than the 64 KiB cap but send only a few bytes;
+    # the handler must reject on the header alone and never block reading 200 MB.
+    my $request = "POST /pair HTTP/1.0\r\n"
+                . "Content-Type: application/json\r\n"
+                . "Content-Length: 209715200\r\n"
+                . "\r\n"
+                . "{}";
+    my $log_ref = [];
+    my $resp = call_handle(
+        request     => $request,
+        pairing_dir => $dir,
+        log_ref     => $log_ref,
+    );
+    is $resp->{status}, 'error', 'oversized request gets an error response';
+    is $resp->{reason}, 'request too large', 'reason names the size cap';
+    ok !glob("$dir/*.json"), 'no request was queued';
+    ok( (grep { ($_->{REASON} // '') eq 'body-too-large' } @$log_ref),
+        'rejection is logged as body-too-large' );
+};
+
+# ---------------------------------------------------------------------------
 # NOTE: _handle_pair_request accepts pairing_dir as a fifth parameter and
 # run_pairing_mode passes $PAIRING_DIR to it. This was the change required
 # to make the queue limit subtests testable without touching the real

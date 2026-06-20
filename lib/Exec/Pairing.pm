@@ -21,6 +21,14 @@ use Exec::Http      qw();
 
 my $PAIRING_DIR = '/var/lib/ctrl-exec/pairing';
 
+# Upper bound on a pairing request body before we read it. The only legitimate
+# body is a JSON wrapper around a CSR (itself capped at 10 KiB by sign_csr), so
+# 64 KiB is generous. The pairing port is unauthenticated by design (bootstrap),
+# so without this an attacker could declare a huge Content-Length and make the
+# child buffer it - a memory-exhaustion DoS. Mirrors the operational server's
+# pre-read cap.
+my $MAX_PAIR_BODY = 64 * 1024;
+
 
 # Build a rate-limit config hashref for the pairing port from the dispatcher
 # config. The pairing port reuses the operational-port volume limiter
@@ -646,6 +654,11 @@ sub _handle_pair_request {
     }
 
     my ($content_length) = $raw =~ /Content-Length:\s*(\d+)/i;
+    if ($content_length && $content_length > $MAX_PAIR_BODY) {
+        _send_raw($conn, encode_json({ status => 'error', reason => 'request too large' }));
+        $log_fn->({ ACTION => 'pair-reject', IP => $peer_ip, REASON => 'body-too-large' });
+        return;
+    }
     my $body = '';
     if ($content_length) {
         read $conn, $body, $content_length;

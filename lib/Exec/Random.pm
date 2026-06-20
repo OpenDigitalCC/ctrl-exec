@@ -19,7 +19,8 @@ sub hex_bytes {
     my ($n) = @_;
     open my $fh, '<:raw', '/dev/urandom'
         or croak "Cannot open /dev/urandom: $!";
-    my $got = read $fh, my $buf, $n;
+    my $buf;
+    my $got = read $fh, $buf, $n;
     close $fh;
     croak "Short read from /dev/urandom: wanted $n bytes, got "
         . (defined $got ? $got : 'undef')
