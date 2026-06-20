@@ -335,11 +335,16 @@ sub mode_maintain {
     }
 
     # The dispatcher's own cert lifecycle (the one-shot checks the pairing
-    # listener also runs at startup), each guarded independently.
+    # listener also runs at startup), each guarded independently. The run-store
+    # purge runs here too: expired async run records were previously reaped only
+    # when a client happened to GET /status, so a workload that rarely polls let
+    # the store grow unbounded and then paid an O(records) sweep on a
+    # latency-sensitive request. On the timer it is decoupled from request latency.
     for my $step (
         [ 'rotate',    sub { Exec::Rotation::check_and_rotate(config => $config) } ],
         [ 'broadcast', sub { Exec::Rotation::broadcast_serial(config => $config) } ],
         [ 'expire',    sub { Exec::Rotation::expire_stale_agents(config => $config) } ],
+        [ 'purge',     sub { Exec::RunStore::purge() } ],
     ) {
         eval { $step->[1]->(); 1 }
             or Exec::Log::log_action('ERR',
