@@ -36,10 +36,13 @@ SH
 close $sf;
 chmod 0755, $script;
 
-# Default profile (no privilege) -> runs as the current user, no root needed.
+# An explicit [profile default] with no run_as and no caps -> runs as the current
+# user, no root needed (there is no built-in default; it must be defined). Empty
+# body keeps it usable in the unprivileged allow_unpriv test path.
 my $agent_conf = "$TMP/agent.conf";
 open my $af, '>', $agent_conf or die $!;
-print $af "port = 7443\ncert = /x\nkey = /y\nca = /z\nscript_dirs = $TMP\n";
+print $af "port = 7443\ncert = /x\nkey = /y\nca = /z\nscript_dirs = $TMP\n"
+        . "[profile default]\n";
 close $af;
 
 my $scripts_conf = "$TMP/scripts.conf";

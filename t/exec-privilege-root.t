@@ -154,4 +154,38 @@ subtest 'out-of-range numeric run_as is refused, never truncated to root' => sub
         'out-of-range run_as did NOT silently truncate to root (uid 0)';
 };
 
+subtest 'unannotated script with no [profile default] is refused, never run as root' => sub {
+    # The no-built-in-default guarantee: a script with no profile= resolves to
+    # the name 'default'; with no [profile default] defined it must be refused,
+    # NOT run under an implicit root context.
+    my $agent_conf = "$TMP/agent.nodef.conf";
+    open my $a, '>', $agent_conf or die $!;
+    print $a "port = 7443\ncert = /x\nkey = /y\nca = /z\nscript_dirs = $TMP\n";  # no [profile default]
+    close $a;
+    my $scripts_conf = "$TMP/scripts.nodef.conf";
+    open my $s, '>', $scripts_conf or die $!;
+    print $s "probe = $probe\n";   # no profile= -> resolves to 'default'
+    close $s;
+
+    my $sock = "$TMP/exec.nodef.sock";
+    my $pid  = fork();
+    die "fork: $!" unless defined $pid;
+    if ($pid == 0) {
+        open STDERR, '>', "$TMP/serve.nodef.err";
+        exec($BIN, 'serve', $sock, $agent_conf, $scripts_conf, 'root') or POSIX::_exit(127);
+    }
+    my $ready = 0;
+    for (1 .. 100) { if (-S $sock) { $ready = 1; last } select undef, undef, undef, 0.05 }
+    my $r = $ready
+        ? Exec::Agent::ExecClient::run(socket => $sock, reqid => 'nodef', script => 'probe', args => [])
+        : undef;
+    kill 'TERM', $pid; waitpid $pid, 0;
+
+    my $out = ($r && defined $r->{stdout}) ? $r->{stdout} : '';
+    my $err = $r ? (($r->{stderr} // '') . ($r->{error} // '')) : '';
+    unlike $out, qr/UID=/, 'the unannotated script did not run (no implicit profile)';
+    unlike $out, qr/UID=0/, 'and most importantly did NOT run as root';
+    like $err, qr/undefined profile/, 'executor reports the undefined profile';
+};
+
 done_testing;

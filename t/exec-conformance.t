@@ -48,13 +48,13 @@ sub perl_resolve {
     my $path = Exec::Agent::Config::validate_script($name, $al, $config->{script_dirs});
     return "DENY not-in-script-dirs" unless defined $path;
     my $prof = Exec::Agent::Config::script_profile($name, $al);
-    my $defined = ($prof eq 'default') || exists $config->{profiles}{$prof};
-    return "DENY undefined-profile" unless $defined;
-    my $p = $config->{profiles}{$prof};   # undef for the implicit default
-    my $runas = $p ? ($p->{run_as} // '')            : '';
-    my $nnp   = $p ? ($p->{no_new_privileges} // 1)   : 1;
-    my $caps  = $p ? join(',', @{ $p->{caps}     // [] }) : '';
-    my $writ  = $p ? join(':', @{ $p->{writable} // [] }) : '';
+    # Every profile - including 'default' - must be defined; no built-in fallback.
+    return "DENY undefined-profile" unless exists $config->{profiles}{$prof};
+    my $p = $config->{profiles}{$prof};
+    my $runas = $p->{run_as} // '';
+    my $nnp   = $p->{no_new_privileges} // 1;
+    my $caps  = join(',', @{ $p->{caps}     // [] });
+    my $writ  = join(':', @{ $p->{writable} // [] });
     return "OK path=$path|profile=$prof|run_as=$runas|nnp=$nnp|caps=$caps|writable=$writ";
 }
 

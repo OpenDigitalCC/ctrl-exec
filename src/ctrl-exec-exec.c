@@ -366,19 +366,14 @@ static int cmd_resolve(const char *agent_conf, const char *scripts_conf,
         free(c); return 0;
     }
 
-    /* Resolve the profile. 'default' is built in (no run_as, no caps, no
-     * writable, nnp=1) unless agent.conf overrides [profile default]. Any other
-     * name must be defined, else fail-closed. */
+    /* Resolve the profile. Every profile - including 'default' (the name an
+     * unannotated script resolves to) - must be defined in agent.conf, else
+     * fail-closed. There is NO built-in fallback: an undefined profile is denied
+     * rather than run under an implicit context, so nothing ever runs as root by
+     * omission. Operators ship a restrictive [profile default]. */
     profile_t *p = find_profile(c, pname);
-    profile_t builtin;
     if (!p) {
-        if (strcmp(pname, "default") != 0) {
-            printf("DENY undefined-profile\n"); free(c); return 0;
-        }
-        memset(&builtin, 0, sizeof(builtin));
-        snprintf(builtin.name, sizeof(builtin.name), "default");
-        builtin.nnp = 1;
-        p = &builtin;
+        printf("DENY undefined-profile\n"); free(c); return 0;
     }
 
     char caps[VALLEN] = "", writ[VALLEN] = "";
@@ -738,19 +733,19 @@ static void handle_conn(int cfd, const char *agent_conf, const char *scripts_con
         /* Re-derive path + profile from our OWN config; never trust the message. */
         config_t *c = calloc(1, sizeof(*c));
         char spath[VALLEN], pname[NAMELEN];
-        profile_t builtin, *p = NULL;
+        profile_t *p = NULL;
         if (!c || parse_agent_conf(agent_conf, c) != 0) {
             buf_add(&err, "executor: config error\n", 23);
         } else if (!find_script(scripts_conf, script, spath, sizeof(spath), pname, sizeof(pname))) {
             buf_add(&err, "executor: script not permitted\n", 31);
         } else if (!path_in_dirs(spath, c)) {
             buf_add(&err, "executor: script not in script_dirs\n", 36);
-        } else if (!(p = find_profile(c, pname)) && strcmp(pname, "default") != 0) {
+        } else if (!(p = find_profile(c, pname))) {
+            /* No built-in fallback: an undefined profile (including 'default'
+             * when [profile default] is not configured) is refused, never run
+             * under an implicit root context. */
             buf_add(&err, "executor: undefined profile\n", 28);
         } else {
-            if (!p) { memset(&builtin, 0, sizeof(builtin));
-                      snprintf(builtin.name, sizeof(builtin.name), "default");
-                      builtin.nnp = 1; p = &builtin; }
             argv[0] = spath;                          /* argv[0] = resolved path */
             run_with_profile(p, spath, argv, indata, inlen, allow_unpriv, &ecode, &out, &err);
         }

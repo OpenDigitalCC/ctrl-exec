@@ -220,11 +220,16 @@ Privilege separation and per-script profiles (optional, recommended)
   `/var/lib/ctrl-exec-agent` (the control and state directories) are **read-only**
   - so even a `run_as=root` action cannot tamper with the allowlist, hook,
   config, trust map, or audit - the capability set the profile lists, `run_as`,
-  and `no_new_privileges`. A script with no profile gets a restrictive default;
-  an undefined profile is a fatal config error (fail-closed). Without
-  `executor_socket`, the agent runs scripts directly in its own unprivileged
-  process (no profiles). Profiles are defined in `agent.conf` (`[profile <name>]`)
-  and referenced from `scripts.conf` (`profile=<name>`); see `agent.conf.example`.
+  and `no_new_privileges`. Every profile must be defined in `agent.conf`,
+  including `default` (the profile an unannotated script resolves to) - there is
+  no built-in fallback, so a script whose profile is undefined is a fatal config
+  error (fail-closed) rather than running under an implicit context. The shipped
+  `agent.conf.example` defines `[profile default]` as `run_as=nobody`; the rule
+  is that **nothing runs as root unless a profile explicitly sets `run_as=root`**.
+  Without `executor_socket`, the agent runs scripts directly in its own
+  unprivileged process (no profiles). Profiles are defined in `agent.conf`
+  (`[profile <name>]`) and referenced from `scripts.conf` (`profile=<name>`); see
+  `agent.conf.example`.
 
   This split is what bounds a front-end compromise (e.g. an RCE in the
   network-facing code): the only thing that can act with privilege is the small,

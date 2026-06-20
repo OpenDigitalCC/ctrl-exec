@@ -75,7 +75,11 @@ subtest 'two paths on a line are rejected' => sub {
 };
 
 subtest 'validate_profiles flags undefined profiles (fail-closed input)' => sub {
-    my $c  = Exec::Agent::Config::load_config(agent_conf("[profile known]\nrun_as = root\n"));
+    # 'default' must be defined like any other profile - no built-in fallback -
+    # so the unannotated ok-default script only resolves because [profile default]
+    # is defined here.
+    my $c  = Exec::Agent::Config::load_config(
+        agent_conf("[profile default]\nrun_as = nobody\n[profile known]\nrun_as = root\n"));
     my $al = Exec::Agent::Config::load_allowlist(scripts_conf(<<'EOF'));
 ok-default = /opt/s/a.sh
 ok-known   = /opt/s/b.sh profile=known
@@ -83,6 +87,17 @@ bad        = /opt/s/c.sh profile=ghost
 EOF
     my @bad = Exec::Agent::Config::validate_profiles($al, $c);
     is_deeply \@bad, ['bad -> ghost'], 'only the undefined-profile script is flagged';
+};
+
+subtest 'validate_profiles flags an unannotated script when no [profile default]' => sub {
+    # The headline of the no-built-in change: an unannotated script with no
+    # [profile default] configured is fail-closed, not run under an implicit
+    # (root) context.
+    my $c  = Exec::Agent::Config::load_config(agent_conf("[profile known]\nrun_as = root\n"));
+    my $al = Exec::Agent::Config::load_allowlist(scripts_conf("plain = /opt/s/a.sh\n"));
+    my @bad = Exec::Agent::Config::validate_profiles($al, $c);
+    is_deeply \@bad, ['plain -> default'],
+        'unannotated script is flagged when default is undefined';
 };
 
 done_testing;

@@ -117,14 +117,22 @@ executor_socket = /run/ctrl-exec-agent/exec.sock
 # role = db
 # site = london
 
-# Security profiles (optional).
+# Security profiles.
 # A profile is the security context a script runs under, applied by the agent's
 # privileged executor before it execs the script: which user it runs as, which
 # Linux capabilities it holds, and which paths it may write to. Scripts reference
-# a profile by name in scripts.conf (profile=<name>); a script with no profile
-# runs under the implicit, most-restrictive 'default' (unprivileged, no caps, no
-# writable paths). The control/audit files are read-only to every profile,
-# including root ones, so an action can never tamper with the agent's controls.
+# a profile by name in scripts.conf (profile=<name>); a script with no profile=
+# resolves to the profile named 'default'.
+#
+# EVERY profile must be defined here, INCLUDING 'default'. There is no built-in
+# fallback: a script whose profile is not defined (an unannotated script when no
+# [profile default] exists, or a profile=<name> that names nothing) makes the
+# agent refuse to serve (fail-closed). This is deliberate - nothing ever runs
+# under an unstated context. In particular, NOTHING RUNS AS root unless a profile
+# explicitly sets run_as = root. Define [profile default] below as the restrictive
+# baseline you want unannotated scripts to use (this example ships run_as=nobody).
+# The control/audit files are read-only to every profile, including root ones, so
+# an action can never tamper with the agent's controls.
 #
 # PROFILES REQUIRE THE EXECUTOR. They are applied only when executor_socket is
 # set (above) and ctrl-exec-exec.service is running. WITHOUT the executor the
@@ -136,7 +144,9 @@ executor_socket = /run/ctrl-exec-agent/exec.sock
 # run_as/capabilities/writable paths, you MUST enable the executor.
 #
 # Fields per profile:
-#   run_as            user (or uid) to drop to; omit to keep the agent's user
+#   run_as            user (or uid) to drop to; OMITTING IT RUNS THE SCRIPT AS
+#                     THE EXECUTOR'S USER, root - set run_as for an unprivileged
+#                     profile (the shipped [profile default] uses run_as=nobody)
 #   caps              comma/space-separated CAP_* to retain (e.g. CAP_CHOWN)
 #   writable          colon-separated absolute dirs the script may write to
 #   no_new_privileges yes (default) | no
@@ -155,9 +165,19 @@ executor_socket = /run/ctrl-exec-agent/exec.sock
 # Define only the profiles you need; reference them from scripts.conf. Naming a
 # profile in scripts.conf that is not defined here makes the agent refuse to
 # serve (fail-closed).
+
+# The profile unannotated scripts resolve to. Shipped restrictive: an
+# unprivileged user, no capabilities, no writable paths, no_new_privileges on.
+# This is ACTIVE (not commented) so the agent serves out of the box and nothing
+# runs as root by omission. Edit it to change the baseline, or set profile= per
+# script for anything that needs more.
+[profile default]
+run_as            = nobody
+no_new_privileges = yes
+
 #
 # [profile read-only]
-# # the default-equivalent: write nothing, no privilege
+# # like default: write nothing, no privilege
 #
 # [profile cert-deploy]
 # run_as   = root

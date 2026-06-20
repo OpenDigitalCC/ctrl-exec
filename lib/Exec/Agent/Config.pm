@@ -97,8 +97,10 @@ sub _validate_config {
     # no_new_privileges -> bool (default on). The executor enforces all of these
     # before exec: caps, run_as, no_new_privileges, and - when `writable` is set -
     # a read-only filesystem with those paths carved out read-write (plus a private
-    # /tmp). The implicit most-restrictive 'default' profile is supplied by the
-    # agent and need not be defined here (defining [profile default] overrides it).
+    # /tmp). Every profile must be defined here, including 'default' (the profile
+    # an unannotated script resolves to) - there is no implicit built-in. A script
+    # whose profile is undefined makes the agent refuse to serve (fail-closed), so
+    # nothing ever runs under an unstated - possibly root - context.
     if (ref $config->{profiles} eq 'HASH') {
         for my $pname (sort keys %{ $config->{profiles} }) {
             my $p = $config->{profiles}{$pname};
@@ -330,14 +332,16 @@ sub script_profile {
 }
 
 # Cross-check the allowlist against the defined profiles: every script's profile
-# must be defined in agent.conf, or be the implicit 'default'. Returns a list of
-# "script -> profile" strings for any that are not (empty when all resolve).
-# Fail-closed: callers (serve startup, self-check) treat a non-empty result as a
-# fatal config error rather than silently running an undefined - possibly
-# over-permissive - profile.
+# must be defined in agent.conf. This includes 'default' (the profile an
+# unannotated script resolves to) - there is NO implicit built-in default, so an
+# unannotated script with no [profile default] configured is reported here.
+# Returns a list of "script -> profile" strings for any that are not defined
+# (empty when all resolve). Fail-closed: callers (serve startup, self-check)
+# treat a non-empty result as a fatal config error rather than silently running
+# an undefined - possibly over-permissive - profile.
 sub validate_profiles {
     my ($allowlist, $config) = @_;
-    my %defined = (default => 1, %{ $config->{profiles} // {} });
+    my %defined = %{ $config->{profiles} // {} };
     my @unknown;
     for my $name (sort keys %$allowlist) {
         my $p = script_profile($name, $allowlist) // 'default';
