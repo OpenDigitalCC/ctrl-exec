@@ -1,0 +1,13 @@
+[Unit]
+Description=ctrl-exec agent - adopt a staged renewed certificate
+Documentation=https://github.com/yourorg/ctrl-exec
+
+[Timer]
+# Check daily (and shortly after boot) whether a renewed cert has been staged.
+# Renewal runs well before expiry, so a daily adoption cadence has ample margin.
+OnBootSec=10min
+OnUnitActiveSec=1d
+Persistent=true
+
+[Install]
+WantedBy=timers.target

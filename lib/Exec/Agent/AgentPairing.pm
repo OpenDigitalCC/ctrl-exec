@@ -606,6 +606,94 @@ sub _run_or_die {
         or croak "Command failed (@cmd): $?";
 }
 
+# Validate a candidate (renewed) cert before adopting it: it must verify against
+# the agent's CA and its public key must match the agent's existing private key
+# (renewal preserves the key). The cert is public material, so this is a
+# robustness gate - never adopt a cert that would not actually work, and never
+# let a buggy or hostile delivery overwrite a working cert - not a secret
+# boundary. Returns (1) on success or (0, $reason).
+sub validate_cert {
+    my (%o) = @_;
+    my $cert_pem = defined $o{cert_pem} ? $o{cert_pem} : croak "cert_pem required";
+    my $ca_path  = $o{ca_path}  or croak "ca_path required";
+    my $key_path = $o{key_path} or croak "key_path required";
+
+    return (0, "CA cert not found at '$ca_path'")  unless -f $ca_path;
+    return (0, "agent key not found at '$key_path'") unless -f $key_path;
+
+    my ($cfh, $cpath) = tempfile(SUFFIX => '.crt', UNLINK => 1);
+    print $cfh $cert_pem;
+    close $cfh;
+
+    # 1. Verify against the agent's CA. A 127 exit means openssl is not on PATH -
+    # report that distinctly so a hands-free renewal failure is not misattributed
+    # to a bad cert. Either way this fails closed (no adoption).
+    my $vout = `openssl verify -CAfile \Q$ca_path\E \Q$cpath\E 2>&1`;
+    return (0, "openssl not available") if ($? >> 8) == 127;
+    return (0, "renewed cert does not verify against the agent CA")
+        unless $? == 0;
+
+    # 2. Public key of the cert must equal the public key of the agent's key.
+    my $cpub = `openssl x509 -in \Q$cpath\E -noout -pubkey 2>/dev/null`;
+    my $kpub = `openssl pkey -in \Q$key_path\E -pubout 2>/dev/null`;
+    return (0, "renewed cert public key does not match the agent key")
+        unless length($cpub // '') && length($kpub // '') && $cpub eq $kpub;
+
+    return (1, undef);
+}
+
+# Stage a renewed cert (runs as the unprivileged agent): validate it, then write
+# it atomically to $staged_path (in the agent-writable state dir). The live cert
+# is NOT touched here - it is promoted at the next agent start (promote_staged_cert).
+# Returns { ok => 1 } or { ok => 0, error => ... }.
+sub stage_renewed_cert {
+    my (%o) = @_;
+    my $cert_pem    = defined $o{cert_pem} ? $o{cert_pem} : croak "cert_pem required";
+    my $staged_path = $o{staged_path} or croak "staged_path required";
+
+    my ($ok, $reason) = validate_cert(
+        cert_pem => $cert_pem, ca_path => $o{ca_path}, key_path => $o{key_path});
+    return { ok => 0, error => $reason } unless $ok;
+
+    eval { _write_file($staged_path, $cert_pem, 0640); 1 }
+        or return { ok => 0, error => "could not stage cert: $@" };
+    return { ok => 1 };
+}
+
+# Promote a staged cert to the live cert path (runs as root, at agent start). If
+# a staged cert exists and validates, install it atomically (preserving the live
+# cert's owner/group so the service user keeps read access) and remove the staged
+# file. A staged cert that fails validation is dropped without touching the live
+# cert, so a bad delivery can never wedge promotion or break the running agent.
+# Returns { ok => 1, promoted => 0|1 } or { ok => 0, error => ... }.
+sub promote_staged_cert {
+    my (%o) = @_;
+    my $staged_path = $o{staged_path} or croak "staged_path required";
+    my $cert_path   = $o{cert_path}   or croak "cert_path required";
+
+    return { ok => 1, promoted => 0 } unless -f $staged_path;
+
+    my $cert_pem = eval { _slurp($staged_path) };
+    return { ok => 0, error => "cannot read staged cert: $@" } unless defined $cert_pem;
+
+    my ($valid, $reason) = validate_cert(
+        cert_pem => $cert_pem, ca_path => $o{ca_path}, key_path => $o{key_path});
+    unless ($valid) {
+        unlink $staged_path;
+        return { ok => 0, error => $reason };
+    }
+
+    my @st = stat($cert_path);   # capture owner/group before replacing
+    eval { _write_file($cert_path, $cert_pem, 0640); 1 }
+        or return { ok => 0, error => "could not install cert: $@" };
+    # Restore the live cert's prior owner:group (root:agent-group) so the service
+    # user keeps read access. Skipped only if there was no prior cert - which does
+    # not happen in practice, as pairing writes the live cert before any renewal.
+    chown $st[4], $st[5], $cert_path if @st;
+    unlink $staged_path;
+    return { ok => 1, promoted => 1 };
+}
+
 # Ensure a directory exists and, when run as root with the service account
 # present, is owned by it (0750) so the non-root agent can rewrite files in it
 # later. Best-effort: a missing user/group or a failed chown (e.g. non-root in

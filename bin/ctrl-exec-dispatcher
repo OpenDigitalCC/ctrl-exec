@@ -66,6 +66,7 @@ sub main {
         'rotate-cert'       => \&mode_rotate_cert,
         'serial-status'     => \&mode_serial_status,
         'unpair'            => \&mode_unpair,
+        'maintain'          => \&mode_maintain,
     );
 
     my $handler = $dispatch{$mode}
@@ -89,6 +90,18 @@ sub _resolve_dispatch_hosts {
           . "'ctrl-exec-dispatcher list-agents' to see them.\n";
     }
     return $r->{hosts};
+}
+
+# Days until a cert expiry string ("Mon DD HH:MM:SS YYYY GMT") elapses, or undef
+# if unparseable. Surfaces cert age so operators see which agents are approaching
+# renewal/restart well in advance (negative = already expired).
+sub _days_until_expiry {
+    my ($expiry_str) = @_;
+    return undef unless defined $expiry_str && length $expiry_str;
+    require Time::Piece;
+    my $epoch = eval { Time::Piece->strptime($expiry_str, '%b %d %H:%M:%S %Y %Z')->epoch };
+    return undef unless $epoch;
+    return int(($epoch - time()) / 86400);
 }
 
 sub mode_run {
@@ -285,6 +298,66 @@ sub mode_ping {
     }
 }
 
+# Periodic, hands-free maintenance - intended to be run by a systemd timer as
+# root (it needs the CA key to sign renewals). It drives both halves of the cert
+# lifecycle without operator involvement:
+#   1. Pings every registered agent. ping_all() checks each cert against half-life
+#      and, when due, runs the renewal exchange (POST /renew -> sign -> POST
+#      /renew-complete). The agent stages the new cert and adopts it on its next
+#      restart (its own renew timer triggers that).
+#   2. Rotates the dispatcher's own cert when it nears expiry, broadcasts the new
+#      serial to agents, and expires agents long out of contact.
+# Each phase is independent: a failure in one is logged and does not stop the rest.
+sub mode_maintain {
+    my ($opts) = @_;
+
+    my $config = _load_config();
+
+    my $agents = eval { Exec::Registry::list_agents() } // [];
+    my @hosts  = map { $_->{hostname} } grep { defined $_->{hostname} } @$agents;
+
+    my $pinged = 0;
+    if (@hosts) {
+        my $results = eval {
+            Exec::Engine::ping_all(
+                hosts  => _resolve_dispatch_hosts(\@hosts),
+                config => $config,
+                port   => $opts->{port},
+            );
+        };
+        if ($@) {
+            Exec::Log::log_action('ERR', { ACTION => 'maintain', PHASE => 'ping', ERROR => $@ });
+        }
+        else {
+            $pinged = scalar @$results;
+        }
+    }
+
+    # The dispatcher's own cert lifecycle (the one-shot checks the pairing
+    # listener also runs at startup), each guarded independently.
+    for my $step (
+        [ 'rotate',    sub { Exec::Rotation::check_and_rotate(config => $config) } ],
+        [ 'broadcast', sub { Exec::Rotation::broadcast_serial(config => $config) } ],
+        [ 'expire',    sub { Exec::Rotation::expire_stale_agents(config => $config) } ],
+    ) {
+        eval { $step->[1]->(); 1 }
+            or Exec::Log::log_action('ERR',
+                { ACTION => 'maintain', PHASE => $step->[0], ERROR => $@ });
+    }
+
+    Exec::Log::log_action('INFO',
+        { ACTION => 'maintain', AGENTS => scalar @hosts, PINGED => $pinged });
+
+    if ($opts->{json}) {
+        require JSON;
+        print JSON::encode_json({ ok => 1, agents => scalar @hosts, pinged => $pinged }), "\n";
+    }
+    else {
+        print "Maintenance run: $pinged/" . scalar(@hosts) . " agents pinged, "
+            . "dispatcher cert checked.\n";
+    }
+}
+
 sub mode_list_agents {
     my ($opts) = @_;
     my $agents = eval { Exec::Registry::list_agents() };
@@ -322,17 +395,19 @@ sub mode_list_agents {
         return;
     }
 
-    printf "%-30s  %-16s  %-5s  %-8s  %-22s  %s\n",
-        'HOSTNAME', 'IP', 'PORT', 'LOOKUP', 'PAIRED', 'CERT EXPIRY';
-    printf "%s\n", '-' x 100;
+    printf "%-30s  %-16s  %-5s  %-8s  %-22s  %-24s  %s\n",
+        'HOSTNAME', 'IP', 'PORT', 'LOOKUP', 'PAIRED', 'CERT EXPIRY', 'DAYS LEFT';
+    printf "%s\n", '-' x 112;
     for my $a (@$agents) {
-        printf "%-30s  %-16s  %-5s  %-8s  %-22s  %s\n",
+        my $days = _days_until_expiry($a->{expiry});
+        printf "%-30s  %-16s  %-5s  %-8s  %-22s  %-24s  %s\n",
             $a->{hostname}  // '?',
             $a->{ip}        // '?',
             $a->{port}      // 7443,
             $a->{lookup_by} // 'hostname',
             $a->{paired}    // '?',
-            $a->{expiry}    // '?';
+            $a->{expiry}    // '?',
+            (defined $days ? $days : '?');
     }
 }
 

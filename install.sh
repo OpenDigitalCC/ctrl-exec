@@ -594,6 +594,19 @@ install_agent() {
 
     install_service_unit "$AGENT_SERVICE"
 
+    # Cert-renewal adoption timer: when the dispatcher delivers a renewed cert the
+    # agent stages it; this timer restarts the agent (only when a cert is staged)
+    # so the unit's ExecStartPre promotes it. Enabled now so renewal is hands-free.
+    if [[ "$HAS_SYSTEMD" == true ]]; then
+        safe_install 644 "$SOURCE_DIR/etc/ctrl-exec-agent-renew.service" \
+            "$SYSTEMD_DIR/ctrl-exec-agent-renew.service"
+        safe_install 644 "$SOURCE_DIR/etc/ctrl-exec-agent-renew.timer" \
+            "$SYSTEMD_DIR/ctrl-exec-agent-renew.timer"
+        systemctl daemon-reload
+        systemctl enable --now ctrl-exec-agent-renew.timer 2>/dev/null \
+            || warn "Could not enable ctrl-exec-agent-renew.timer; enable it manually."
+    fi
+
     if [[ "$PKG_MGR" == openwrt* ]]; then
         install_openwrt_firewall
     fi
@@ -656,6 +669,19 @@ install_ctrl_exec_dispatcher() {
         info "Auth hook installed at $EXEC_CONF_DIR/auth-hook (always-authorise default)."
     else
         info "Auth hook already exists, not overwriting."
+    fi
+
+    # Certificate maintenance timer: periodically pings agents (triggering renewal
+    # of any cert past half-life) and rotates the dispatcher's own cert. Runs as
+    # root for CA-key access. Enabled now so cert lifecycle is hands-free.
+    if [[ "$HAS_SYSTEMD" == true ]]; then
+        safe_install 644 "$SOURCE_DIR/etc/ctrl-exec-maintenance.service" \
+            "$SYSTEMD_DIR/ctrl-exec-maintenance.service"
+        safe_install 644 "$SOURCE_DIR/etc/ctrl-exec-maintenance.timer" \
+            "$SYSTEMD_DIR/ctrl-exec-maintenance.timer"
+        systemctl daemon-reload
+        systemctl enable --now ctrl-exec-maintenance.timer 2>/dev/null \
+            || warn "Could not enable ctrl-exec-maintenance.timer; enable it manually."
     fi
 
     info "ctrl-exec-dispatcher installed at $BIN_DIR/ctrl-exec-dispatcher"

@@ -741,26 +741,48 @@ This hands privilege management to `sudo`, which has exactly that job.
 
 ## Automatic Cert Renewal
 
-Renewal is triggered automatically after every successful ping when remaining
-cert validity is less than half the configured `cert_days`. With the default
-365 days, renewal begins at approximately 182 days remaining.
+Renewal is hands-free and runs on a trickle: the dispatcher's
+`ctrl-exec-maintenance.timer` (every ~4h) pings every agent and, when an agent's
+remaining validity drops below half the configured `cert_days`, renews its cert.
+With the **default `cert_days = 365`, renewal begins at roughly 182 days
+remaining** - so there is months of margin and no fleet-wide expiry cliff.
 
-No operator action is needed during normal operation. To check cert status:
+How a renewed cert is adopted, by stage:
+
+1. The agent generates a CSR from its existing key (key continuity) and the
+   dispatcher signs it (CN-pinned to the agent's registered identity).
+2. The agent validates the signed cert and writes it to a *staging* file in its
+   own writable state dir (`/var/lib/ctrl-exec-agent/agent.crt.staged`). The live
+   cert is untouched and still valid - renewal runs well before expiry.
+3. The agent's `ctrl-exec-agent-renew.timer` notices the staged cert and restarts
+   the service; an `ExecStartPre` step (root) promotes it into the live cert path
+   before the server starts, and the agent comes up on the renewed cert.
+
+No operator action is needed during normal operation. To see cert age across the
+fleet (note the **DAYS LEFT** column):
 
 ```bash
-# On the agent host
-sudo ctrl-exec-agent pairing-status
-
-# From the dispatcher (CERT EXPIRY column)
-ced ping host-a host-b
+ced list-agents
 ```
 
-Renewal failure is logged at ERR level on the dispatcher and retried on the
-next ping. A cert that fails repeatedly will eventually expire and require
-re-pairing.
+Renewal failure is logged at ERR level on the dispatcher (`ACTION=maintain`) and
+agent (`ACTION=cert-promote`), and retried on the next maintenance run. A cert
+that fails repeatedly will eventually expire and require re-pairing. Alert on
+those ERR lines so a stalled renewal is visible well before expiry.
 
-To change cert lifetime, update `cert_days` in `ctrl-exec.conf`. Existing
-certs are unaffected until their next renewal.
+To change cert lifetime, update `cert_days` in `ctrl-exec.conf`. Existing certs
+are unaffected until their next renewal.
+
+> **OpenWrt / non-systemd hosts.** The restart-to-adopt mechanism above relies on
+> systemd timers and the `ExecStartPre` promote step, which procd does not
+> provide. On OpenWrt an agent still *stages* a renewed cert, but it is **not
+> adopted automatically**: restart the agent yourself to promote and load it -
+> `/etc/init.d/ctrl-exec-agent restart` (the init script promotes any staged cert
+> at start), or add a cron entry that restarts when
+> `/var/lib/ctrl-exec-agent/agent.crt.staged` exists. Because the default cert
+> lifetime is a year and staging happens at half-life, a periodic (e.g. monthly)
+> restart is ample. Pick a `cert_days` comfortably longer than your restart
+> cadence so a staged cert is always adopted before the live one expires.
 
 
 ## Dispatcher Redundancy

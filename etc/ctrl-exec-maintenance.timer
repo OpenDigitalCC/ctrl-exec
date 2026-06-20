@@ -1,0 +1,14 @@
+[Unit]
+Description=ctrl-exec dispatcher - periodic certificate maintenance
+Documentation=https://github.com/yourorg/ctrl-exec
+
+[Timer]
+# Drives renewal + dispatcher rotation. The renewal check fires at cert half-life
+# (months of lead time), so a few-hourly cadence has ample margin; it matches the
+# cert_check_interval default.
+OnBootSec=5min
+OnUnitActiveSec=4h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -5,7 +5,56 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
-## 0.11.2 — config errors fail clearly instead of looping
+## 0.11.2 — security hardening; config errors fail clearly instead of looping
+
+- **Added** hands-free agent-cert renewal, with the trust boundary drawn at the
+  private key. The agent implements `POST /renew` (CSR from its existing key -
+  key continuity preserved) and `POST /renew-complete`: it validates the signed
+  cert (verifies against its CA and that the public key matches its own key) and
+  stages it in its own writable state dir - the cert is public material the agent
+  owns, so no privileged writer is involved. A renewed cert is promoted into the
+  root-owned live path by a root `ExecStartPre` step at the next agent start, and
+  adopted on restart. The dispatcher binds the signed CSR's CN to the agent's
+  identity. Previously the dispatcher posted `/renew` but the agent had no
+  handler, so renewal silently 404'd and certs never renewed.
+- **Added** `ctrl-exec-maintenance.timer` (dispatcher, root) running `ced
+  maintain` - pings all agents (triggering due renewals) and rotates the
+  dispatcher's own cert - and `ctrl-exec-agent-renew.timer` (agent) that restarts
+  the agent to adopt a staged cert. Both enabled on install, so cert lifecycle is
+  hands-free with no operator action. `list-agents` now shows a DAYS LEFT column.
+- **Changed** the default agent config to set `executor_socket` (run through the
+  privileged executor, the recommended posture for per-script profiles); comment
+  it out only where `--async` is needed.
+- **Changed (behaviour)** the environment an allowlisted script runs in is now
+  sanitised. The script no longer inherits the agent's full environment: the
+  front-end keeps a small whitelist (`PATH` reset to a safe default, plus
+  `HOME`/`LANG`/`TZ`/...), and the privileged executor passes a clean `PATH`
+  only. This removes `LD_PRELOAD`/`LD_LIBRARY_PATH`/`BASH_ENV`/`IFS`/`PERL5LIB`
+  as passthrough attack surface against shell/script interpreters. Request
+  context still reaches scripts on stdin (JSON), never via the environment. A
+  script that relied on an inherited variable must now be given it explicitly.
+- **Added** request-size limits to the dispatcher HTTP API (`413` body /
+  `431` headers), mirroring the agent, so an oversized `Content-Length` or a
+  header flood cannot exhaust memory before the auth gate runs.
+- **Added** CSR validation in the CA signer: reject keys under 2048-bit and weak
+  (MD5/SHA-1) self-signatures, verify the CSR's self-signature, and optionally
+  bind the subject CN to an expected identity. Closes the "sign any subject with
+  any key" signing-oracle gap.
+- **Added** `auth_hook_timeout` (default 10s): a hung auth hook is killed and
+  the request fails closed instead of wedging the request handler indefinitely.
+- **Changed** `/capabilities` to fail closed when no dispatcher is trusted (the
+  trusted-dispatcher map is empty), matching `/run`, `/ping`, `/rotate-serial`
+  and `/result`. An unpaired or map-less agent no longer discloses its allowlist.
+- **Changed** the executor to reject an out-of-range numeric `run_as` (at config
+  load and at apply time) instead of silently truncating it, which could land on
+  uid 0 (root).
+- **Changed** CA/dispatcher private-key generation to run under a tight umask so
+  a key is never momentarily group/world-readable between creation and `chmod`.
+- **Added** bounded fan-out concurrency to the dispatcher (`max_parallel`,
+  default 64): a large fleet no longer forks one TLS client per host all at once,
+  which could exhaust file descriptors before the host cap.
+- **Changed** `bin/ctrl-exec-agent` into a modulino (`main() unless caller`) so
+  its request handlers can be loaded and unit-tested directly.
 
 - **Changed** agent startup so a configuration error (parse error, invalid
   capability, undefined profile, ...) prints one clear message naming the file

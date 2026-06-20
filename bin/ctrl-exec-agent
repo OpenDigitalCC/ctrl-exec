@@ -63,6 +63,7 @@ sub main {
         'pairing-status'  => \&mode_pairing_status,
         'self-check'      => \&mode_self_check,
         'self-ping'       => \&mode_self_ping,
+        'promote-cert'    => \&mode_promote_cert,
     );
 
     my $handler = $dispatch{$mode}
@@ -72,6 +73,49 @@ sub main {
 }
 
 # --- modes ---
+
+# Promote a validated staged cert into the live cert path. Run as root by the
+# service unit's ExecStartPre before the server starts, so a renewed cert
+# delivered while the agent was running is adopted on the next start. Always
+# returns without error: a missing or invalid staged cert must never block the
+# agent from starting on its existing (still-valid) cert.
+sub mode_promote_cert {
+    my ($opts) = @_;
+
+    my $config = eval { Exec::Agent::Config::load_config($CONFIG_PATH) };
+    unless ($config) {
+        warn "promote-cert: could not load config: $@";
+        return;
+    }
+
+    my $staged = $config->{cert_staging_path}
+              // '/var/lib/ctrl-exec-agent/agent.crt.staged';
+    return unless -f $staged;   # nothing staged
+
+    # Wrapped so this step can NEVER throw: it runs in ExecStartPre, where a
+    # non-zero exit would block the agent from starting at all. Any failure here
+    # leaves the existing (still-valid) cert in place and the agent starts on it.
+    my $r = eval {
+        Exec::Agent::AgentPairing::promote_staged_cert(
+            staged_path => $staged,
+            cert_path   => $config->{cert},
+            ca_path     => $config->{ca},
+            key_path    => $config->{key},
+        );
+    };
+    unless ($r) {
+        Exec::Log::log_action('WARNING',
+            { ACTION => 'cert-promote', ERROR => ($@ || 'unknown error') });
+        return;
+    }
+
+    if ($r->{ok} && $r->{promoted}) {
+        Exec::Log::log_action('INFO', { ACTION => 'cert-promote', STATUS => 'installed' });
+    }
+    elsif (!$r->{ok}) {
+        Exec::Log::log_action('WARNING', { ACTION => 'cert-promote', ERROR => $r->{error} });
+    }
+}
 
 sub mode_serve {
     my ($opts) = @_;
@@ -672,6 +716,12 @@ sub handle_connection {
     elsif ($method eq 'POST' && $path eq '/rotate-serial') {
         handle_rotate_serial($conn, $body, $peer, $config, $trusted, $peer_serial);
     }
+    elsif ($method eq 'POST' && $path eq '/renew') {
+        handle_renew($conn, $body, $peer, $config);
+    }
+    elsif ($method eq 'POST' && $path eq '/renew-complete') {
+        handle_renew_complete($conn, $body, $peer, $config);
+    }
     else {
         _send_raw($conn, 404, encode_json({ error => 'not found' }));
     }
@@ -1022,6 +1072,87 @@ sub handle_ping {
         expiry  => $status->{expiry} // 'unknown',
         reqid   => $reqid,
     });
+}
+
+# POST /renew - the dispatcher asks the agent to begin a cert renewal. The agent
+# generates a CSR from its EXISTING key (key continuity preserved - no new key)
+# carrying its current identity (CN), and returns it. Intentionally exempt from
+# the trusted-dispatcher map check: during a dispatcher cert rotation the caller
+# may present a new serial not yet in the map. mTLS with a CA-signed cert still
+# applies (enforced at the TLS layer). See docs/SECURITY.md, Cert Rotation.
+sub handle_renew {
+    my ($conn, $body, $peer, $config) = @_;
+
+    my $data  = eval { decode_json($body) } // {};
+    my $reqid = $data->{reqid} // '';
+
+    my $key = $config->{key};
+    unless (defined $key && -f $key) {
+        _send_json($conn, { status => 'error', error => 'agent key not available' });
+        return;
+    }
+
+    my $r = eval {
+        Exec::Agent::AgentPairing::generate_csr_only(hostname => _fqdn(), key_path => $key);
+    };
+    if (!$r || !$r->{csr_pem}) {
+        Exec::Log::log_action('ERR', {
+            ACTION => 'renew', PEER => $peer, REQID => $reqid,
+            ERROR  => ($@ || 'CSR generation failed'),
+        });
+        _send_json($conn, { status => 'error', error => 'could not generate CSR' });
+        return;
+    }
+
+    Exec::Log::log_action('INFO', {
+        ACTION => 'renew', PEER => $peer, REQID => $reqid, STATUS => 'csr-generated',
+    });
+    _send_json($conn, { status => 'ok', csr => $r->{csr_pem}, reqid => $reqid });
+}
+
+# POST /renew-complete - the dispatcher delivers the signed cert. The agent
+# validates it (verifies against its CA and that the public key matches its own
+# key) and writes it, atomically, to the staging file in its own writable state
+# dir. The cert is public material the agent owns, so it stages it itself - no
+# privileged writer needed. The live cert (root-owned) is replaced from the
+# staged copy by a root step at the next agent start (promote-cert), and the
+# server adopts it on that restart. The existing cert stays valid in the meantime
+# (renewal runs well before expiry). Exempt from the trusted-map check; mTLS
+# still applies.
+sub handle_renew_complete {
+    my ($conn, $body, $peer, $config) = @_;
+
+    my $data  = eval { decode_json($body) } // {};
+    my $reqid = $data->{reqid} // '';
+    my $cert  = $data->{cert};
+
+    unless (defined $cert && length $cert) {
+        _send_json($conn, { status => 'error', error => 'cert required' });
+        return;
+    }
+
+    my $staged = $config->{cert_staging_path}
+              // '/var/lib/ctrl-exec-agent/agent.crt.staged';
+
+    my $r = Exec::Agent::AgentPairing::stage_renewed_cert(
+        cert_pem    => $cert,
+        ca_path     => $config->{ca},
+        key_path    => $config->{key},
+        staged_path => $staged,
+    );
+
+    if ($r->{ok}) {
+        Exec::Log::log_action('INFO', {
+            ACTION => 'renew-complete', PEER => $peer, REQID => $reqid, STATUS => 'cert-staged',
+        });
+        _send_json($conn, { status => 'ok', reqid => $reqid, staged => JSON::true });
+    }
+    else {
+        Exec::Log::log_action('ERR', {
+            ACTION => 'renew-complete', PEER => $peer, REQID => $reqid, ERROR => $r->{error},
+        });
+        _send_json($conn, { status => 'error', error => $r->{error} });
+    }
 }
 
 sub handle_capabilities {

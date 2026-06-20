@@ -60,10 +60,11 @@ ca   = /etc/ctrl-exec-agent/ca.crt
 # refused (the executor does not yet handle detached jobs). Use synchronous runs
 # with the executor, or leave executor_socket unset to use --async.
 #
-# Enabling this means: install and enable ctrl-exec-exec.service, then set the
-# path below.
-#
-# executor_socket = /run/ctrl-exec-agent/exec.sock
+# DEFAULT: on. The executor (ctrl-exec-exec.service) is installed and enabled by
+# the package, and the standard, recommended posture is to run through it so
+# per-script profiles are enforced. Comment this out only if you specifically
+# need --async runs on this host (the two are mutually exclusive, above).
+executor_socket = /run/ctrl-exec-agent/exec.sock
 
 # Async result store (optional).
 # Directory where results of detached (--async) jobs are persisted, keyed by
@@ -83,6 +84,10 @@ ca   = /etc/ctrl-exec-agent/ca.crt
 # See REFERENCE.md for the hook interface and exit code semantics.
 #
 # auth_hook = /etc/ctrl-exec-agent/auth-hook
+
+# Max seconds to wait for the auth hook to finish (default: 10). A hook that
+# exceeds this is killed and the request is denied (fail closed).
+# auth_hook_timeout = 10
 
 # Optional: restrict connections to known ctrl-exec IPs.
 # Comma-separated list of IPs or CIDR prefixes (/8, /16, /24 only).

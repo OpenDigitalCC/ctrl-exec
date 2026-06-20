@@ -1,0 +1,13 @@
+[Unit]
+Description=ctrl-exec dispatcher - certificate maintenance run
+Documentation=https://github.com/yourorg/ctrl-exec
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Runs as root: signing a renewal needs the CA private key (/etc/ctrl-exec/ca.key,
+# 0600 root) - the same privilege the manual `ced rotate-cert` / pairing-mode use.
+# Pings every registered agent (triggering renewal when a cert is past half-life)
+# and rotates/broadcasts the dispatcher's own cert when it nears expiry.
+ExecStart=/usr/bin/ctrl-exec-dispatcher maintain

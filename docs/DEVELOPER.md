@@ -1343,23 +1343,48 @@ Cert lifetime is configured in `ctrl-exec.conf` as `cert_days` (default 365).
 Renewal is triggered by the dispatcher after every successful ping when the
 agent's remaining cert validity drops below half the configured lifetime.
 
+Renewal is driven hands-free by the dispatcher's `ctrl-exec-maintenance.timer`
+(root, for CA-key access), which runs `ced maintain`: it pings every registered
+agent and rotates the dispatcher's own cert. The trust boundary is drawn at the
+private **key** - the agent transports and writes its own (public) certificate;
+only signing (CA key) and the live-cert promotion stay privileged.
+
 The renewal flow:
 
 1. `ping_all` collects ping results. For each successful result, `_renewal_due`
-   parses the returned expiry string and compares remaining seconds against
-   `(cert_days / 2) * 86400`.
+   compares the returned expiry against `(cert_days / 2) * 86400`.
 2. If renewal is due, `_renew_one` sends `POST /renew` to the agent. The agent
    generates a CSR from its existing key (`generate_csr_only`) and returns it.
-   The key is not regenerated - key continuity is preserved across renewals.
-3. The dispatcher signs the CSR via `Exec::CA::sign_csr` using
-   `cert_days` from config, then sends `POST /renew-complete` with the new
-   cert and CA PEM.
-4. The agent stores the new cert via `store_certs` and logs completion.
-5. The dispatcher updates the registry expiry for the agent.
+   The key is never regenerated - key continuity is preserved across renewals.
+3. The dispatcher signs the CSR via `Exec::CA::sign_csr` (binding the subject CN
+   to the agent's registry identity via `expected_cn`), then sends
+   `POST /renew-complete` with the new cert.
+4. The agent **validates and stages** the cert itself (`stage_renewed_cert`):
+   it verifies the cert against its CA and that the cert's public key matches its
+   own key, then writes it atomically to a staging file in its writable state dir
+   (`/var/lib/ctrl-exec-agent/agent.crt.staged`). The live cert is untouched and
+   the running server keeps using it (still valid - renewal runs well before
+   expiry). No privileged writer is needed: the cert is public material the agent
+   owns.
+5. The agent's `ctrl-exec-agent-renew.timer` notices a staged cert and restarts
+   the service. The unit's `ExecStartPre=+ctrl-exec-agent promote-cert` runs as
+   root before the server starts, re-validates the staged cert and atomically
+   promotes it into the root-owned live cert path (`promote_staged_cert`), then
+   the server comes up on the renewed cert. A staged cert that fails validation is
+   dropped without touching the live cert, so a bad delivery can never wedge
+   startup.
+6. The dispatcher updates the registry expiry for the agent.
+
+The validation at both stage and promote is a robustness gate, not a secret
+boundary: a certificate is public, and a renewed one is useless unless CA-signed
+for the agent's existing key (which the agent already holds), so a compromised
+front-end gains nothing by writing one. The only secret - the private key - stays
+root-owned and is never written by the agent. This is why renewal needs no
+privileged cert installer: the boundary is the key, not the cert.
 
 Renewal failure is logged at ERR level and does not affect the ping result.
 The operator can investigate via syslog. A cert that fails renewal will
-eventually expire; the next successful ping will retry renewal.
+eventually expire; the next maintenance run retries it.
 
 An agent that has been out of contact for the full cert lifetime self-expires,
 which is correct behaviour for a decommissioned host that was never explicitly

@@ -9,6 +9,12 @@ Type=simple
 User=ctrl-exec-agent
 Group=ctrl-exec-agent
 
+# Promote a renewed cert staged (in the writable state dir) while the agent was
+# running into the live cert path before the server starts. The '+' prefix runs
+# this one step as root, outside the service sandbox, so it can write the
+# root-owned /etc/ctrl-exec-agent that the main process is denied. It always
+# succeeds: a missing or invalid staged cert leaves the existing cert in place.
+ExecStartPre=+/usr/bin/ctrl-exec-agent promote-cert
 ExecStart=/usr/bin/ctrl-exec-agent serve
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
