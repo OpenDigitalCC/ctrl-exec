@@ -75,7 +75,9 @@ subtest 'register_agent: serial_status defaults to unknown when absent' => sub {
     );
 
     my $r = read_record($dir, 'agent-default-01');
-    is $r->{serial_status} // 'unknown', 'unknown',
+    ok exists $r->{serial_status},
+        'serial_status field is present (not merely absent-and-defaulted)';
+    is $r->{serial_status}, 'unknown',
         'serial_status defaults to unknown';
 };
 
@@ -259,9 +261,10 @@ subtest 'update_agent_serial_status: result is valid JSON after update' => sub {
 # ---------------------------------------------------------------------------
 
 subtest 'update_agent_serial_status: absent agent creates new minimal record' => sub {
-    # Per Registry.pm source: absent file causes $record to start as {}.
-    # The function then writes hostname + status. Rotation.pm relies on this
-    # when marking all listed agents pending after rotation.
+    # Absent file -> $record starts as {}, then the function writes hostname +
+    # status. Rotation.pm relies on this when marking all listed agents pending
+    # after rotation, so the record MUST be created (a no-create regression
+    # would silently drop agents from a rotation).
     my $dir = tempdir(CLEANUP => 1);
 
     eval {
@@ -273,14 +276,10 @@ subtest 'update_agent_serial_status: absent agent creates new minimal record' =>
     };
     ok !$@, 'does not die for absent agent';
 
-    if (-f "$dir/new-from-update.json") {
-        my $r = read_record($dir, 'new-from-update');
-        is $r->{serial_status}, 'pending', 'new record has correct status';
-        is $r->{hostname}, 'new-from-update', 'hostname set in new record';
-    }
-    else {
-        pass 'function did not create a record (also acceptable)';
-    }
+    ok -f "$dir/new-from-update.json", 'a record is created for the absent agent';
+    my $r = read_record($dir, 'new-from-update');
+    is $r->{serial_status}, 'pending', 'new record has the requested status';
+    is $r->{hostname}, 'new-from-update', 'hostname set in new record';
 };
 
 done_testing;

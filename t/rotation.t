@@ -476,26 +476,26 @@ subtest '_do_rotation: creates rotation state file with correct fields' => sub {
     make_path($caDir, $regDir);
 
     my $cert = "$caDir/dispatcher.crt";
-    plan skip_all => 'could not generate initial cert'
-        unless make_cert(365, $cert);
+    my $key  = "$caDir/dispatcher.key";
+    eval {
+        Exec::CA::generate_ca(ca_dir => $caDir, bits => 2048);
+        Exec::CA::generate_dispatcher_cert(
+            ca_dir => $caDir, cert => $cert, key => $key, bits => 2048);
+    };
+    plan skip_all => "could not set up CA: $@" if $@;
 
     my $old_serial = Exec::Rotation::_read_cert_serial($cert);
-    plan skip_all => 'could not read initial cert serial' unless defined $old_serial;
 
-    my $result = eval {
-        Exec::Rotation::_do_rotation(config => config(
-            ca_dir        => $caDir,
-            cert          => $cert,
-            key           => "$caDir/dispatcher.key",
-            rotation_file => $rotFile,
-            registry_dir  => $regDir,
-        ))
-    };
-    if ($@ || !$result || !$result->{rotated}) {
-        my $reason = $@ || ($result && $result->{error}) || 'unknown';
-        plan skip_all => "_do_rotation requires a full CA setup: $reason";
-        return;
-    }
+    my $result = Exec::Rotation::_do_rotation(config => config(
+        ca_dir        => $caDir,
+        cert          => $cert,
+        key           => $key,
+        rotation_file => $rotFile,
+        registry_dir  => $regDir,
+    ));
+    # Setup succeeded, so rotation MUST happen - a silent rotated=0 is a real
+    # failure here, not an environment skip.
+    ok $result->{rotated}, 'rotation performed against a real CA setup';
 
     ok -f $rotFile, 'rotation state file written';
 
@@ -523,8 +523,13 @@ subtest '_do_rotation: registered agents marked pending after rotation' => sub {
     make_path($caDir, $regDir);
 
     my $cert = "$caDir/dispatcher.crt";
-    plan skip_all => 'could not generate initial cert'
-        unless make_cert(365, $cert);
+    my $key  = "$caDir/dispatcher.key";
+    eval {
+        Exec::CA::generate_ca(ca_dir => $caDir, bits => 2048);
+        Exec::CA::generate_dispatcher_cert(
+            ca_dir => $caDir, cert => $cert, key => $key, bits => 2048);
+    };
+    plan skip_all => "could not set up CA: $@" if $@;
 
     for my $host (qw(agent-01 agent-02)) {
         write_file("$regDir/$host.json", encode_json({
@@ -538,20 +543,14 @@ subtest '_do_rotation: registered agents marked pending after rotation' => sub {
         }));
     }
 
-    my $result = eval {
-        Exec::Rotation::_do_rotation(config => config(
-            ca_dir        => $caDir,
-            cert          => $cert,
-            key           => "$caDir/dispatcher.key",
-            rotation_file => $rotFile,
-            registry_dir  => $regDir,
-        ))
-    };
-    if ($@ || !$result || !$result->{rotated}) {
-        my $reason = $@ || ($result && $result->{error}) || 'unknown';
-        plan skip_all => "_do_rotation requires a full CA setup: $reason";
-        return;
-    }
+    my $result = Exec::Rotation::_do_rotation(config => config(
+        ca_dir        => $caDir,
+        cert          => $cert,
+        key           => $key,
+        rotation_file => $rotFile,
+        registry_dir  => $regDir,
+    ));
+    ok $result->{rotated}, 'rotation performed against a real CA setup';
 
     for my $host (qw(agent-01 agent-02)) {
         ok -f "$regDir/$host.json", "agent record $host still exists";
@@ -572,31 +571,24 @@ subtest '_do_rotation: no prior cert - previous_serial is empty string' => sub {
     my $rotFile = "$dir/rotation.json";
     make_path($caDir, $regDir);
 
-    # No cert pre-created in caDir
+    # A CA but NO dispatcher cert yet: rotation mints the first one, so there is
+    # no previous serial.
+    eval { Exec::CA::generate_ca(ca_dir => $caDir, bits => 2048) };
+    plan skip_all => "could not set up CA: $@" if $@;
 
-    my $result = eval {
-        Exec::Rotation::_do_rotation(config => config(
-            ca_dir        => $caDir,
-            cert          => "$caDir/dispatcher.crt",
-            key           => "$caDir/dispatcher.key",
-            rotation_file => $rotFile,
-            registry_dir  => $regDir,
-        ))
-    };
-    if ($@ || !$result || !$result->{rotated}) {
-        my $reason = $@ || ($result && $result->{error}) || 'unknown';
-        plan skip_all => "_do_rotation requires a full CA setup: $reason";
-        return;
-    }
+    my $result = Exec::Rotation::_do_rotation(config => config(
+        ca_dir        => $caDir,
+        cert          => "$caDir/dispatcher.crt",
+        key           => "$caDir/dispatcher.key",
+        rotation_file => $rotFile,
+        registry_dir  => $regDir,
+    ));
+    ok $result->{rotated}, 'rotation mints the first cert when none existed';
 
-    if (-f $rotFile) {
-        my $state = decode_json(read_file($rotFile));
-        is $state->{previous_serial}, '',
-            'previous_serial is empty string when no prior cert existed';
-    }
-    else {
-        pass 'rotation ran (state file location may be overridden)';
-    }
+    ok -f $rotFile, 'rotation state file written';
+    my $state = decode_json(read_file($rotFile));
+    is $state->{previous_serial}, '',
+        'previous_serial is empty string when no prior cert existed';
 };
 
 subtest 'rotation re-keys the CONFIGURED cert, not a hardcoded dispatcher.crt' => sub {
