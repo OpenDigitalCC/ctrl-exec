@@ -241,4 +241,35 @@ use Exec::RateLimit qw();
     ok(scalar keys %state <= 1000, 'state does not exceed 1000 entries after eviction');
 }
 
+# --- eviction bulk-reclaims entries whose block has expired (PERF-001) ---
+# The single-pass eviction must drop EVERY expired-block entry in one go, not
+# just one, so eviction stops re-running on every subsequent connection.
+{
+    my %state;
+    my $now = time();
+
+    # 600 entries whose block expired in the past + 400 still actively blocked.
+    for my $i (1..600) {
+        $state{"10.9.0.$i"} = { connections => [], failures => [],
+                                blocked_until => $now - 50 };   # expired
+    }
+    for my $i (1..400) {
+        $state{"10.8.0.$i"} = { connections => [], failures => [],
+                                blocked_until => $now + 500 };  # active
+    }
+    # 1000 entries -> a new IP triggers the reclaim sweep.
+    {
+        no warnings 'redefine';
+        local *Exec::Log::log_action = sub {};
+        Exec::RateLimit::check('10.7.0.1', \%state);
+    }
+
+    my $expired_left = grep { /^10\.9\.0\./ } keys %state;
+    is($expired_left, 0, 'all 600 expired-block entries reclaimed in one pass');
+    ok(scalar keys %state < 1000,
+        'table dropped well below capacity, so eviction will not re-run next call');
+    # The actively-blocked entries must survive.
+    ok(exists $state{'10.8.0.1'}, 'actively-blocked entry not evicted');
+}
+
 done_testing();

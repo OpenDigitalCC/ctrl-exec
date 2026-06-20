@@ -76,14 +76,32 @@ sub check {
         return 0;
     }
 
-    # Step 3: Evict one entry if at capacity
+    # Step 3: Reclaim space if at capacity. This runs in the single-threaded
+    # parent accept loop, so it must not be expensive: a full O(n log n) sort of
+    # the table on every connection (the old approach) lets a flood from many
+    # distinct source IPs pin the table and turns the limiter into a CPU
+    # amplifier for the very DoS it guards. Instead do ONE O(n) pass that drops
+    # every entry whose block has already expired (bulk reclaim - the common
+    # case under a probe/volume flood, where blocks expire in waves) and tracks
+    # the earliest-expiring entry as a fallback victim if the pass frees nothing.
     if (scalar keys %$state_ref >= MAX_ENTRIES) {
-        my @sorted = sort {
-            ($state_ref->{$a}{blocked_until} // 0)
-            <=>
-            ($state_ref->{$b}{blocked_until} // 0)
-        } keys %$state_ref;
-        delete $state_ref->{ $sorted[0] };
+        my ($victim, $victim_until);
+        for my $k (keys %$state_ref) {
+            my $bu = $state_ref->{$k}{blocked_until};
+            if (defined $bu && $bu <= $now) {
+                delete $state_ref->{$k};   # block expired - reclaim
+                next;
+            }
+            my $until = $bu // 0;
+            if (!defined $victim || $until < $victim_until) {
+                ($victim, $victim_until) = ($k, $until);
+            }
+        }
+        # If nothing expired (e.g. a flood of distinct never-blocked IPs), evict
+        # the single earliest-expiring entry found in the same pass.
+        if (defined $victim && scalar keys %$state_ref >= MAX_ENTRIES) {
+            delete $state_ref->{$victim};
+        }
         Exec::Log::log_action('WARNING', {
             ACTION => 'rate-evict',
             COUNT  => MAX_ENTRIES,
