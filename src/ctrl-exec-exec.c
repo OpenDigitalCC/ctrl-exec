@@ -586,7 +586,10 @@ static int apply_profile(const profile_t *p, int allow_unpriv) {
         }
         if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) != 0) return -1;
         if (setgroups(0, NULL) != 0) return -1;
-        if (pw) initgroups(p->run_as, gid);
+        /* Set the run_as user's supplementary groups. Fail closed if this fails:
+         * running with no supplementary groups (the setgroups(0) result) instead
+         * of the user's would be a privilege-correctness gap, not a safe default. */
+        if (pw && initgroups(p->run_as, gid) != 0) { perror("initgroups"); return -1; }
         if (setgid(gid) != 0) { perror("setgid"); return -1; }
         if (setuid(uid) != 0) { perror("setuid"); return -1; }
     }
@@ -594,6 +597,7 @@ static int apply_profile(const profile_t *p, int allow_unpriv) {
     /* Set the final cap set, and raise ambient so caps survive exec when the
      * action runs as a non-root run_as. */
     cap_t caps = cap_init();
+    if (!caps) { perror("cap_init"); return -1; }
     if (p->ncaps > 0) {
         cap_value_t cvs[MAX_CAPS]; int nc = 0;
         for (int i = 0; i < p->ncaps && nc < MAX_CAPS; i++)
