@@ -22,6 +22,12 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
   (which reads `cert_staging_path` from config) instead of a hard-coded path, so a
   staging-path override is honoured. Added `cert-promote`/`maintain` failure
   patterns to the LOGGING alert reference.
+- **Fixed** the out-of-the-box auth default: the shipped dispatcher config
+  activates `auth_hook`, but the example hook ended in `exit 1` (deny all), so a
+  fresh install **denied** every `run`/`ping` - the quickstart could not work. The
+  example now defaults to `exit 0` (allow), so ctrl-exec runs out of the box; the
+  exposure is bounded (the API binds 127.0.0.1, agents are mTLS-gated), and the
+  commented examples remain for production rules. README note corrected.
 - **Added** per-profile read-only filesystem enforcement (the `writable` field is
   now enforced, no longer parsed-but-inert): when a profile sets `writable`, the
   executor makes the action's whole filesystem read-only except those paths (a

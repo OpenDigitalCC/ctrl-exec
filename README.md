@@ -159,9 +159,10 @@ newgrp ctrl-exec           # apply the new group to this shell (or re-login)
 > (`setup-*`, `pairing-mode`, `rotate-cert`, `approve`/`deny`) use root-owned
 > keys and require `sudo`.
 
-> **Auth hook (optional).** With no auth hook configured, the dispatcher CLI
-> allows every `run`/`ping` - fine for an isolated trial. To restrict who may
-> run what, configure an auth hook later; see *Auth Hook* in `INSTALL.md`.
+> **Auth hook.** The install ships an auth hook that allows every `run`/`ping`,
+> so this works out of the box - fine for a localhost/isolated trial. To restrict
+> who may run what, edit `/etc/ctrl-exec/auth-hook` with real rules (the file has
+> commented examples); see *Auth Hook* in `INSTALL.md`.
 
 **2. Agent host - configure (do not start the service yet)**
 
