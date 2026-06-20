@@ -61,11 +61,11 @@ use Exec::RateLimit qw();
     my %state;
     my $rl = Exec::Pairing::build_rate_config({ pairing_rate_limit_volume => '3/60/300' });
 
-    Exec::RateLimit::record_connection('10.0.0.1', \%state, $rl) for 1 .. 2;
+    Exec::RateLimit::record_connection('10.0.0.1', \%state) for 1 .. 2;
     is(Exec::RateLimit::check('10.0.0.1', \%state, $rl), 0,
         '2 connections under the limit of 3 are allowed');
 
-    Exec::RateLimit::record_connection('10.0.0.1', \%state, $rl);
+    Exec::RateLimit::record_connection('10.0.0.1', \%state);
     is(Exec::RateLimit::check('10.0.0.1', \%state, $rl), 1,
         '3rd connection reaches the volume limit and is blocked');
 }
@@ -75,7 +75,7 @@ use Exec::RateLimit qw();
     my %state;
     my $rl = Exec::Pairing::build_rate_config({ pairing_rate_limit_volume => '3/60/300' });
 
-    Exec::RateLimit::record_connection('10.0.0.2', \%state, $rl) for 1 .. 3;
+    Exec::RateLimit::record_connection('10.0.0.2', \%state) for 1 .. 3;
     is(Exec::RateLimit::check('10.0.0.2', \%state, $rl), 1, 'first IP blocked at limit');
     is(Exec::RateLimit::check('10.0.0.3', \%state, $rl), 0, 'second IP unaffected');
 }
@@ -88,7 +88,7 @@ use Exec::RateLimit qw();
         pairing_rate_limit_volume  => '1/60/300',
     });
 
-    Exec::RateLimit::record_connection('10.0.0.4', \%state, $rl) for 1 .. 5;
+    Exec::RateLimit::record_connection('10.0.0.4', \%state) for 1 .. 5;
     is(Exec::RateLimit::check('10.0.0.4', \%state, $rl), 0,
         'rate limiting disabled: no block even past the limit');
 }

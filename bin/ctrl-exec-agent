@@ -324,7 +324,7 @@ MSG
                 last;
             }
 
-            Exec::RateLimit::record_failure($peer, \%rate_state, $rate_config);
+            Exec::RateLimit::record_failure($peer, \%rate_state);
             Exec::Log::log_action('WARNING', {
                 ACTION => 'tls-failure',
                 PEER   => $peer,
@@ -351,7 +351,7 @@ MSG
             $conn->close(SSL_no_shutdown => 1);
             next;
         }
-        Exec::RateLimit::record_connection($peer, \%rate_state, $rate_config);
+        Exec::RateLimit::record_connection($peer, \%rate_state);
 
         # Reap ALL finished children before admitting this one, dropping them
         # from the live count (also stops exited handlers accumulating as zombies

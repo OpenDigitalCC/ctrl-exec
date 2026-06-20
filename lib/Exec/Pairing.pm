@@ -177,7 +177,7 @@ sub run_pairing_mode {
                     $conn->close(SSL_no_shutdown => 1);
                     next;
                 }
-                Exec::RateLimit::record_connection($peer_ip, \%rate_state, $rate_config);
+                Exec::RateLimit::record_connection($peer_ip, \%rate_state);
 
                 my $pid = fork();
                 if (!defined $pid) {
@@ -513,18 +513,6 @@ sub _effective_ip {
     }
     return '';
 }
-
-# --- identity diagnostics -------------------------------------------------
-#
-# A paired agent is reached by the name (or IP) it reported at pairing, resolved
-# from the dispatcher. When the agent reports a bare/short hostname - common when
-# the host's FQDN is managed by DHCP and the host itself does not know it - that
-# name may not resolve from this dispatcher, so dispatch fails later with a
-# confusing error. The dispatcher is the right place to discover the truth: it
-# can reverse-resolve the connection's source IP against its own resolver to find
-# the network's canonical name for the host. These helpers gather that signal and
-# turn it into an operator-facing recommendation.
-
 
 # --- interactive pairing helpers ---
 

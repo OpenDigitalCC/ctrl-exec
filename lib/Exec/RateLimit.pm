@@ -126,26 +126,24 @@ sub check {
 }
 
 
-# record_connection($peer_ip, $rate_state_ref, $rate_config) -> void
+# record_connection($peer_ip, $rate_state_ref) -> void
 #
 # Called after check() returns 0, before fork(). Records a post-handshake
-# connection timestamp for volume tracking. $rate_config is accepted for
-# call-site consistency but not used here.
+# connection timestamp for volume tracking.
 sub record_connection {
-    my ($peer, $state_ref, $rate_config) = @_;
+    my ($peer, $state_ref) = @_;
 
     $state_ref->{$peer} //= { connections => [], failures => [] };
     push @{ $state_ref->{$peer}{connections} }, time();
 }
 
 
-# record_failure($peer_ip, $rate_state_ref, $rate_config) -> void
+# record_failure($peer_ip, $rate_state_ref) -> void
 #
 # Called when a TLS handshake failure is detected (item 3 call site). Records
-# a failure timestamp for probe tracking. $rate_config is accepted for
-# call-site consistency but not used here.
+# a failure timestamp for probe tracking.
 sub record_failure {
-    my ($peer, $state_ref, $rate_config) = @_;
+    my ($peer, $state_ref) = @_;
 
     $state_ref->{$peer} //= { connections => [], failures => [] };
     push @{ $state_ref->{$peer}{failures} }, time();
