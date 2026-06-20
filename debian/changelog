@@ -1,3 +1,9 @@
+ctrl-exec (0.12.2) unstable; urgency=medium
+
+  * Release 0.12.2
+
+ -- OpenDigital CC <sjm@opendigital.cc>  Sat, 20 Jun 2026 22:18:56 +0100
+
 ctrl-exec (0.12.1) unstable; urgency=medium
 
   * Release 0.12.1
