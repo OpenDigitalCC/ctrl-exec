@@ -823,13 +823,8 @@ sub _build_ua {
 # Returns false (safe default) if the expiry string cannot be parsed.
 sub _renewal_due {
     my ($expiry_str, $cert_days) = @_;
-    return 0 unless $expiry_str;
-
-    require Time::Piece;
-    my $expiry_epoch = eval {
-        Time::Piece->strptime($expiry_str, '%b %d %H:%M:%S %Y %Z')->epoch;
-    };
-    return 0 unless $expiry_epoch;
+    my $expiry_epoch = Exec::CertInfo::expiry_epoch($expiry_str);
+    return 0 unless defined $expiry_epoch;
 
     my $remaining  = $expiry_epoch - time();
     my $half_life  = ($cert_days / 2) * 86400;

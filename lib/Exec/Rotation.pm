@@ -452,31 +452,15 @@ sub _do_rotation {
 
 sub _read_cert_serial {
     my ($cert_path) = @_;
-    my $out = `openssl x509 -noout -serial -in \Q$cert_path\E 2>/dev/null`;
-    return unless defined $out && $out =~ /serial=([0-9A-Fa-f]+)/;
-    return Exec::CertInfo::serial_to_hex($1);
+    return Exec::CertInfo::serial_from_path($cert_path);
 }
 
 sub _cert_days_remaining {
     my ($cert_path) = @_;
-    my $date_str = Exec::CertInfo::expiry_from_path($cert_path);
-    return unless defined $date_str;
-
-    # Parse openssl date: "Mon DD HH:MM:SS YYYY GMT"
-    my %months = qw(Jan 0 Feb 1 Mar 2 Apr 3 May 4 Jun 5
-                    Jul 6 Aug 7 Sep 8 Oct 9 Nov 10 Dec 11);
-    if ($date_str =~ /(\w+)\s+(\d+)\s+(\d+):(\d+):(\d+)\s+(\d{4})\s+GMT/) {
-        my ($mon, $day, $h, $m, $s, $yr) = ($1, $2, $3, $4, $5, $6);
-        return unless exists $months{$mon};
-        # Use timegm (not mktime) - the cert date is UTC/GMT and mktime
-        # interprets its arguments as local time, producing a wrong result
-        # on hosts not running in UTC.
-        require Time::Local;
-        my $expiry = Time::Local::timegm($s, $m, $h, $day, $months{$mon}, $yr - 1900);
-        my $days   = int(($expiry - time()) / 86400);
-        return $days;
-    }
-    return;
+    my $expiry = Exec::CertInfo::expiry_epoch(
+        Exec::CertInfo::expiry_from_path($cert_path));
+    return unless defined $expiry;
+    return int(($expiry - time()) / 86400);
 }
 
 sub _parse_iso8601 {

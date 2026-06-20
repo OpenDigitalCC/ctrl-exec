@@ -35,6 +35,37 @@ sub expiry_from_pem {
     return expiry_from_path($path);
 }
 
+# Return the cert's serial as canonical lowercase hex (via serial_to_hex), or
+# undef if the file is unreadable or carries no serial. The single reader the
+# dispatcher's approve and rotate paths share - the twin of expiry_from_path,
+# so the openssl shell-quoting and the serial-regex live in one place. A drift
+# between two copies here causes a permanent "serial mismatch" rejection.
+sub serial_from_path {
+    my ($path) = @_;
+    my $out = `openssl x509 -noout -serial -in \Q$path\E 2>/dev/null`;
+    return unless defined $out && $out =~ /serial=([0-9A-Fa-f]+)/;
+    return serial_to_hex($1);
+}
+
+# Parse an openssl notAfter string ("Mon DD HH:MM:SS YYYY GMT", as produced by
+# expiry_from_path) to a Unix epoch (UTC), or undef if it cannot be parsed. The
+# single notAfter->epoch parser: the renewal-due check (Engine) and the
+# days-remaining check (Rotation) previously parsed this string two different
+# ways (Time::Piece strptime vs a manual timegm) that could disagree on the same
+# cert. timegm because the date is UTC; an explicit month map because strptime
+# '%b' is locale-sensitive.
+sub expiry_epoch {
+    my ($date_str) = @_;
+    return unless defined $date_str;
+    my %months = qw(Jan 0 Feb 1 Mar 2 Apr 3 May 4 Jun 5
+                    Jul 6 Aug 7 Sep 8 Oct 9 Nov 10 Dec 11);
+    return unless $date_str =~ /(\w+)\s+(\d+)\s+(\d+):(\d+):(\d+)\s+(\d{4})\s+GMT/;
+    my ($mon, $day, $h, $m, $s, $yr) = ($1, $2, $3, $4, $5, $6);
+    return unless exists $months{$mon};
+    require Time::Local;
+    return Time::Local::timegm($s, $m, $h, $day, $months{$mon}, $yr - 1900);
+}
+
 # Normalise a serial number to lowercase hex.
 # Accepts either a decimal string (from IO::Socket::SSL peer_certificate)
 # or a hex string (from openssl x509 -serial output).
