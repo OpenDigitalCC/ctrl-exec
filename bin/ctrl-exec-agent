@@ -2,6 +2,8 @@
 
 use strict;
 use warnings;
+use feature qw(signatures);
+no warnings qw(experimental::signatures);
 use FindBin qw($Bin);
 use lib "$Bin/../lib";
 
@@ -81,9 +83,7 @@ sub main {
 # delivered while the agent was running is adopted on the next start. Always
 # returns without error: a missing or invalid staged cert must never block the
 # agent from starting on its existing (still-valid) cert.
-sub mode_promote_cert {
-    my ($opts) = @_;
-
+sub mode_promote_cert ($opts) {
     my $config = eval { Exec::Agent::Config::load_config($CONFIG_PATH) };
     unless ($config) {
         warn "promote-cert: could not load config: $@";
@@ -123,8 +123,7 @@ sub mode_promote_cert {
 # cert_staging_path from config so the renew timer's decision honours an override
 # (the timer cannot read the config itself). Used as the guard in
 # ctrl-exec-agent-renew.service before it restarts the agent.
-sub mode_cert_staged {
-    my ($opts) = @_;
+sub mode_cert_staged ($opts) {
     my $config = eval { Exec::Agent::Config::load_config($CONFIG_PATH) };
     exit 1 unless $config;
     my $staged = $config->{cert_staging_path}
@@ -136,8 +135,7 @@ sub mode_cert_staged {
 # The procd init script gates startup on this: unlike systemd's
 # RestartPreventExitStatus=78, procd would otherwise respawn an unpaired agent
 # forever (serve exits 78 with no cert).
-sub mode_paired {
-    my ($opts) = @_;
+sub mode_paired ($opts) {
     my $config = eval { Exec::Agent::Config::load_config($CONFIG_PATH) };
     exit 1 unless $config;
     for my $f ($config->{cert}, $config->{key}, $config->{ca}) {
@@ -146,9 +144,7 @@ sub mode_paired {
     exit 0;
 }
 
-sub mode_serve {
-    my ($opts) = @_;
-
+sub mode_serve ($opts) {
     # Load and validate all configuration up front. A config error (a parse
     # error, an invalid capability, an undefined profile, ...) cannot be fixed by
     # restarting, so we must NOT die with a generic exception and let systemd
@@ -387,9 +383,7 @@ MSG
     }
 }
 
-sub mode_request_pairing {
-    my ($opts) = @_;
-
+sub mode_request_pairing ($opts) {
     my $ctrl_exec_host  = $opts->{dispatcher}
         or die "--dispatcher <host> required for request-pairing\n";
     my $background  = $opts->{background} // 0;
@@ -551,9 +545,7 @@ WARN
     _print_start_instructions();
 }
 
-sub _store_pairing_result {
-    my ($result, $key_pem, $ctrl_exec_host) = @_;
-
+sub _store_pairing_result ($result, $key_pem, $ctrl_exec_host) {
     Exec::Agent::AgentPairing::store_certs(
         cert_pem          => $result->{cert_pem},
         ca_pem            => $result->{ca_pem},
@@ -696,8 +688,8 @@ sub mode_self_ping {
 # The same computation on the ctrl-exec side produces an identical code,
 # allowing the operator to verify the request visually without any
 # out-of-band channel.
-sub _pairing_code {
-    return Exec::Digest::pairing_code($_[0]);
+sub _pairing_code ($csr_pem) {
+    return Exec::Digest::pairing_code($csr_pem);
 }
 
 # Quick TCP reachability probe for the pairing port, run before the slow keygen.
@@ -705,8 +697,7 @@ sub _pairing_code {
 # A successful probe only proves the port is open - it does NOT prove pairing
 # mode is active; the TLS handshake in submit_pairing_request confirms that and
 # reports a distinct "not in pairing mode" error if it fails.
-sub _preflight_dispatcher {
-    my ($host, $port) = @_;
+sub _preflight_dispatcher ($host, $port) {
     require IO::Socket::INET;
     my $probe = IO::Socket::INET->new(
         PeerHost => $host,

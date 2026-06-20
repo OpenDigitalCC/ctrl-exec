@@ -10,6 +10,8 @@ package Exec::Agent::Server;
 
 use strict;
 use warnings;
+use feature                   qw(signatures);
+no warnings                   qw(experimental::signatures);
 use JSON                      qw(encode_json decode_json);
 use Sys::Hostname             qw(hostname);
 
@@ -32,8 +34,7 @@ use Exec::Log                 qw();
 # logs a serial-reject (with the request's reqid, or '(none)' where there is none
 # yet), and returns undef - the caller then returns. The single place run/ping/
 # rotate-serial/result enforce the trusted-serial gate.
-sub _require_dispatcher {
-    my ($conn, $peer, $peer_serial, $trusted, $reqid) = @_;
+sub _require_dispatcher ($conn, $peer, $peer_serial, $trusted, $reqid = undef) {
     my $dispatcher = Exec::Agent::AgentPairing::dispatcher_trusted($peer_serial, $trusted);
     return $dispatcher if defined $dispatcher;
     _send_raw($conn, 403, encode_json({ error => 'serial mismatch', status => 'forbidden' }));
@@ -46,9 +47,7 @@ sub _require_dispatcher {
     return undef;
 }
 
-sub handle_connection {
-    my ($conn, $peer, $allowlist, $config, $revoked, $trusted, $peer_serial, $schemas, $version) = @_;
-
+sub handle_connection ($conn, $peer, $allowlist, $config, $revoked, $trusted, $peer_serial = undef, $schemas = undef, $version = undef) {
     # $peer_serial is extracted before fork() in the accept loop - after the
     # parent closes its copy of $conn the SSL object is invalid in the child.
     $peer_serial //= '';
@@ -136,9 +135,7 @@ sub handle_connection {
 # from the request body: a dispatcher can only add/retire serials under its own
 # identity. This chains trust - each new serial is authorised by the
 # currently-trusted one, back to the original human-approved pairing.
-sub handle_rotate_serial {
-    my ($conn, $body, $peer, $config, $trusted, $peer_serial) = @_;
-
+sub handle_rotate_serial ($conn, $body, $peer, $config, $trusted, $peer_serial) {
     my $dispatcher = _require_dispatcher($conn, $peer, $peer_serial, $trusted);
     return unless defined $dispatcher;
 
@@ -219,9 +216,7 @@ sub handle_rotate_serial {
     });
 }
 
-sub handle_run {
-    my ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial) = @_;
-
+sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial) {
     my $dispatcher = _require_dispatcher($conn, $peer, $peer_serial, $trusted);
     return unless defined $dispatcher;
 
@@ -422,9 +417,7 @@ sub handle_run {
     });
 }
 
-sub handle_ping {
-    my ($conn, $body, $peer, $config, $trusted, $peer_serial, $version) = @_;
-
+sub handle_ping ($conn, $body, $peer, $config, $trusted, $peer_serial, $version) {
     my $dispatcher = _require_dispatcher($conn, $peer, $peer_serial, $trusted);
     return unless defined $dispatcher;
 
@@ -462,9 +455,7 @@ sub handle_ping {
 # the trusted-dispatcher map check: during a dispatcher cert rotation the caller
 # may present a new serial not yet in the map. mTLS with a CA-signed cert still
 # applies (enforced at the TLS layer). See docs/SECURITY.md, Cert Rotation.
-sub handle_renew {
-    my ($conn, $body, $peer, $config) = @_;
-
+sub handle_renew ($conn, $body, $peer, $config) {
     my $data  = eval { decode_json($body) } // {};
     my $reqid = $data->{reqid} // '';
 
@@ -501,9 +492,7 @@ sub handle_renew {
 # server adopts it on that restart. The existing cert stays valid in the meantime
 # (renewal runs well before expiry). Exempt from the trusted-map check; mTLS
 # still applies.
-sub handle_renew_complete {
-    my ($conn, $body, $peer, $config) = @_;
-
+sub handle_renew_complete ($conn, $body, $peer, $config) {
     my $data  = eval { decode_json($body) } // {};
     my $reqid = $data->{reqid} // '';
     my $cert  = $data->{cert};
@@ -537,9 +526,7 @@ sub handle_renew_complete {
     }
 }
 
-sub handle_capabilities {
-    my ($conn, $peer, $allowlist, $config, $trusted, $peer_serial, $schemas, $version) = @_;
-
+sub handle_capabilities ($conn, $peer, $allowlist, $config, $trusted, $peer_serial = undef, $schemas = undef, $version = undef) {
     $peer_serial //= '';
     $trusted     //= {};
     $schemas     //= {};
@@ -638,9 +625,7 @@ sub handle_capabilities {
 #   200 { status => 'running', ... }   job still detached
 #   200 { status => 'done', exit, stdout, stderr, ... }
 #   404 { status => 'unknown' }        no record (never ran here, or TTL-purged)
-sub handle_result {
-    my ($conn, $reqid, $peer, $config, $trusted, $peer_serial) = @_;
-
+sub handle_result ($conn, $reqid, $peer, $config, $trusted, $peer_serial) {
     my $dispatcher = _require_dispatcher($conn, $peer, $peer_serial, $trusted, $reqid);
     return unless defined $dispatcher;
 
@@ -685,8 +670,7 @@ sub handle_result {
 
 # Resolve the agent-side async run store directory from config, with the
 # packaged default.
-sub _async_runs_dir {
-    my ($config) = @_;
+sub _async_runs_dir ($config) {
     return $config->{async_runs_dir} // '/var/lib/ctrl-exec-agent/runs';
 }
 
@@ -695,8 +679,7 @@ sub _async_runs_dir {
 # IO::Socket::SSL's peer_certificate('serialNumber') is not supported in
 # all versions - use Net::SSLeay directly to read the ASN1 integer.
 # Returns '' if no peer cert or serial cannot be read.
-sub _peer_serial {
-    my ($conn) = @_;
+sub _peer_serial ($conn) {
     my $ssl  = eval { $conn->_get_ssl_object } or return '';
     my $cert = eval { Net::SSLeay::get_peer_certificate($ssl) } or return '';
     my $asn1 = eval { Net::SSLeay::X509_get_serialNumber($cert) } or return '';
@@ -704,13 +687,11 @@ sub _peer_serial {
     return lc $hex;
 }
 
-sub _send_json {
-    my ($conn, $data) = @_;
+sub _send_json ($conn, $data) {
     _send_raw($conn, 200, encode_json($data));
 }
 
-sub _send_raw {
-    my ($conn, $code, $body) = @_;
+sub _send_raw ($conn, $code, $body) {
     Exec::Http::send_raw($conn, $code, $body);
 }
 

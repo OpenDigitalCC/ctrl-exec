@@ -6,6 +6,8 @@ package Exec::Random;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use Carp     qw(croak);
 use Exporter qw(import);
 
@@ -15,8 +17,7 @@ our @EXPORT_OK = qw(hex_bytes);
 # returns a short read - fail closed rather than hand back a shorter, weaker
 # token. There is deliberately no rand() fallback: these bytes guard reqids and
 # nonces against guessing/replay, and Perl's rand() is not cryptographic.
-sub hex_bytes {
-    my ($n) = @_;
+sub hex_bytes ($n) {
     open my $fh, '<:raw', '/dev/urandom'
         or croak "Cannot open /dev/urandom: $!";
     my $buf;

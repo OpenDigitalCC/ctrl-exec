@@ -8,6 +8,8 @@ package Exec::Digest;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use File::Temp qw(tempfile);
 use Exporter   qw(import);
 
@@ -15,8 +17,7 @@ our @EXPORT_OK = qw(pairing_code sha256_hex);
 
 # 6-digit pairing confirmation code from a CSR PEM: sha256 of the CSR, first 4
 # bytes as a uint32 modulo 1,000,000. Dies if openssl fails.
-sub pairing_code {
-    my ($csr_pem) = @_;
+sub pairing_code ($csr_pem) {
     my ($fh, $path) = tempfile(UNLINK => 1);
     print $fh $csr_pem;
     close $fh;
@@ -26,8 +27,7 @@ sub pairing_code {
 }
 
 # Hex SHA-256 of a string, or undef on failure.
-sub sha256_hex {
-    my ($data) = @_;
+sub sha256_hex ($data) {
     my ($fh, $path) = tempfile(UNLINK => 1);
     binmode $fh;
     print {$fh} $data;

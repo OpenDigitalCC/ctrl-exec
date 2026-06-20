@@ -10,6 +10,8 @@ package Exec::CertInfo;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use File::Temp qw(tempfile);
 use Exporter   qw(import);
 
@@ -17,8 +19,7 @@ our @EXPORT_OK = qw(expiry_from_path expiry_from_pem);
 
 # Return the cert's notAfter date string (openssl form, e.g. "Jun  7 16:28:00
 # 2028 GMT"), or undef if the file is unreadable / not a cert.
-sub expiry_from_path {
-    my ($path) = @_;
+sub expiry_from_path ($path) {
     my $out = `openssl x509 -noout -enddate -in \Q$path\E 2>/dev/null`;
     return unless defined $out && $out =~ /notAfter=(.+)/;
     (my $date = $1) =~ s/\s+\z//;
@@ -27,8 +28,7 @@ sub expiry_from_path {
 
 # As expiry_from_path, but for a cert held in a PEM string (written to a private
 # temp file first).
-sub expiry_from_pem {
-    my ($pem) = @_;
+sub expiry_from_pem ($pem) {
     my ($fh, $path) = tempfile(SUFFIX => '.crt', UNLINK => 1);
     print $fh $pem;
     close $fh;
@@ -40,8 +40,7 @@ sub expiry_from_pem {
 # dispatcher's approve and rotate paths share - the twin of expiry_from_path,
 # so the openssl shell-quoting and the serial-regex live in one place. A drift
 # between two copies here causes a permanent "serial mismatch" rejection.
-sub serial_from_path {
-    my ($path) = @_;
+sub serial_from_path ($path) {
     my $out = `openssl x509 -noout -serial -in \Q$path\E 2>/dev/null`;
     return unless defined $out && $out =~ /serial=([0-9A-Fa-f]+)/;
     return serial_to_hex($1);
@@ -54,8 +53,7 @@ sub serial_from_path {
 # ways (Time::Piece strptime vs a manual timegm) that could disagree on the same
 # cert. timegm because the date is UTC; an explicit month map because strptime
 # '%b' is locale-sensitive.
-sub expiry_epoch {
-    my ($date_str) = @_;
+sub expiry_epoch ($date_str = undef) {
     return unless defined $date_str;
     my %months = qw(Jan 0 Feb 1 Mar 2 Apr 3 May 4 Jun 5
                     Jul 6 Aug 7 Sep 8 Oct 9 Nov 10 Dec 11);
@@ -70,8 +68,7 @@ sub expiry_epoch {
 # Accepts either a decimal string (from IO::Socket::SSL peer_certificate)
 # or a hex string (from openssl x509 -serial output).
 # Hex strings are identified by non-decimal characters or a leading 0x.
-sub serial_to_hex {
-    my ($serial) = @_;
+sub serial_to_hex ($serial) {
     return '' unless defined $serial && length $serial;
     $serial =~ s/^0x//i;
     $serial =~ s/^serial=//i;

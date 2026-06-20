@@ -9,6 +9,8 @@ package Exec::Http;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use JSON qw(encode_json);
 
 my %PHRASE = (
@@ -25,8 +27,7 @@ my %PHRASE = (
 );
 
 # Write a raw (already-serialised) JSON body as an HTTP/1.0 response.
-sub send_raw {
-    my ($conn, $code, $body) = @_;
+sub send_raw ($conn, $code, $body) {
     my $phrase = $PHRASE{$code} // 'Unknown';
     print $conn
         "HTTP/1.0 $code $phrase\r\n",
@@ -37,8 +38,7 @@ sub send_raw {
 }
 
 # Encode $data as JSON and write it as an HTTP/1.0 response.
-sub send_json {
-    my ($conn, $code, $data) = @_;
+sub send_json ($conn, $code, $data) {
     send_raw($conn, $code, encode_json($data));
 }
 

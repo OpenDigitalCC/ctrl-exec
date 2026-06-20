@@ -2,6 +2,8 @@ package Exec::Auth;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use JSON  qw(encode_json);
 use Carp  qw(croak);
 use POSIX qw(strftime);
@@ -46,9 +48,7 @@ my %CODE_REASON = (
 # Returns:
 #   { ok => 1 }
 #   { ok => 0, reason => $str, code => $n }
-sub check {
-    my (%opts) = @_;
-
+sub check (%opts) {
     my $action    = $opts{action}    or croak "action required";
     my $config    = $opts{config}    or croak "config required";
     my $script    = $opts{script}    // '';
@@ -173,8 +173,7 @@ sub check {
 # auth_deny_generic is on, denial responses to callers omit the specific reason
 # and code, reducing information disclosure to unauthorised callers. The full
 # reason is still logged server-side by check(). Default off.
-sub generic_denials_enabled {
-    my ($config) = @_;
+sub generic_denials_enabled ($config) {
     my $v = $config->{auth_deny_generic} // '';
     return ($v =~ /^\s*[1y]/i) ? 1 : 0;
 }
@@ -183,8 +182,7 @@ sub generic_denials_enabled {
 # With auth_deny_generic off (default): the specific reason and code. With it
 # on: a generic message only. Returns a hashref (no 'ok' key - the caller adds
 # it with its own JSON false value).
-sub deny_fields {
-    my ($auth, $config) = @_;
+sub deny_fields ($auth, $config) {
     return { error => 'forbidden' } if generic_denials_enabled($config);
     return { error => $auth->{reason}, code => $auth->{code} };
 }
@@ -192,8 +190,7 @@ sub deny_fields {
 # --- private ---
 
 # Build the context hashref passed to the hook as env vars and JSON stdin
-sub _build_context {
-    my (%opts) = @_;
+sub _build_context (%opts) {
     return {
         action            => $opts{action},
         script            => $opts{script},
@@ -213,8 +210,7 @@ sub _build_context {
 # Run the hook, passing context as env vars and JSON on stdin.
 # Returns the hook's exit code.
 # On exec failure returns AUTH_DENIED.
-sub _run_hook {
-    my ($hook, $context, $timeout) = @_;
+sub _run_hook ($hook, $context, $timeout = undef) {
     $timeout //= 10;
 
     my $json_in = encode_json($context);

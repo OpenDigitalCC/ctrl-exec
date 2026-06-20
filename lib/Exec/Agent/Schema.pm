@@ -2,6 +2,8 @@ package Exec::Agent::Schema;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use JSON       qw(decode_json);
 use Carp       qw();
 
@@ -29,8 +31,7 @@ my $VERSION_RE        = qr/^[A-Za-z0-9._-]{1,64}\z/;
 #
 # A script with no sidecar, or an unreadable/oversize/invalid one, is simply
 # absent from the result (and logged) - it remains callable, just untyped.
-sub load_for_allowlist {
-    my ($allowlist) = @_;
+sub load_for_allowlist ($allowlist) {
     my %out;
 
     for my $name (sort keys %$allowlist) {
@@ -63,9 +64,7 @@ sub load_for_allowlist {
 #      "sha256:" prefix is used verbatim;
 #   2. otherwise "sha256:" + first 12 hex of the SHA-256 of the canonical JSON
 #      (sorted keys) so cosmetic reformatting does not churn the identity.
-sub _derive_version {
-    my ($body, $name) = @_;
-
+sub _derive_version ($body, $name) {
     my $v = $body->{version};
     if (defined $v && !ref $v) {
         return $v if $v =~ $VERSION_RE && $v !~ /^sha256:/;
@@ -85,9 +84,7 @@ sub _derive_version {
 
 # Returns ($body_hashref, undef) on success, or (undef, $reason) on any reason
 # the sidecar must be treated as absent.
-sub _read_sidecar {
-    my ($sidecar) = @_;
-
+sub _read_sidecar ($sidecar) {
     my $size = -s $sidecar;
     return (undef, "oversize: $size > $MAX_SIDECAR_BYTES bytes")
         if defined $size && $size > $MAX_SIDECAR_BYTES;
@@ -107,8 +104,8 @@ sub _read_sidecar {
 # SHA-256 of $data as lowercase hex, via openssl - matching the agent's
 # existing dependency-light approach (no Digest::SHA on minimal installs).
 # Returns undef if the digest cannot be computed.
-sub _sha256_hex {
-    return Exec::Digest::sha256_hex($_[0]);
+sub _sha256_hex ($data) {
+    return Exec::Digest::sha256_hex($data);
 }
 
 1;

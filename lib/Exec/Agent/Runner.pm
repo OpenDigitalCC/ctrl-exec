@@ -2,6 +2,8 @@ package Exec::Agent::Runner;
 
 use strict;
 use warnings;
+use feature qw(signatures);
+no warnings qw(experimental::signatures);
 use JSON   qw(encode_json);
 use POSIX  qw(WIFEXITED WEXITSTATUS EINTR EAGAIN);
 use Fcntl  qw(F_GETFL F_SETFL O_NONBLOCK);
@@ -23,8 +25,7 @@ use Exec::Log qw();   # _write_stdin logs a stdin-timeout; load it directly rath
 #   exit  0+    script exit code
 #   exit  126   killed by signal or exec failed
 #   exit  -1    fork or pipe failure (error in stderr)
-sub run_script {
-    my ($script_path, $args, $context, $timeout) = @_;
+sub run_script ($script_path, $args = undef, $context = undef, $timeout = undef) {
     $args    //= [];
     $timeout //= 10;
 
@@ -89,8 +90,7 @@ sub run_script {
 # does not read stdin. On timeout or unrecoverable error, closes the write
 # end and returns — the script receives EOF and may exit normally or with
 # a JSON parse error. Either is preferable to the agent child hanging.
-sub _write_stdin {
-    my ($fh, $data, $timeout) = @_;
+sub _write_stdin ($fh, $data, $timeout = undef) {
     $timeout //= 10;
 
     my $flags = fcntl($fh, F_GETFL, 0) or return;
@@ -124,15 +124,13 @@ sub _write_stdin {
     }
 }
 
-sub _slurp_utf8 {
-    my ($fh) = @_;
+sub _slurp_utf8 ($fh) {
     binmode $fh, ':utf8';
     local $/;
     return scalar <$fh> // '';
 }
 
-sub _error {
-    my ($msg) = @_;
+sub _error ($msg) {
     return { stdout => '', stderr => $msg, exit => -1 };
 }
 

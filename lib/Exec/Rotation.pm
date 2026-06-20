@@ -2,6 +2,8 @@ package Exec::Rotation;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use JSON        qw(encode_json decode_json);
 use POSIX       qw(strftime);
 use Carp        qw(croak);
@@ -35,8 +37,7 @@ my $DEFAULT_CHECK_INTERVAL  = 14400; # seconds between internal expiry checks (4
 #   { rotated => 0 }                         - no action needed
 #   { rotated => 1, serial => $hex, ... }    - rotation performed
 #   { rotated => 0, error => $str }          - check failed non-fatally
-sub check_and_rotate {
-    my (%opts) = @_;
+sub check_and_rotate (%opts) {
     my $config = $opts{config} or croak "config required";
 
     my $renewal_days = $config->{cert_renewal_days} // $DEFAULT_RENEWAL_DAYS;
@@ -79,15 +80,13 @@ sub check_and_rotate {
 #
 # Required opts:
 #   config => \%config
-sub rotate {
-    my (%opts) = @_;
+sub rotate (%opts) {
     my $config = $opts{config} or croak "config required";
     return _do_rotation(config => $config);
 }
 
 # Return the current rotation state, or undef if no rotation has occurred.
-sub load_state {
-    my (%opts) = @_;
+sub load_state (%opts) {
     my $path = $opts{path} // $ROTATION_FILE;
     return undef unless -f $path;
     my $data = eval { decode_json(slurp($path)) };
@@ -105,8 +104,7 @@ sub load_state {
 
 # Mark any pending agents whose overlap window has expired as stale.
 # Called on startup and after each broadcast attempt.
-sub expire_stale_agents {
-    my (%opts) = @_;
+sub expire_stale_agents (%opts) {
     my $config = $opts{config} or croak "config required";
 
     my $state = load_state(path => $config->{rotation_file});
@@ -141,8 +139,7 @@ sub expire_stale_agents {
 #   config => \%config
 #
 # Returns arrayref of { hostname, status => 'ok'|'failed', error? }
-sub broadcast_serial {
-    my (%opts) = @_;
+sub broadcast_serial (%opts) {
     my $config = $opts{config} or croak "config required";
 
     my $state = load_state(path => $config->{rotation_file});
@@ -241,8 +238,7 @@ sub broadcast_serial {
 #
 # Required opts:
 #   config => \%config
-sub retire_previous_serial {
-    my (%opts) = @_;
+sub retire_previous_serial (%opts) {
     my $config = $opts{config} or croak "config required";
 
     my $state = load_state(path => $config->{rotation_file});
@@ -293,8 +289,7 @@ sub retire_previous_serial {
 #
 # Required opts:
 #   config => \%config
-sub run_check_loop {
-    my (%opts) = @_;
+sub run_check_loop (%opts) {
     my $config   = $opts{config} or croak "config required";
     my $interval = $config->{cert_check_interval} // $DEFAULT_CHECK_INTERVAL;
 
@@ -349,8 +344,7 @@ sub run_check_loop {
 
 # --- private ---
 
-sub _do_rotation {
-    my (%opts) = @_;
+sub _do_rotation (%opts) {
     my $config      = $opts{config};
     my $ca_dir      = $config->{ca_dir}         // $CA_DIR;
     my $cert_days   = $config->{cert_days}       // $DEFAULT_CERT_DAYS;
@@ -455,21 +449,18 @@ sub _do_rotation {
     };
 }
 
-sub _read_cert_serial {
-    my ($cert_path) = @_;
+sub _read_cert_serial ($cert_path) {
     return Exec::CertInfo::serial_from_path($cert_path);
 }
 
-sub _cert_days_remaining {
-    my ($cert_path) = @_;
+sub _cert_days_remaining ($cert_path) {
     my $expiry = Exec::CertInfo::expiry_epoch(
         Exec::CertInfo::expiry_from_path($cert_path));
     return unless defined $expiry;
     return int(($expiry - time()) / 86400);
 }
 
-sub _parse_iso8601 {
-    my ($str) = @_;
+sub _parse_iso8601 ($str) {
     return unless defined $str;
     if ($str =~ /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/) {
         require Time::Local;
@@ -478,12 +469,11 @@ sub _parse_iso8601 {
     return;
 }
 
-sub _now_iso8601 {
+sub _now_iso8601 () {
     return strftime('%Y-%m-%dT%H:%M:%SZ', gmtime);
 }
 
-sub _write_atomic {
-    my ($path, $content) = @_;
+sub _write_atomic ($path, $content) {
     return Exec::FileUtil::write_atomic($path, $content, mode => 0640);
 }
 

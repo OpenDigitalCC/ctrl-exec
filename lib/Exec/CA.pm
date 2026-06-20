@@ -2,6 +2,8 @@ package Exec::CA;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use File::Temp  qw(tempfile tempdir);
 use File::Path  qw(make_path);
 use Carp        qw(croak);
@@ -16,8 +18,7 @@ my $SERIAL   = "$CA_DIR/ca.serial";
 
 # One-time CA setup - generates ca.key and ca.crt
 # Dies if CA already exists unless force => 1
-sub generate_ca {
-    my (%opts) = @_;
+sub generate_ca (%opts) {
     my $days  = $opts{days}  // 3650;
     my $bits  = $opts{bits}  // 4096;
     my $cn    = $opts{cn}    // 'ctrl-exec CA';
@@ -57,8 +58,7 @@ sub generate_ca {
 # Generate the ctrl-exec's own key and cert, signed by the CA.
 # Safe to call after setup-ca. Dies if dispatcher cert already exists
 # unless force => 1.
-sub generate_dispatcher_cert {
-    my (%opts) = @_;
+sub generate_dispatcher_cert (%opts) {
     my $days   = $opts{days}   // 825;
     my $bits   = $opts{bits}   // 4096;
     my $ca_dir = $opts{ca_dir} // $CA_DIR;
@@ -128,8 +128,7 @@ sub generate_dispatcher_cert {
 
 
 # Writes cert to $out_path if provided, else returns PEM string only
-sub sign_csr {
-    my (%opts) = @_;
+sub sign_csr (%opts) {
     my $csr_pem  = $opts{csr_pem}  or croak "csr_pem required";
     my $days     = $opts{days}     // 825;
     my $ca_dir   = $opts{ca_dir}   // $CA_DIR;
@@ -196,8 +195,7 @@ sub sign_csr {
 }
 
 # Read CA cert PEM - for distribution to agents during pairing
-sub read_ca_cert {
-    my (%opts) = @_;
+sub read_ca_cert (%opts) {
     my $ca_dir = $opts{ca_dir} // $CA_DIR;
     return slurp("$ca_dir/ca.crt");
 }
@@ -208,8 +206,7 @@ sub read_ca_cert {
 # momentarily group/world-readable in the (shared, 0750) CA directory between
 # openssl creating the -out file and the chmod. openssl honours the process
 # umask when it creates the output file; 0077 forces 0600 at creation time.
-sub _genrsa {
-    my ($path, $bits) = @_;
+sub _genrsa ($path, $bits) {
     my $old_umask = umask 0077;
     my $ok = eval { _run_or_die('openssl', 'genrsa', '-out', $path, $bits); 1 };
     umask $old_umask;
@@ -219,8 +216,7 @@ sub _genrsa {
 
 # Validate a CSR (at $csr_path) before signing. Dies (croaks) on any failure,
 # which the caller surfaces as a signing refusal.
-sub _validate_csr {
-    my ($csr_path, $expected_cn) = @_;
+sub _validate_csr ($csr_path, $expected_cn = undef) {
 
     # Self-consistency: the CSR signature must verify against its own public
     # key, proving the requester holds the corresponding private key. A bad
@@ -252,8 +248,7 @@ sub _validate_csr {
 
 # Like _run_or_die, but captures and returns the command's stdout. stderr is
 # left on the inherited fd 2. Used to inspect a CSR with `openssl req -text`.
-sub _run_or_capture {
-    my @cmd = @_;
+sub _run_or_capture (@cmd) {
 
     my ($out_fh, $out_path) = tempfile(UNLINK => 1);
     my $out_fileno = fileno($out_fh);
@@ -274,17 +269,15 @@ sub _run_or_capture {
     return slurp($out_path);
 }
 
-sub _run_or_die {
-    return Exec::Cmd::run_or_die(@_);
+sub _run_or_die (@args) {
+    return Exec::Cmd::run_or_die(@args);
 }
 
-sub _write_file {
-    my ($path, $content, $mode) = @_;
+sub _write_file ($path, $content, $mode) {
     return Exec::FileUtil::write_atomic($path, $content, mode => $mode);
 }
 
-sub _write_serial {
-    my ($path, $value) = @_;
+sub _write_serial ($path, $value) {
     _write_file($path, $value, 0600);
 }
 

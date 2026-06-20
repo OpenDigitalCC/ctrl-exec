@@ -2,6 +2,8 @@ package Exec::Registry;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use JSON      qw(encode_json decode_json);
 use File::Path qw(make_path);
 use Fcntl     qw(:flock);
@@ -35,8 +37,7 @@ my $DEFAULT_PORT = 7443;
 #   port      => $int   the agent's operational port. Default 7443. Used by
 #       resolve_target so non-default-port agents are reachable without a
 #       per-command --port. Out-of-range values normalise to 7443.
-sub register_agent {
-    my (%opts) = @_;
+sub register_agent (%opts) {
     my $hostname = $opts{hostname} or croak "hostname required";
     valid_agent_name($hostname)
         or croak "invalid hostname '$hostname' - refusing to use as a registry key";
@@ -80,8 +81,7 @@ sub register_agent {
 # would lose one change. A single registry-wide lock is enough: registry writes
 # (rotation broadcast, renewal expiry, discovery tags) are infrequent, not hot.
 # Best-effort: if the lock file cannot be opened the update proceeds unlocked.
-sub _locked {
-    my ($dir, $code) = @_;
+sub _locked ($dir, $code) {
     open my $lk, '>>', "$dir/.registry.lock" or return $code->();
     flock $lk, LOCK_EX;
     my @r = eval { $code->() };
@@ -95,8 +95,7 @@ sub _locked {
 # Apply one serial-status update (read-modify-write of a single record). NOT
 # locked - the caller holds the registry lock. $u is a hashref:
 #   { hostname, status, serial?, serial_broadcast?, serial_confirmed? }
-sub _apply_serial_update {
-    my ($dir, $u) = @_;
+sub _apply_serial_update ($dir, $u) {
     my $hostname = $u->{hostname};
     my $path     = "$dir/$hostname.json";
 
@@ -113,8 +112,7 @@ sub _apply_serial_update {
     write_atomic($path, encode_json($record));
 }
 
-sub update_agent_serial_status {
-    my (%opts) = @_;
+sub update_agent_serial_status (%opts) {
     my $hostname = $opts{hostname} or croak "hostname required";
     my $status   = $opts{status}   or croak "status required";
     my $dir      = $opts{registry_dir} // $REGISTRY_DIR;
@@ -129,8 +127,7 @@ sub update_agent_serial_status {
 # mutex that stalls concurrent dispatch resolves. Each update is the same
 # hashref _apply_serial_update takes. Returns the count applied. No-op for an
 # empty list (so it does not even open the lock).
-sub update_serials_bulk {
-    my ($updates, %opts) = @_;
+sub update_serials_bulk ($updates, %opts) {
     my $dir = $opts{registry_dir} // $REGISTRY_DIR;
     return 0 unless $updates && @$updates;
 
@@ -153,8 +150,7 @@ sub update_serials_bulk {
 # Required opts:
 #   hostname => $str
 #   expiry   => $str    (openssl notAfter string)
-sub update_expiry {
-    my (%opts) = @_;
+sub update_expiry (%opts) {
     my $hostname = $opts{hostname} or croak "hostname required";
     croak "expiry required" unless defined $opts{expiry};
     my $dir      = $opts{registry_dir} // $REGISTRY_DIR;
@@ -180,8 +176,7 @@ sub update_expiry {
 # Required opts:
 #   hostname => $str
 #   tags     => \%hash   (non-hash normalises to {})
-sub update_agent_tags {
-    my (%opts) = @_;
+sub update_agent_tags (%opts) {
     my $hostname = $opts{hostname} or croak "hostname required";
     my $dir      = $opts{registry_dir} // $REGISTRY_DIR;
     my $path     = "$dir/$hostname.json";
@@ -200,8 +195,7 @@ sub update_agent_tags {
 #
 # Optional opts:
 #   registry_dir => $path
-sub list_agents {
-    my (%opts) = @_;
+sub list_agents (%opts) {
     my $dir = $opts{registry_dir} // $REGISTRY_DIR;
 
     return [] unless -d $dir;
@@ -227,8 +221,7 @@ sub list_agents {
 #
 # Required opts:
 #   hostname => $str
-sub resolve_target {
-    my (%opts) = @_;
+sub resolve_target (%opts) {
     my $name = $opts{hostname};
     croak "hostname required" unless defined $name && length $name;
     my $dir  = $opts{registry_dir} // $REGISTRY_DIR;
@@ -252,8 +245,7 @@ sub resolve_target {
 #   resolve_dispatch(\@refs)
 #     -> { ok => 1, hosts => [ { name => <registry name>, target => <addr[:port]> }, ... ] }
 #     -> { ok => 0, unknown => [ <ref>, ... ] }     one or more not registered
-sub resolve_dispatch {
-    my ($refs, %opts) = @_;
+sub resolve_dispatch ($refs, %opts) {
     my $dir = $opts{registry_dir} // $REGISTRY_DIR;
     my (@hosts, @unknown);
     for my $ref (@$refs) {
@@ -275,8 +267,7 @@ sub resolve_dispatch {
 #
 # Required opts:
 #   hostname => $str
-sub get_agent {
-    my (%opts) = @_;
+sub get_agent (%opts) {
     my $hostname = $opts{hostname} or croak "hostname required";
     my $dir      = $opts{registry_dir} // $REGISTRY_DIR;
     my $path     = "$dir/$hostname.json";
@@ -294,8 +285,7 @@ sub get_agent {
 #
 # Note: the agent's certificate remains valid until its natural expiry.
 # The cert is not revoked - the agent should be decommissioned promptly.
-sub remove_agent {
-    my (%opts) = @_;
+sub remove_agent (%opts) {
     my $hostname = $opts{hostname} or croak "hostname required";
     my $dir      = $opts{registry_dir} // $REGISTRY_DIR;
     my $path     = "$dir/$hostname.json";
@@ -322,8 +312,7 @@ sub remove_agent {
 #   ip        => $str       new address
 #   port      => $int       new operational port (normalised)
 #   lookup_by => $str       'ip' | 'hostname' (normalised)
-sub edit_agent {
-    my (%opts) = @_;
+sub edit_agent (%opts) {
     my $hostname = $opts{hostname} or croak "hostname required";
     my $dir      = $opts{registry_dir} // $REGISTRY_DIR;
     my $path     = "$dir/$hostname.json";
@@ -357,8 +346,7 @@ sub edit_agent {
 # Parse a --tags filter string into a hashref of wanted tag key => value.
 # Accepts "key=value" or comma-separated "k1=v1,k2=v2"; all pairs must match
 # (AND). Dies on a malformed entry (no '=' or empty key) or an empty filter.
-sub parse_tag_filter {
-    my ($spec) = @_;
+sub parse_tag_filter ($spec) {
     my %want;
     for my $pair (split /,/, ($spec // '')) {
         next unless length $pair;
@@ -373,8 +361,7 @@ sub parse_tag_filter {
 
 # True if an agent's cached tags satisfy the filter: every wanted key is
 # present with the exact value.
-sub tags_match {
-    my ($tags, $want) = @_;
+sub tags_match ($tags, $want) {
     $tags //= {};
     for my $k (keys %$want) {
         return 0 unless defined $tags->{$k} && $tags->{$k} eq $want->{$k};
@@ -393,8 +380,7 @@ sub tags_match {
 # this path. (A registry-wide index/pagination for list_agents is deferred: the
 # API server forks per request, so an in-process cache would not survive across
 # requests, and an on-disk index adds a consistency burden.)
-sub list_hostnames {
-    my (%opts) = @_;
+sub list_hostnames (%opts) {
     my $dir = $opts{registry_dir} // $REGISTRY_DIR;
     return [] unless -d $dir;
 
@@ -411,8 +397,7 @@ sub list_hostnames {
 # --- private ---
 
 # Normalise a lookup_by value to 'ip' or the default 'hostname'.
-sub _norm_lookup_by {
-    my ($v) = @_;
+sub _norm_lookup_by ($v) {
     return (defined $v && $v eq 'ip') ? 'ip' : 'hostname';
 }
 
@@ -421,21 +406,18 @@ sub _norm_lookup_by {
 # digits, dot, hyphen, underscore - which excludes '/' and a leading '.', so
 # it cannot escape the registry directory. Public so the pairing path can
 # reject a hostile agent-supplied hostname before it becomes a filename.
-sub valid_agent_name {
-    my ($name) = @_;
+sub valid_agent_name ($name) {
     return defined $name && $name =~ /^[A-Za-z0-9][A-Za-z0-9._-]*\z/;
 }
 
 # Normalise a port to an integer in 1..65535, or the default 7443.
-sub _norm_port {
-    my ($v) = @_;
+sub _norm_port ($v) {
     return (defined $v && $v =~ /^\d+$/ && $v >= 1 && $v <= 65535)
         ? int($v) : $DEFAULT_PORT;
 }
 
 # Connect address from a record, honouring lookup_by (see resolve_target).
-sub _record_address {
-    my ($record, $fallback) = @_;
+sub _record_address ($record, $fallback) {
     if (_norm_lookup_by($record->{lookup_by}) eq 'ip'
         && defined $record->{ip} && length $record->{ip}) {
         return $record->{ip};

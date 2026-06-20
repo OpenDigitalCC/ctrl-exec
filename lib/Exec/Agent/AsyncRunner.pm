@@ -2,6 +2,8 @@ package Exec::Agent::AsyncRunner;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use JSON       qw(encode_json decode_json);
 use File::Path qw(make_path);
 use File::Temp qw(tempfile);
@@ -58,8 +60,7 @@ my $DEFAULT_TTL      = 86400;   # seconds; results older than this are purged
 #   { ok => 1 }                       job spawned and recorded 'running'
 #   { ok => 0, reason => 'busy' }     same script already running (no record written)
 #   { ok => 0, reason => 'error' }    fork failed; could not spawn
-sub submit {
-    my (%opts) = @_;
+sub submit (%opts) {
     my $reqid       = $opts{reqid}       or croak "reqid required";
     my $script_path = $opts{script_path} or croak "script_path required";
     croak "invalid reqid '$reqid'" unless $reqid =~ /^[A-Za-z0-9_-]+\z/;
@@ -136,8 +137,7 @@ sub submit {
 # dispatcher's reqid is simply not present in this owner's namespace - rather
 # than a field check after the fact. An empty/omitted $owner reads the flat
 # layout (legacy / no-dispatcher callers).
-sub result {
-    my ($reqid, $runs_dir, $owner) = @_;
+sub result ($reqid, $runs_dir = undef, $owner = undef) {
     $runs_dir //= $DEFAULT_RUNS_DIR;
     my $file = _record_path($runs_dir, $owner, $reqid);
     return undef unless -f $file;
@@ -150,8 +150,7 @@ sub result {
 # 0) is owned by nobody and matches no dispatcher. Records are never written
 # without an owner under the multi-dispatcher model, so this only rejects
 # malformed or pre-upgrade records.
-sub owned_by {
-    my ($record, $id) = @_;
+sub owned_by ($record, $id) {
     return 0 unless ref $record eq 'HASH';
     my $owner = $record->{owner};
     return 0 unless defined $owner && length $owner;
@@ -163,8 +162,7 @@ sub owned_by {
 # removed. Safe to call when the dir does not exist. Records live either flat in
 # $runs_dir (legacy / no-owner) or one level down in a per-owner subdirectory;
 # both are swept. The .locks dir is skipped.
-sub purge_expired {
-    my ($runs_dir, $ttl) = @_;
+sub purge_expired ($runs_dir = undef, $ttl = undef) {
     $runs_dir //= $DEFAULT_RUNS_DIR;
     $ttl      //= $DEFAULT_TTL;
     return 0 unless -d $runs_dir;
@@ -202,8 +200,7 @@ sub purge_expired {
 # is already held by another running job. The lock files live in a sibling
 # `.locks` dir under the run store; the flock is released when the last fd
 # referring to it closes (i.e. when the detached grandchild exits).
-sub _acquire_script_lock {
-    my ($runs_dir, $script) = @_;
+sub _acquire_script_lock ($runs_dir, $script) {
     my $lock_dir = "$runs_dir/.locks";
     make_path($lock_dir) unless -d $lock_dir;
     (my $safe = $script) =~ s/[^\w.\-]/_/g;
@@ -218,9 +215,7 @@ sub _acquire_script_lock {
 
 # Run $worker in a detached grandchild (double-fork + setsid) so it survives
 # this process and the connection that triggered it. Returns 1 on spawn.
-sub _spawn_detached {
-    my ($worker) = @_;
-
+sub _spawn_detached ($worker) {
     my $pid = fork();
     return 0 unless defined $pid;
     if ($pid) {
@@ -252,15 +247,13 @@ sub _now {
 # Path to a run record, partitioned by owner: "$runs_dir/$owner/$reqid.json"
 # when an owner is given, else flat "$runs_dir/$reqid.json". The owner is
 # validated to a safe token at submit time, so it cannot escape $runs_dir.
-sub _record_path {
-    my ($runs_dir, $owner, $reqid) = @_;
+sub _record_path ($runs_dir, $owner, $reqid) {
     return (defined $owner && length $owner)
         ? "$runs_dir/$owner/$reqid.json"
         : "$runs_dir/$reqid.json";
 }
 
-sub _write_record {
-    my ($runs_dir, $owner, $reqid, $record) = @_;
+sub _write_record ($runs_dir, $owner, $reqid, $record) {
     my $path = _record_path($runs_dir, $owner, $reqid);
     my $dir  = dirname($path);
     make_path($dir) unless -d $dir;

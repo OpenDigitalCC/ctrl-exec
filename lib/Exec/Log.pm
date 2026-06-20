@@ -2,6 +2,8 @@ package Exec::Log;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use Sys::Syslog qw(openlog syslog closelog);
 
 # Define priority/facility constants numerically to avoid import issues
@@ -13,8 +15,7 @@ my $ident = 'ctrl-exec';
 my $opened = 0;
 
 # Call once at startup: init('ctrl-exec-agent') or init('ctrl-exec-dispatcher')
-sub init {
-    my ($program_name) = @_;
+sub init ($program_name) {
     croak "program name required" unless $program_name;
     $ident = $program_name;
     openlog($ident, 'pid,ndelay', _LOG_DAEMON);
@@ -23,8 +24,7 @@ sub init {
 
 # Write a structured syslog line from a hashref of key=value pairs
 # log_action(INFO, { ACTION => 'run', SCRIPT => 'backup', EXIT => 0, ... })
-sub log_action {
-    my ($level, $fields) = @_;
+sub log_action ($level, $fields) {
 
     croak "log_action: fields must be a hashref" unless ref $fields eq 'HASH';
     croak "log_action: ACTION field required"    unless exists $fields->{ACTION};
@@ -46,16 +46,14 @@ sub log_action {
     }
 }
 
-sub _kv {
-    my ($k, $v) = @_;
+sub _kv ($k, $v) {
     $v //= '';
     # Quote values containing spaces
     $v = qq{"$v"} if $v =~ /\s/;
     return "$k=$v";
 }
 
-sub _level {
-    my ($level) = @_;
+sub _level ($level = undef) {
     my %levels = (
         INFO    => _LOG_INFO,
         WARNING => _LOG_WARNING,

@@ -2,6 +2,8 @@
 
 use strict;
 use warnings;
+use feature qw(signatures);
+no warnings qw(experimental::signatures);
 use FindBin qw($Bin);
 use lib "$Bin/../lib";
 
@@ -81,8 +83,7 @@ sub main {
 # An argument with an explicit :port, or one that is not a registered agent,
 # passes through unchanged. Applied after auth/lock so those operate on the
 # name the operator gave; only the connection target is rewritten.
-sub _resolve_dispatch_hosts {
-    my ($hosts) = @_;
+sub _resolve_dispatch_hosts ($hosts) {
     my $r = Exec::Registry::resolve_dispatch($hosts);
     unless ($r->{ok}) {
         my @u = @{ $r->{unknown} };
@@ -96,8 +97,7 @@ sub _resolve_dispatch_hosts {
 # Days until a cert expiry string ("Mon DD HH:MM:SS YYYY GMT") elapses, or undef
 # if unparseable. Surfaces cert age so operators see which agents are approaching
 # renewal/restart well in advance (negative = already expired).
-sub _days_until_expiry {
-    my ($expiry_str) = @_;
+sub _days_until_expiry ($expiry_str) {
     return undef unless defined $expiry_str && length $expiry_str;
     require Time::Piece;
     my $epoch = eval { Time::Piece->strptime($expiry_str, '%b %d %H:%M:%S %Y %Z')->epoch };
@@ -105,8 +105,7 @@ sub _days_until_expiry {
     return int(($epoch - time()) / 86400);
 }
 
-sub mode_run {
-    my ($opts, @args) = @_;
+sub mode_run ($opts, @args) {
     die "Usage: ctrl-exec-dispatcher run <host>[:<port>] [<host>...] <script> [-- <arg>...]\n"
         unless @args >= 2;
 
@@ -191,8 +190,7 @@ sub mode_run {
     exit($any_fail ? 1 : 0);
 }
 
-sub mode_status {
-    my ($opts, $reqid) = @_;
+sub mode_status ($opts, $reqid = undef) {
     die "Usage: ctrl-exec-dispatcher status <reqid>\n" unless $reqid;
 
     my $config = _load_config();
@@ -220,8 +218,7 @@ sub mode_status {
     exit 0;
 }
 
-sub mode_wait {
-    my ($opts, $reqid) = @_;
+sub mode_wait ($opts, $reqid = undef) {
     die "Usage: ctrl-exec-dispatcher wait <reqid> [--timeout <seconds>]\n" unless $reqid;
 
     my $config   = _load_config();
@@ -263,8 +260,7 @@ sub mode_wait {
     exit($any_fail ? 1 : 0);
 }
 
-sub mode_ping {
-    my ($opts, @hosts) = @_;
+sub mode_ping ($opts, @hosts) {
     die "Usage: ctrl-exec-dispatcher ping <host>[:<port>] [<host>...]\n" unless @hosts;
 
     my $config   = _load_config();
@@ -309,9 +305,7 @@ sub mode_ping {
 #   2. Rotates the dispatcher's own cert when it nears expiry, broadcasts the new
 #      serial to agents, and expires agents long out of contact.
 # Each phase is independent: a failure in one is logged and does not stop the rest.
-sub mode_maintain {
-    my ($opts) = @_;
-
+sub mode_maintain ($opts) {
     my $config = _load_config();
 
     my $agents = eval { Exec::Registry::list_agents() } // [];
@@ -364,8 +358,7 @@ sub mode_maintain {
     }
 }
 
-sub mode_list_agents {
-    my ($opts) = @_;
+sub mode_list_agents ($opts) {
     my $agents = eval { Exec::Registry::list_agents() };
     if ($@) {
         my $err = $@;
@@ -417,8 +410,7 @@ sub mode_list_agents {
     }
 }
 
-sub mode_pairing {
-    my ($opts, $action) = @_;
+sub mode_pairing ($opts, $action = undef) {
     $action //= '';
 
     return _pairing_stop() if $action eq 'stop';
@@ -442,8 +434,7 @@ sub mode_pairing {
 # pairing_timeout config key, which overrides the 600s default. The window may
 # be shortened but never extended beyond 600s, so an open window is always
 # bounded.
-sub _pairing_timeout {
-    my ($opts, $config) = @_;
+sub _pairing_timeout ($opts, $config) {
     my $t = $opts->{timeout};
     $t = $config->{pairing_timeout} if !defined $t;
     $t = 600                        if !defined $t;
@@ -457,9 +448,7 @@ sub _pairing_timeout {
 
 # Run the pairing listener plus the cert-renewal check loop, reaping the child
 # on every exit (timeout, quit, or signal). Shared by foreground and background.
-sub _pairing_serve {
-    my ($opts, $config, $timeout) = @_;
-
+sub _pairing_serve ($opts, $config, $timeout) {
     # Fork the cert-renewal check loop. It runs independently; we TERM it when
     # the pairing listener stops so it is never left orphaned.
     my $check_pid = fork();
@@ -493,7 +482,7 @@ sub _pairing_serve {
         rate_limit    => Exec::Pairing::build_rate_config($config),
         timeout       => $timeout,
         dispatcher_id => _resolve_dispatcher_id($config),
-        log_fn        => sub { Exec::Log::log_action('INFO', $_[0]) },
+        log_fn        => sub ($f) { Exec::Log::log_action('INFO', $f) },
     );
 
     if ($check_pid) {
@@ -504,9 +493,7 @@ sub _pairing_serve {
 
 # Start pairing mode as a detached background process that auto-stops after the
 # timeout. A pidfile lets 'pairing-mode stop' find and stop it.
-sub _pairing_start_background {
-    my ($opts, $config, $timeout) = @_;
-
+sub _pairing_start_background ($opts, $config, $timeout) {
     _pairing_assert_not_running();
 
     # Surface cert/key problems before detaching, while stderr is still visible.
@@ -590,8 +577,7 @@ sub _pairing_read_pidfile {
     return ($line =~ /^(\d+)$/) ? $1 : undef;
 }
 
-sub _pairing_write_pidfile {
-    my ($pid) = @_;
+sub _pairing_write_pidfile ($pid) {
     (my $dir = $PAIRING_PIDFILE) =~ s{/[^/]+$}{};
     require File::Path;
     File::Path::make_path($dir) unless -d $dir;
@@ -636,8 +622,7 @@ sub mode_list_requests {
         . "Approve shows the exact edit-agent command if a name will not resolve here.\n";
 }
 
-sub mode_approve {
-    my ($opts, $reqid) = @_;
+sub mode_approve ($opts, $reqid = undef) {
     die "Usage: ctrl-exec-dispatcher approve <reqid> "
       . "[--lookup-by ip|hostname] [--ip <addr>] [--agent-port <n>]\n" unless $reqid;
 
@@ -665,16 +650,15 @@ sub mode_approve {
         port            => $agent_port,
         dispatcher_id   => _resolve_dispatcher_id($config),
         dispatcher_cert => $config->{cert},
-        log_fn          => sub { Exec::Log::log_action('INFO', $_[0]) },
+        log_fn          => sub ($f) { Exec::Log::log_action('INFO', $f) },
     );
 }
 
-sub mode_deny {
-    my ($opts, $reqid) = @_;
+sub mode_deny ($opts, $reqid = undef) {
     die "Usage: ctrl-exec-dispatcher deny <reqid>\n" unless $reqid;
     Exec::Pairing::deny_request(
         reqid  => $reqid,
-        log_fn => sub { Exec::Log::log_action('INFO', $_[0]) },
+        log_fn => sub ($f) { Exec::Log::log_action('INFO', $f) },
     );
 }
 
@@ -738,8 +722,7 @@ sub mode_setup_dispatcher {
         if -f $disp_crt;
 }
 
-sub mode_rotate_cert {
-    my ($opts) = @_;
+sub mode_rotate_cert ($opts) {
     my $config = _load_config();
 
     print "Rotating dispatcher certificate...\n";
@@ -776,9 +759,7 @@ sub mode_rotate_cert {
     }
 }
 
-sub mode_serial_status {
-    my ($opts) = @_;
-
+sub mode_serial_status ($opts) {
     my $state  = Exec::Rotation::load_state();
     my $agents = Exec::Registry::list_agents();
 
@@ -819,8 +800,7 @@ sub mode_serial_status {
     }
 }
 
-sub _format_run_results {
-    my ($results) = @_;
+sub _format_run_results ($results) {
     for my $r (@$results) {
         my $host   = $r->{host}  // '?';
         $host .= " ($r->{reported_hostname})" if defined $r->{reported_hostname};
@@ -845,8 +825,7 @@ sub _format_run_results {
 }
 
 # Print the per-host acceptance summary of an async submission.
-sub _format_async_submit {
-    my ($reqid, $results) = @_;
+sub _format_async_submit ($reqid, $results) {
     print "Submitted async run  req:$reqid\n";
     for my $r (@$results) {
         my $host   = $r->{host} // '?';
@@ -866,8 +845,7 @@ sub _format_async_submit {
 }
 
 # Print an aggregated async run record (from RunStore::aggregate).
-sub _format_status {
-    my ($record) = @_;
+sub _format_status ($record) {
     my $state = $record->{complete} ? 'COMPLETE' : 'PENDING';
     printf "Request %s  (script: %s)  [%s]\n",
         $record->{reqid} // '?', $record->{script} // '?', $state;
@@ -909,16 +887,14 @@ sub _format_status {
 
 # A host counts as failed for the `wait` exit code if it did not finish with
 # exit 0: refused (busy), submit/fetch error, expired, or non-zero exit.
-sub _host_failed {
-    my ($h) = @_;
+sub _host_failed ($h) {
     my $s = $h->{status} // '';
     return 1 if $s eq 'busy' || $s eq 'error' || $s eq 'expired';
     return 1 if $s eq 'done' && ($h->{exit} // -1) != 0;
     return 0;
 }
 
-sub _format_ping_results {
-    my ($results) = @_;
+sub _format_ping_results ($results) {
     printf "%-30s  %-8s  %-8s  %-28s  %s\n",
         'HOST', 'STATUS', 'RTT', 'CERT EXPIRY', 'VERSION';
     printf "%s\n", '-' x 85;
@@ -934,8 +910,7 @@ sub _format_ping_results {
     }
 }
 
-sub _auth_error {
-    my ($auth, $json) = @_;
+sub _auth_error ($auth, $json) {
     if ($json) {
         print encode_json({ ok => 0, error => $auth->{reason}, code => $auth->{code} }), "\n";
     }
@@ -944,8 +919,7 @@ sub _auth_error {
     }
 }
 
-sub _lock_error {
-    my ($lock, $json) = @_;
+sub _lock_error ($lock, $json) {
     if ($json) {
         print encode_json({
             ok        => 0,
@@ -967,14 +941,11 @@ sub _load_config {
 ## This dispatcher's stable identity (ctrl-exec.conf 'dispatcher_id', else
 ## hostname), resolved by Exec::Pairing::resolve_dispatcher_id and delivered to
 ## agents at pairing and cert rotation. Thin wrapper kept for call-site brevity.
-sub _resolve_dispatcher_id {
-    my ($config) = @_;
+sub _resolve_dispatcher_id ($config) {
     return Exec::Pairing::resolve_dispatcher_id($config);
 }
 
-sub _parse_run_args {
-    my @args = @_;
-
+sub _parse_run_args (@args) {
     my @script_args;
     for my $i (0 .. $#args) {
         if ($args[$i] eq '--') {
@@ -992,8 +963,7 @@ sub _parse_run_args {
     return (\@hosts, $script, \@script_args);
 }
 
-sub mode_list_locks {
-    my ($opts) = @_;
+sub mode_list_locks ($opts) {
     my $locks = Exec::Lock::list_held();
 
     if (!@$locks) {
@@ -1013,8 +983,7 @@ sub mode_list_locks {
     }
 }
 
-sub mode_unpair {
-    my ($opts, $hostname) = @_;
+sub mode_unpair ($opts, $hostname = undef) {
     die "Usage: ctrl-exec-dispatcher unpair <hostname>\n" unless $hostname;
 
     my $record = eval {
@@ -1038,8 +1007,7 @@ sub mode_unpair {
     print "Decommission the agent promptly or add its serial to the revocation list.\n";
 }
 
-sub mode_edit_agent {
-    my ($opts, $name) = @_;
+sub mode_edit_agent ($opts, $name = undef) {
     die "Usage: ctrl-exec-dispatcher edit-agent <name> "
       . "[--rename <new>] [--ip <addr>] [--agent-port <n>] [--lookup-by ip|hostname]\n"
         unless $name;

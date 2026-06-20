@@ -7,6 +7,8 @@ package Exec::Pairing::Identity;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use Socket qw(getaddrinfo getnameinfo
               AI_NUMERICHOST NI_NAMEREQD NI_NUMERICHOST NIx_NOSERV);
 
@@ -15,8 +17,7 @@ use Socket qw(getaddrinfo getnameinfo
 # true only when the PTR name forward-resolves back to the same IP, which guards
 # against a host claiming a name it does not actually own. Bounded by $timeout
 # (default 2s) so a missing or slow resolver cannot hang an interactive prompt.
-sub reverse_lookup {
-    my ($ip, $timeout) = @_;
+sub reverse_lookup ($ip, $timeout = undef) {
     $timeout //= 2;
     return undef unless defined $ip && length $ip && $ip ne 'unknown';
 
@@ -54,8 +55,7 @@ sub reverse_lookup {
 # agent's self-reported IP when it differs (a sign of NAT in between), and the
 # forward-confirmed reverse-DNS name. Reverse-DNS fields are read from the
 # request record (resolved once at queue time), not looked up again here.
-sub identity_lines {
-    my ($req) = @_;
+sub identity_lines ($req) {
     my @lines;
     push @lines, sprintf("  Reported name: %s   (becomes the registry key)",
         $req->{hostname} // '?');
@@ -80,8 +80,7 @@ sub identity_lines {
 # A one-or-two-line recommendation for how to register the agent so this
 # dispatcher can actually reach it, keyed on the reverse-DNS signal. Returns a
 # (possibly multi-line) string, or '' when nothing useful can be said.
-sub identity_recommendation {
-    my ($req) = @_;
+sub identity_recommendation ($req) {
     my $name = $req->{hostname}  // '';
     my $src  = $req->{source_ip} // '';
     my $rev  = $req->{reverse_dns} // '';

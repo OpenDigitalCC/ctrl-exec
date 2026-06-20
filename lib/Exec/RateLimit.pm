@@ -2,14 +2,15 @@ package Exec::RateLimit;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use Exec::Log qw();
 
 # Parse a "limit/window/block" rate spec (e.g. "10/60/300") into a validated
 # [limit, window, block] arrayref of integers, or undef if malformed. Shared by
 # the dispatcher pairing config and the agent config, which each built the same
 # split-and-validate-three-ints inline.
-sub parse_limit_spec {
-    my ($raw) = @_;
+sub parse_limit_spec ($raw) {
     return undef unless defined $raw;
     my ($limit, $window, $block) = split m{/}, $raw, 3;
     return undef unless defined $limit  && $limit  =~ /^\d+$/
@@ -44,8 +45,7 @@ use constant MAX_ENTRIES     => 1000;
 # $rate_config is an optional hashref from $config->{rate_limit}. When absent,
 # module constants are used. Keys: disabled, volume_limit, volume_window,
 # volume_block, probe_limit, probe_window, probe_block.
-sub check {
-    my ($peer, $state_ref, $rate_config) = @_;
+sub check ($peer, $state_ref, $rate_config = undef) {
     $rate_config //= {};
 
     # Disabled: rate limiting turned off entirely
@@ -148,9 +148,7 @@ sub check {
 #
 # Called after check() returns 0, before fork(). Records a post-handshake
 # connection timestamp for volume tracking.
-sub record_connection {
-    my ($peer, $state_ref) = @_;
-
+sub record_connection ($peer, $state_ref) {
     $state_ref->{$peer} //= { connections => [], failures => [] };
     push @{ $state_ref->{$peer}{connections} }, time();
 }
@@ -160,9 +158,7 @@ sub record_connection {
 #
 # Called when a TLS handshake failure is detected (item 3 call site). Records
 # a failure timestamp for probe tracking.
-sub record_failure {
-    my ($peer, $state_ref) = @_;
-
+sub record_failure ($peer, $state_ref) {
     $state_ref->{$peer} //= { connections => [], failures => [] };
     push @{ $state_ref->{$peer}{failures} }, time();
 }

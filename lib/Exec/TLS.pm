@@ -2,6 +2,8 @@ package Exec::TLS;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 
 # Shared TLS hardening for every ctrl-exec listener and client, so the policy
 # cannot drift between endpoints. Returns a flat list of IO::Socket::SSL

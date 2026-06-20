@@ -2,6 +2,8 @@ package Exec::Lock;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use Fcntl  qw(LOCK_EX LOCK_NB LOCK_UN);
 use File::Path qw(make_path);
 use Carp   qw(croak);
@@ -25,8 +27,7 @@ my $LOCK_DIR = '/var/lib/ctrl-exec/locks';
 # Returns:
 #   { ok => 1 }
 #   { ok => 0, conflicts => \@locked_pairs }
-sub check_available {
-    my (%opts) = @_;
+sub check_available (%opts) {
     my $hosts   = $opts{hosts}   or croak "hosts required";
     my $script  = $opts{script}  or croak "script required";
     my $dir     = $opts{lock_dir} // $LOCK_DIR;
@@ -73,8 +74,7 @@ sub check_available {
 # Returns:
 #   { ok => 1,  handles => \@fh_list }   - locks held; keep handles in scope
 #   { ok => 0,  conflicts => \@pairs }   - could not acquire all locks
-sub acquire {
-    my (%opts) = @_;
+sub acquire (%opts) {
     my $hosts   = $opts{hosts}   or croak "hosts required";
     my $script  = $opts{script}  or croak "script required";
     my $dir     = $opts{lock_dir} // $LOCK_DIR;
@@ -127,8 +127,7 @@ sub acquire {
 #   handles => \@fh_list   (from acquire result)
 #   hosts   => \@hosts     (for logging only)
 #   script  => $name       (for logging only)
-sub release {
-    my (%opts) = @_;
+sub release (%opts) {
     my $handles = $opts{handles} or croak "handles required";
     my $hosts   = $opts{hosts}   // [];
     my $script  = $opts{script}  // '';
@@ -156,8 +155,7 @@ sub release {
 #
 # Returns arrayref of hashrefs: { host => $str, script => $str }
 # sorted by host:script.
-sub list_held {
-    my (%opts) = @_;
+sub list_held (%opts) {
     my $dir = $opts{lock_dir} // $LOCK_DIR;
 
     return [] unless -d $dir;
@@ -182,8 +180,7 @@ sub list_held {
 
 # --- private ---
 
-sub _lock_path {
-    my ($dir, $host, $script) = @_;
+sub _lock_path ($dir, $host, $script) {
     # Sanitise host and script for use in filename
     # Replace anything that isn't alphanumeric, hyphen, or dot with _
     (my $safe_host   = $host)   =~ s/[^\w.\-]/_/g;
@@ -191,8 +188,7 @@ sub _lock_path {
     return "$dir/${safe_host}--${safe_script}.lock";
 }
 
-sub _open_lock_file {
-    my ($path) = @_;
+sub _open_lock_file ($path) {
     my $existed = -e $path;
     open my $fh, '>>', $path
         or croak "Cannot open lock file '$path': $!";
@@ -205,8 +201,7 @@ sub _open_lock_file {
     return $fh;
 }
 
-sub _ensure_dir {
-    my ($dir) = @_;
+sub _ensure_dir ($dir) {
     make_path($dir) unless -d $dir;
 }
 

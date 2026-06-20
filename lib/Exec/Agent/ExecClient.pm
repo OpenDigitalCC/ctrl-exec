@@ -13,13 +13,14 @@ package Exec::Agent::ExecClient;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use Carp qw(croak);
 use IO::Socket::UNIX qw();
 
-sub _field { pack('N', length $_[0]) . $_[0] }
+sub _field ($s) { pack('N', length $s) . $s }
 
-sub _read_all {
-    my ($sock, $n) = @_;
+sub _read_all ($sock, $n) {
     my $buf = '';
     while (length $buf < $n) {
         my $r = $sock->sysread(my $chunk, $n - length $buf);
@@ -29,8 +30,7 @@ sub _read_all {
     return $buf;
 }
 
-sub _read_field {
-    my ($sock) = @_;
+sub _read_field ($sock) {
     my $lh = _read_all($sock, 4) // return undef;
     my $len = unpack 'N', $lh;
     return '' if $len == 0;
@@ -40,8 +40,7 @@ sub _read_field {
 # run(%opts): socket, reqid, dispatcher_id, script, args (arrayref), stdin
 # Returns { exit, stdout, stderr } or { exit => -1, error => ... } on a
 # transport failure (so the caller can report it like any other run error).
-sub run {
-    my (%o) = @_;
+sub run (%o) {
     my $path = $o{socket} or croak "socket required";
     my $script = defined $o{script} ? $o{script} : croak "script required";
     my @args = @{ $o{args} // [] };

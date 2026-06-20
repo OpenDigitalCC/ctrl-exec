@@ -8,6 +8,8 @@ package Exec::Cmd;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use Carp       qw(croak);
 use File::Temp qw(tempfile);
 use Exporter   qw(import);
@@ -16,8 +18,7 @@ use Exec::FileUtil qw(slurp);
 
 our @EXPORT_OK = qw(run_or_die);
 
-sub run_or_die {
-    my @cmd = @_;
+sub run_or_die (@cmd) {
 
     my ($err_fh, $err_path) = tempfile(UNLINK => 1);
     my $err_fileno = fileno($err_fh);

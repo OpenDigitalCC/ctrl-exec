@@ -2,6 +2,8 @@ package Exec::Engine;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use JSON  qw(encode_json decode_json);
 use Carp  qw(croak);
 use Exec::CertInfo qw();
@@ -36,8 +38,7 @@ my $DEFAULT_PORT = 7443;
 #   { host, script, status => 'accepted', reqid, rtt }
 #   { host, script, status => 'busy',  error, reqid, rtt }
 #   { host, script, status => 'error', error, reqid, rtt }
-sub dispatch_all {
-    my (%opts) = @_;
+sub dispatch_all (%opts) {
     my $hosts    = $opts{hosts}    or croak "hosts required";
     my $script   = $opts{script}   or croak "script required";
     my $config   = $opts{config}   or croak "config required";
@@ -65,8 +66,7 @@ sub dispatch_all {
     });
 
     my $max_par = $opts{max_parallel} // $config->{max_parallel} // 64;
-    my $fanned  = _fan_out(\@entries, $max_par, sub {
-        my ($name, $target) = @_;
+    my $fanned  = _fan_out(\@entries, $max_par, sub ($name, $target) {
         my ($host, $hport)  = parse_host($target, $port);
         return _dispatch_one(
             host     => $host,
@@ -111,8 +111,7 @@ sub dispatch_all {
 #   { host, status => 'done', exit, stdout, stderr, script, reqid, rtt }
 #   { host, status => 'unknown', reqid, rtt }   (agent has no such record)
 #   { host, status => 'error', error, reqid, rtt }
-sub result_all {
-    my (%opts) = @_;
+sub result_all (%opts) {
     my $hosts  = $opts{hosts}  or croak "hosts required";
     my $config = $opts{config} or croak "config required";
     my $reqid  = $opts{reqid}  or croak "reqid required";
@@ -126,8 +125,7 @@ sub result_all {
     my @entries = map { [ _host_entry($_) ] } @$hosts;
 
     my $max_par = $opts{max_parallel} // $config->{max_parallel} // 64;
-    my $fanned  = _fan_out(\@entries, $max_par, sub {
-        my ($name, $target) = @_;
+    my $fanned  = _fan_out(\@entries, $max_par, sub ($name, $target) {
         my ($host, $hport)  = parse_host($target, $port);
         return _result_one(
             host   => $host,
@@ -161,8 +159,7 @@ sub result_all {
 # Returns arrayref of result hashrefs:
 #   { host, status => 'ok', version, expiry, rtt, reqid }
 #   { host, status => 'error', error, rtt }
-sub ping_all {
-    my (%opts) = @_;
+sub ping_all (%opts) {
     my $hosts  = $opts{hosts}  or croak "hosts required";
     my $config = $opts{config} or croak "config required";
     my $reqid  = $opts{reqid}  // gen_reqid();
@@ -181,8 +178,7 @@ sub ping_all {
     my @entries = map { [ _host_entry($_) ] } @$hosts;
 
     my $max_par = $opts{max_parallel} // $config->{max_parallel} // 64;
-    my $fanned  = _fan_out(\@entries, $max_par, sub {
-        my ($name, $target) = @_;
+    my $fanned  = _fan_out(\@entries, $max_par, sub ($name, $target) {
         my ($host, $hport)  = parse_host($target, $port);
         return _ping_one(
             host   => $host,
@@ -245,8 +241,7 @@ sub ping_all {
 # Returns arrayref of result hashrefs:
 #   { host, status => 'ok', version, scripts => [{name, path, executable},...] }
 #   { host, status => 'error', error }
-sub capabilities_all {
-    my (%opts) = @_;
+sub capabilities_all (%opts) {
     my $hosts  = $opts{hosts}  or croak "hosts required";
     my $config = $opts{config} or croak "config required";
     my $port   = $opts{port}   // $DEFAULT_PORT;
@@ -259,8 +254,7 @@ sub capabilities_all {
     my @entries = map { [ _host_entry($_) ] } @$hosts;
 
     my $max_par = $opts{max_parallel} // $config->{max_parallel} // 64;
-    my $fanned  = _fan_out(\@entries, $max_par, sub {
-        my ($name, $target) = @_;
+    my $fanned  = _fan_out(\@entries, $max_par, sub ($name, $target) {
         my ($host, $hport)  = parse_host($target, $port);
         return _capabilities_one(
             host   => $host,
@@ -286,8 +280,7 @@ sub capabilities_all {
 # what results are keyed/displayed by; the target is what we connect to. This
 # lets callers address an agent by its registry name while connecting to a
 # resolved IP/port (see Exec::Registry::resolve_target).
-sub _host_entry {
-    my ($entry) = @_;
+sub _host_entry ($entry) {
     if (ref $entry eq 'HASH') {
         my $name   = $entry->{name}   // $entry->{target};
         my $target = $entry->{target} // $entry->{name};
@@ -300,8 +293,7 @@ sub _host_entry {
 # name), and keep the agent-reported hostname only when it differs. Callers
 # display $result->{host} as canonical and may show reported_hostname in
 # brackets when present.
-sub _canonicalise {
-    my ($result, $name) = @_;
+sub _canonicalise ($result, $name) {
     $result->{host} = $name;
     if (defined $result->{reported_hostname}
         && (!length $result->{reported_hostname}
@@ -313,8 +305,7 @@ sub _canonicalise {
 
 # Parse a host string into (host, port).
 # Accepts "hostname" or "hostname:port".
-sub parse_host {
-    my ($host_str, $default_port) = @_;
+sub parse_host ($host_str, $default_port = undef) {
     if ($host_str =~ /^(.+):(\d+)$/) {
         return ($1, $2);
     }
@@ -324,7 +315,7 @@ sub parse_host {
 # Generate a cryptographically random 16-hex-character request ID. Delegates to
 # the one urandom reader (Exec::Random) - no rand() fallback, because a reqid is
 # the unguessable capability that gates async result fetches.
-sub gen_reqid {
+sub gen_reqid () {
     return Exec::Random::hex_bytes(8);
 }
 
@@ -338,8 +329,7 @@ sub gen_reqid {
 # a result hashref, JSON-encoded over a pipe. Returns an arrayref of
 # { name => $name, target => $target, result => $decoded_or_undef } in completion
 # order; callers supply their own fallback for an undef result and canonicalise.
-sub _fan_out {
-    my ($entries, $max, $worker) = @_;
+sub _fan_out ($entries, $max, $worker) {
     $max = 1 unless $max && $max >= 1;
 
     # Preload the HTTP/TLS stack ONCE in the parent so every forked worker
@@ -388,8 +378,7 @@ sub _fan_out {
     return \@out;
 }
 
-sub _dispatch_one {
-    my (%opts) = @_;
+sub _dispatch_one (%opts) {
     my $host   = $opts{host};
     my $port   = $opts{port};
     my $config = $opts{config};
@@ -517,8 +506,7 @@ sub _dispatch_one {
     return $result;
 }
 
-sub _result_one {
-    my (%opts) = @_;
+sub _result_one (%opts) {
     my $host   = $opts{host};
     my $port   = $opts{port};
     my $config = $opts{config};
@@ -581,8 +569,7 @@ sub _result_one {
     return $result;
 }
 
-sub _ping_one {
-    my (%opts) = @_;
+sub _ping_one (%opts) {
     my $host   = $opts{host};
     my $port   = $opts{port};
     my $config = $opts{config};
@@ -634,8 +621,7 @@ sub _ping_one {
     return $result;
 }
 
-sub _capabilities_one {
-    my (%opts) = @_;
+sub _capabilities_one (%opts) {
     my $host   = $opts{host};
     my $port   = $opts{port};
     my $config = $opts{config};
@@ -686,8 +672,7 @@ sub _capabilities_one {
 # endpoint-specific code (a ping's 413, a result's 404) before calling this.
 # $at is the request eval's $@, captured at the call site before the decode
 # below can clobber it.
-sub _classify_error {
-    my ($resp, $at, $host, $port) = @_;
+sub _classify_error ($resp, $at, $host, $port) {
     if ($resp && $resp->code == 403) {
         my $body = eval { decode_json($resp->content) } // {};
         return 'forbidden: ' . ($body->{error} // $resp->status_line);
@@ -703,8 +688,7 @@ sub _classify_error {
 # status. Rewrite only recognised transport causes; anything else (including a
 # genuine HTTP status such as 403) is returned unchanged, so this never mislabels
 # an authorisation response as a network problem.
-sub _transport_error {
-    my ($raw, $host, $port) = @_;
+sub _transport_error ($raw, $host, $port) {
     $raw  //= '';
     $host //= 'host';
 
@@ -736,8 +720,7 @@ sub _transport_error {
 # agent derives the dispatcher identity from the caller's authenticated serial
 # and adds/removes the given serial under it. Returns an arrayref of per-host
 # { host, status, exit, error?, rtt } (exit 0 == success), mirroring dispatch_all.
-sub rotate_all {
-    my (%opts) = @_;
+sub rotate_all (%opts) {
     my $hosts  = $opts{hosts}  or croak "hosts required";
     my $serial = $opts{serial} or croak "serial required";
     my $action = $opts{action} // 'add';
@@ -749,8 +732,7 @@ sub rotate_all {
     my @entries = map { [ _host_entry($_) ] } @$hosts;
 
     my $max_par = $opts{max_parallel} // $config->{max_parallel} // 64;
-    my $fanned  = _fan_out(\@entries, $max_par, sub {
-        my ($name, $target) = @_;
+    my $fanned  = _fan_out(\@entries, $max_par, sub ($name, $target) {
         my ($host, $hport)  = parse_host($target, $port);
         return _rotate_one(
             host => $host, port => $hport,
@@ -768,8 +750,7 @@ sub rotate_all {
     return \@results;
 }
 
-sub _rotate_one {
-    my (%opts) = @_;
+sub _rotate_one (%opts) {
     my ($host, $port, $config) = @opts{qw(host port config)};
     require Time::HiRes;
     my $t0 = Time::HiRes::time();
@@ -794,8 +775,7 @@ sub _rotate_one {
     return $decoded;
 }
 
-sub _build_ua {
-    my ($config) = @_;
+sub _build_ua ($config) {
     require LWP::UserAgent;
     require IO::Socket::SSL;
     require Exec::TLS;
@@ -826,8 +806,7 @@ sub _build_ua {
 # Returns true if the cert should be renewed.
 # Renewal is due when remaining validity is less than half of cert_days.
 # Returns false (safe default) if the expiry string cannot be parsed.
-sub _renewal_due {
-    my ($expiry_str, $cert_days) = @_;
+sub _renewal_due ($expiry_str, $cert_days) {
     my $expiry_epoch = Exec::CertInfo::expiry_epoch($expiry_str);
     return 0 unless defined $expiry_epoch;
 
@@ -839,8 +818,7 @@ sub _renewal_due {
 # Perform cert renewal for a single agent over the existing mTLS connection.
 # POSTs /renew to get a CSR, signs it, POSTs /renew-complete to deliver.
 # Updates the registry expiry on success. Dies on any failure.
-sub _renew_one {
-    my (%opts) = @_;
+sub _renew_one (%opts) {
     my $host   = $opts{host};
     my $port   = $opts{port};
     my $name   = $opts{name} // $host;   # registry key for the expiry update
@@ -913,8 +891,8 @@ sub _renew_one {
 }
 
 # Extract notAfter date string from a PEM cert via openssl subprocess.
-sub _extract_expiry {
-    return Exec::CertInfo::expiry_from_pem($_[0]);
+sub _extract_expiry ($cert_pem) {
+    return Exec::CertInfo::expiry_from_pem($cert_pem);
 }
 
 1;

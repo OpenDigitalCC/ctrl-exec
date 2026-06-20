@@ -2,6 +2,8 @@ package Exec::RunStore;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use JSON       qw(encode_json decode_json);
 use File::Path qw(make_path);
 use File::Temp qw(tempfile);
@@ -29,8 +31,7 @@ my %PENDING = map { $_ => 1 } qw(accepted running);
 #   hosts    => \@hostnames        (as dispatched)
 #   results  => \@result_hashrefs  (from dispatch_all)
 #   runs_dir => $path              (default /var/lib/ctrl-exec/runs)
-sub record_sync {
-    my (%opts) = @_;
+sub record_sync (%opts) {
     my $reqid    = $opts{reqid}   or croak "reqid required";
     _valid_reqid($reqid) or croak "invalid reqid '$reqid'";
     my $runs_dir = $opts{runs_dir} // $DEFAULT_RUNS_DIR;
@@ -63,8 +64,7 @@ sub record_sync {
 #   accepted -> job is running on the agent (pending; will be fetched)
 #   busy     -> agent refused a concurrent run (terminal; no job)
 #   error    -> submit failed, no job was started (terminal)
-sub record_async {
-    my (%opts) = @_;
+sub record_async (%opts) {
     my $reqid    = $opts{reqid}   or croak "reqid required";
     _valid_reqid($reqid) or croak "invalid reqid '$reqid'";
     my $results  = $opts{dispatch_results} or croak "dispatch_results required";
@@ -92,8 +92,7 @@ sub record_async {
 }
 
 # Load a stored record by reqid, or undef if absent/corrupt.
-sub load {
-    my ($reqid, $runs_dir) = @_;
+sub load ($reqid, $runs_dir = undef) {
     $runs_dir //= $DEFAULT_RUNS_DIR;
     return undef unless _valid_reqid($reqid);
     my $file = "$runs_dir/$reqid.json";
@@ -119,8 +118,7 @@ sub load {
 #   unknown -> expired (the agent purged the result, or never held it)
 #   error   -> transient fetch failure; status kept, fetch_error annotated
 # Returns the record, or undef if no such reqid.
-sub aggregate {
-    my (%opts) = @_;
+sub aggregate (%opts) {
     my $reqid    = $opts{reqid}  or croak "reqid required";
     my $config   = $opts{config} or croak "config required";
     my $runs_dir = $opts{runs_dir} // $DEFAULT_RUNS_DIR;
@@ -177,8 +175,7 @@ sub aggregate {
 }
 
 # Remove records older than $ttl seconds (by mtime). Returns the count removed.
-sub purge {
-    my ($runs_dir, $ttl) = @_;
+sub purge ($runs_dir = undef, $ttl = undef) {
     $runs_dir //= $DEFAULT_RUNS_DIR;
     $ttl      //= $DEFAULT_TTL;
     return 0 unless -d $runs_dir;
@@ -199,8 +196,7 @@ sub purge {
 
 # Recompute the run-level summary: complete (no host still pending) and the
 # sorted list of hosts still pending.
-sub _summarise {
-    my ($record) = @_;
+sub _summarise ($record) {
     my @pending = grep { $PENDING{ $record->{hosts}{$_}{status} // '' } }
                   keys %{ $record->{hosts} };
     $record->{pending}  = [ sort @pending ];
@@ -208,19 +204,16 @@ sub _summarise {
     return $record;
 }
 
-sub _default_resolver {
-    my ($host) = @_;
+sub _default_resolver ($host) {
     require Exec::Registry;
     return Exec::Registry::resolve_target(hostname => $host);
 }
 
-sub _valid_reqid {
-    my ($reqid) = @_;
+sub _valid_reqid ($reqid) {
     return defined $reqid && $reqid =~ /^[A-Za-z0-9_-]+\z/;
 }
 
-sub _write {
-    my ($runs_dir, $reqid, $record) = @_;
+sub _write ($runs_dir, $reqid, $record) {
     unless (-d $runs_dir) {
         eval { make_path($runs_dir, { mode => 0750 }) };
         if ($@) {

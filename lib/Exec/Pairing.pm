@@ -2,6 +2,8 @@ package Exec::Pairing;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use File::Path  qw(make_path);
 use File::Temp  qw(tempfile);
 use Fcntl       qw(:flock);
@@ -34,8 +36,7 @@ my $MAX_PAIR_BODY = 64 * 1024;
 # openssl per approval. The cert changes only on rotation, which rewrites the
 # file (new mtime) and invalidates the entry, so the cache is always correct.
 my %DISP_SERIAL_CACHE;
-sub _cached_disp_serial {
-    my ($cert_path) = @_;
+sub _cached_disp_serial ($cert_path) {
     return '' unless defined $cert_path && -f $cert_path;
     my $mtime = (stat $cert_path)[9] // 0;
     my $c = $DISP_SERIAL_CACHE{$cert_path};
@@ -57,8 +58,7 @@ sub _cached_disp_serial {
 #
 # Absent or malformed values leave the Exec::RateLimit defaults in place.
 # Returns a hashref suitable as the third argument to Exec::RateLimit::check.
-sub build_rate_config {
-    my ($config) = @_;
+sub build_rate_config ($config = undef) {
     $config //= {};
 
     my %rl;
@@ -85,8 +85,7 @@ sub build_rate_config {
 # stable across cert rotation - it is not derived from the serial - the agent
 # maps a rotated serial to the same identity, leaving trust and attribution
 # undisturbed.
-sub resolve_dispatcher_id {
-    my ($config) = @_;
+sub resolve_dispatcher_id ($config = undef) {
     $config //= {};
     my $id = $config->{dispatcher_id};
     $id = hostname() unless defined $id && length $id;
@@ -100,8 +99,7 @@ sub resolve_dispatcher_id {
 
 # Start pairing mode - listen on port for agent CSR requests
 # Blocks until interrupted (SIGINT/SIGTERM)
-sub run_pairing_mode {
-    my (%opts) = @_;
+sub run_pairing_mode (%opts) {
     my $port      = $opts{port}      // 7444;
     my $ca_dir    = $opts{ca_dir}    // '/etc/ctrl-exec';
     my $cert      = $opts{cert}      or croak "cert required";
@@ -304,8 +302,7 @@ sub run_pairing_mode {
 }
 
 # Return list of pending requests sorted by received time
-sub list_requests {
-    my (%opts) = @_;
+sub list_requests (%opts) {
     my $dir = $opts{pairing_dir} // $PAIRING_DIR;
     return [] unless -d $dir;
 
@@ -328,8 +325,7 @@ sub list_requests {
 
 # Approve a pending request: sign CSR, deliver cert to waiting agent
 # The agent's connection is held in a response file keyed by reqid
-sub approve_request {
-    my (%opts) = @_;
+sub approve_request (%opts) {
     my $reqid       = $opts{reqid}       or croak "reqid required";
     my $ca_dir      = $opts{ca_dir}      // '/etc/ctrl-exec';
     my $pairing_dir = $opts{pairing_dir} // $PAIRING_DIR;
@@ -451,8 +447,7 @@ sub approve_request {
 }
 
 # Deny and remove a pending request
-sub deny_request {
-    my (%opts) = @_;
+sub deny_request (%opts) {
     my $reqid       = $opts{reqid}       or croak "reqid required";
     my $pairing_dir = $opts{pairing_dir} // $PAIRING_DIR;
     my $log_fn      = $opts{log_fn}      // sub {};
@@ -479,15 +474,13 @@ sub deny_request {
 
 # Return $v if it is a valid lookup_by value ('ip' or 'hostname'), else undef.
 # Used to sanitise the optional agent-suggested hint off the wire.
-sub _valid_lookup_by {
-    my ($v) = @_;
+sub _valid_lookup_by ($v) {
     return (defined $v && ($v eq 'ip' || $v eq 'hostname')) ? $v : undef;
 }
 
 # Effective lookup_by for an approval: operator override wins over the
 # agent-suggested value; default 'hostname'. Returns 'ip' or 'hostname'.
-sub _effective_lookup_by {
-    my ($override, $suggested) = @_;
+sub _effective_lookup_by ($override, $suggested) {
     for my $v ($override, $suggested) {
         return $v if defined $v && ($v eq 'ip' || $v eq 'hostname');
     }
@@ -495,16 +488,14 @@ sub _effective_lookup_by {
 }
 
 # Return $v as an integer if it is a valid TCP port (1..65535), else undef.
-sub _valid_port {
-    my ($v) = @_;
+sub _valid_port ($v) {
     return (defined $v && $v =~ /^\d+$/ && $v >= 1 && $v <= 65535)
         ? int($v) : undef;
 }
 
 # Effective operational port for an approval: operator override
 # (approve --agent-port) wins over the agent-reported port; default 7443.
-sub _effective_port {
-    my ($override, $reported) = @_;
+sub _effective_port ($override, $reported) {
     for my $v ($override, $reported) {
         my $p = _valid_port($v);
         return $p if defined $p;
@@ -515,8 +506,7 @@ sub _effective_port {
 # Return $v if it looks like an IPv4 or IPv6 literal, else undef. Rejects empty,
 # 'unknown', and hostnames so a garbage agent-reported value is never stored as
 # an address. Deliberately loose - a sanity check, not full address validation.
-sub _valid_ip {
-    my ($v) = @_;
+sub _valid_ip ($v) {
     return undef unless defined $v && length $v;
     return $v if $v =~ /^\d{1,3}(?:\.\d{1,3}){3}$/;      # IPv4
     return $v if $v =~ /^[0-9A-Fa-f:]+:[0-9A-Fa-f:]+$/;  # IPv6 (loose)
@@ -526,8 +516,7 @@ sub _valid_ip {
 # Effective IP for an approval, in priority order: operator override
 # (approve --ip) wins over the value queued at request time (the agent's
 # self-reported source IP, falling back to the connection source). '' if none.
-sub _effective_ip {
-    my (@candidates) = @_;
+sub _effective_ip (@candidates) {
     for my $v (@candidates) {
         my $ip = _valid_ip($v);
         return $ip if defined $ip;
@@ -539,8 +528,7 @@ sub _effective_ip {
 
 # Display pending requests and prompt for a command.
 # Called when a new request arrives or the operator types 'list'.
-sub _interactive_prompt {
-    my ($log_fn) = @_;
+sub _interactive_prompt ($log_fn) {
     my $reqs = list_requests();
 
     if (!@$reqs) {
@@ -572,8 +560,7 @@ sub _interactive_prompt {
 }
 
 # Print a numbered queue of pending requests.
-sub _print_queue {
-    my ($reqs) = @_;
+sub _print_queue ($reqs) {
     my $i = 1;
     for my $r (@$reqs) {
         printf "  [%d] %-30s  %-16s  code: %s  %s\n",
@@ -586,8 +573,7 @@ sub _print_queue {
 }
 
 # Approve the Nth request in the current queue (1-based index).
-sub _interactive_approve {
-    my ($n, $log_fn, $dispatcher_id, $dispatcher_cert) = @_;
+sub _interactive_approve ($n, $log_fn, $dispatcher_id, $dispatcher_cert) {
     my $reqs = list_requests();
     my $r    = $reqs->[$n - 1];
     unless ($r) {
@@ -598,8 +584,7 @@ sub _interactive_approve {
 }
 
 # Deny the Nth request in the current queue (1-based index).
-sub _interactive_deny {
-    my ($n, $log_fn) = @_;
+sub _interactive_deny ($n, $log_fn) {
     my $reqs = list_requests();
     my $r    = $reqs->[$n - 1];
     unless ($r) {
@@ -610,8 +595,7 @@ sub _interactive_deny {
 }
 
 # Approve a request by reqid, with error handling for interactive context.
-sub _do_approve {
-    my ($reqid, $log_fn, $dispatcher_id, $dispatcher_cert) = @_;
+sub _do_approve ($reqid, $log_fn, $dispatcher_id, $dispatcher_cert) {
     eval {
         approve_request(
             reqid           => $reqid,
@@ -630,8 +614,7 @@ sub _do_approve {
 }
 
 # Deny a request by reqid, with error handling for interactive context.
-sub _do_deny {
-    my ($reqid, $log_fn) = @_;
+sub _do_deny ($reqid, $log_fn) {
     eval {
         deny_request(
             reqid  => $reqid,
@@ -647,8 +630,7 @@ sub _do_deny {
     }
 }
 
-sub _handle_pair_request {
-    my ($conn, $peer_ip, $log_fn, $max_queue, $pairing_dir) = @_;
+sub _handle_pair_request ($conn, $peer_ip, $log_fn, $max_queue = undef, $pairing_dir = undef) {
     $max_queue  //= 10;
     $pairing_dir //= $PAIRING_DIR;
 
@@ -773,20 +755,18 @@ sub _handle_pair_request {
     unlink "$pairing_dir/$reqid.json";
 }
 
-sub _send_raw {
-    my ($conn, $body) = @_;
+sub _send_raw ($conn, $body) {
     Exec::Http::send_raw($conn, 200, $body);
 }
 
-sub _gen_reqid {
+sub _gen_reqid () {
     return Exec::Random::hex_bytes(8);
 }
 
 # Delete pending .json request files older than 10 minutes that have no
 # corresponding .approved or .denied response. These are left behind by
 # failed pairing attempts (e.g. run without sudo on the agent side).
-sub _expire_stale_requests {
-    my ($pairing_dir) = @_;
+sub _expire_stale_requests ($pairing_dir) {
     my $cutoff = time() - 600;
     opendir my $dh, $pairing_dir or return;
     while (my $f = readdir $dh) {
@@ -800,8 +780,7 @@ sub _expire_stale_requests {
     closedir $dh;
 }
 
-sub _write_file {
-    my ($path, $content) = @_;
+sub _write_file ($path, $content) {
     return Exec::FileUtil::write_atomic($path, $content);
 }
 
@@ -809,13 +788,13 @@ sub _write_file {
 # Identical computation to the agent side - both derive the code from the
 # CSR content independently so no extra round-trip is required.
 # The operator verifies both displays match before approving.
-sub _pairing_code {
-    return Exec::Digest::pairing_code($_[0]);
+sub _pairing_code ($csr_pem) {
+    return Exec::Digest::pairing_code($csr_pem);
 }
 
 # Extract the notAfter date from a PEM cert string (via Exec::CertInfo).
-sub _cert_expiry_from_pem {
-    return Exec::CertInfo::expiry_from_pem($_[0]);
+sub _cert_expiry_from_pem ($cert_pem) {
+    return Exec::CertInfo::expiry_from_pem($cert_pem);
 }
 
 1;

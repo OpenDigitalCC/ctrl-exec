@@ -2,6 +2,8 @@ package Exec::API;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use JSON       qw(encode_json decode_json);
 use POSIX      qw(WNOHANG);
 use Carp       qw(croak);
@@ -40,8 +42,7 @@ my $VERSION = do {
 # The server listens on api_port (default 7445).
 # TLS is enabled if api_cert and api_key are both present in config.
 # Plain HTTP is used otherwise.
-sub run {
-    my (%opts) = @_;
+sub run (%opts) {
     my $config = $opts{config} or croak "config required";
 
     my $port     = $config->{api_port}  // 7445;
@@ -128,8 +129,7 @@ sub run {
 
 # --- private ---
 
-sub _make_server {
-    my ($port, $bind, $use_tls, $cert, $key) = @_;
+sub _make_server ($port, $bind, $use_tls, $cert, $key) {
 
     if ($use_tls) {
         require IO::Socket::SSL;
@@ -160,8 +160,7 @@ sub _make_server {
     }
 }
 
-sub _handle_connection {
-    my ($conn, $peer, $config) = @_;
+sub _handle_connection ($conn, $peer, $config) {
 
     # Read request line
     my $request_line = <$conn>;
@@ -270,13 +269,11 @@ sub _handle_connection {
     }
 }
 
-sub _handle_health {
-    my ($conn) = @_;
+sub _handle_health ($conn) {
     _send_json($conn, 200, { ok => JSON::true, version => $VERSION });
 }
 
-sub _handle_ping {
-    my ($conn, $peer, $body, $config) = @_;
+sub _handle_ping ($conn, $peer, $body, $config) {
 
     my $req = _parse_body($conn, $body) or return;
 
@@ -319,8 +316,7 @@ sub _handle_ping {
     _send_json($conn, 200, { ok => JSON::true, results => $results });
 }
 
-sub _handle_run {
-    my ($conn, $peer, $body, $config) = @_;
+sub _handle_run ($conn, $peer, $body, $config) {
 
     my $req = _parse_body($conn, $body) or return;
 
@@ -414,8 +410,7 @@ sub _handle_run {
     _send_json($conn, 200, { ok => JSON::true, reqid => $reqid, results => $results });
 }
 
-sub _handle_discovery {
-    my ($conn, $peer, $body, $config) = @_;
+sub _handle_discovery ($conn, $peer, $body, $config) {
 
     # Optional body: { "hosts": [...], "username": "...", "token": "..." }
     # If no hosts specified, use the full agent registry
@@ -480,8 +475,7 @@ sub _handle_discovery {
     _send_json($conn, 200, { ok => JSON::true, hosts => \%by_host });
 }
 
-sub _handle_index {
-    my ($conn, $config) = @_;
+sub _handle_index ($conn, $config) {
     _send_json($conn, 200, {
         name      => 'ctrl-exec-api',
         version   => $VERSION,
@@ -500,8 +494,7 @@ sub _handle_index {
     });
 }
 
-sub _handle_openapi {
-    my ($conn) = @_;
+sub _handle_openapi ($conn) {
     unless (-f $OPENAPI_PATH) {
         _send_error($conn, 404, 'not found', 'openapi.json not installed');
         return;
@@ -514,8 +507,7 @@ sub _handle_openapi {
     Exec::Http::send_raw($conn, 200, $body);
 }
 
-sub _handle_openapi_live {
-    my ($conn, $peer, $config) = @_;
+sub _handle_openapi_live ($conn, $peer, $config) {
 
     unless (-f $OPENAPI_PATH) {
         _send_error($conn, 404, 'not found', 'openapi.json not installed');
@@ -568,8 +560,7 @@ sub _handle_openapi_live {
 # surfaces the schema here - it does not interpret `arguments`/`argv` or fold
 # them into the `/run` request contract (whose `args` stays a positional array).
 # Standard tooling ignores `x-` fields; the data is informational.
-sub _build_live_spec {
-    my ($spec, $hostnames, $results) = @_;
+sub _build_live_spec ($spec, $hostnames, $results) {
     $hostnames //= [];
     $results   //= [];
 
@@ -645,8 +636,7 @@ sub _build_live_spec {
     return $spec;
 }
 
-sub _handle_status {
-    my ($conn, $reqid, $peer, $auth_token, $config) = @_;
+sub _handle_status ($conn, $reqid, $peer, $auth_token, $config) {
 
     Exec::RunStore::purge();
 
@@ -695,8 +685,7 @@ sub _handle_status {
     _send_json($conn, 200, { ok => JSON::true, %public });
 }
 
-sub _parse_body {
-    my ($conn, $body) = @_;
+sub _parse_body ($conn, $body) {
     unless ($body && length $body) {
         _send_error($conn, 400, 'bad request', 'request body required');
         return undef;
@@ -709,15 +698,13 @@ sub _parse_body {
     return $req;
 }
 
-sub _send_json {
-    my ($conn, $status, $data) = @_;
+sub _send_json ($conn, $status, $data) {
     Exec::Http::send_json($conn, $status, $data);
 }
 
 # Send the standard 403 auth-denial (with the hook's deny fields). Used by every
 # endpoint that gates on the auth hook except /status, which denies as 404.
-sub _send_auth_denied {
-    my ($conn, $auth, $config) = @_;
+sub _send_auth_denied ($conn, $auth, $config) {
     _send_json($conn, 403, {
         ok => JSON::false,
         %{ Exec::Auth::deny_fields($auth, $config) },
@@ -726,8 +713,7 @@ sub _send_auth_denied {
 
 # Resolve a host list to dispatch targets, or send a 404 and return undef. On
 # success returns the full resolve_dispatch result (callers read ->{hosts}).
-sub _resolve_or_404 {
-    my ($conn, $hosts) = @_;
+sub _resolve_or_404 ($conn, $hosts) {
     my $resolved = Exec::Registry::resolve_dispatch($hosts);
     return $resolved if $resolved->{ok};
     _send_error($conn, 404, 'unknown agent',
@@ -735,8 +721,7 @@ sub _resolve_or_404 {
     return undef;
 }
 
-sub _send_error {
-    my ($conn, $status, $error, $detail) = @_;
+sub _send_error ($conn, $status, $error, $detail = undef) {
     _send_json($conn, $status, {
         ok    => JSON::false,
         error => $error,

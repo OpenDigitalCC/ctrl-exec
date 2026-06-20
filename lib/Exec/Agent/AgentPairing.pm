@@ -2,6 +2,8 @@ package Exec::Agent::AgentPairing;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use File::Temp qw(tempfile tempdir);
 use File::Basename qw(dirname);
 use File::Path qw(make_path);
@@ -16,8 +18,7 @@ use Exec::Random qw();
 # Generate a private key and CSR using openssl
 # Returns hashref: { key_pem => '...', csr_pem => '...' }
 # or dies on failure
-sub generate_key_and_csr {
-    my (%opts) = @_;
+sub generate_key_and_csr (%opts) {
     my $hostname  = $opts{hostname}  or croak "hostname required";
     my $bits      = $opts{bits}      // 4096;
 
@@ -48,8 +49,7 @@ sub generate_key_and_csr {
 # Generate a CSR from the existing agent key, without generating a new key.
 # Used for cert renewal - key continuity is preserved.
 # Returns hashref: { csr_pem => '...' } or dies on failure.
-sub generate_csr_only {
-    my (%opts) = @_;
+sub generate_csr_only (%opts) {
     my $hostname = $opts{hostname}  or croak "hostname required";
     my $key_path = $opts{key_path}  or croak "key_path required";
 
@@ -72,8 +72,7 @@ sub generate_csr_only {
 
 
 # cert_dir defaults to /etc/ctrl-exec-agent
-sub store_certs {
-    my (%opts) = @_;
+sub store_certs (%opts) {
     my $cert_pem          = $opts{cert_pem}          or croak "cert_pem required";
     my $ca_pem            = $opts{ca_pem}             or croak "ca_pem required";
     my $key_pem           = $opts{key_pem}            or croak "key_pem required";
@@ -123,8 +122,7 @@ sub store_certs {
 # Check whether the agent has been paired
 # Returns hashref: { paired => 1, expiry => 'YYYY-MM-DD' }
 #               or { paired => 0, reason => '...' }
-sub pairing_status {
-    my (%opts) = @_;
+sub pairing_status (%opts) {
     my $cert_dir = $opts{cert_dir} // '/etc/ctrl-exec-agent';
     my $cert     = "$cert_dir/agent.crt";
     my $key      = "$cert_dir/agent.key";
@@ -148,8 +146,7 @@ sub pairing_status {
 # Two-phase pairing: submit CSR, get reqid, keep socket open.
 # Returns { ok => 1, reqid => '...', sock => $sock, nonce => '...' }
 #      or { ok => 0, error => '...' }
-sub submit_pairing_request {
-    my (%opts) = @_;
+sub submit_pairing_request (%opts) {
     my $dispatcher_host = $opts{'ctrl-exec'} or croak "ctrl-exec required";
     my $port            = $opts{port}       // 7444;
     my $csr_pem         = $opts{csr_pem}    or croak "csr_pem required";
@@ -242,8 +239,7 @@ sub submit_pairing_request {
 # Call after submit_pairing_request succeeds.
 # Returns { ok => 1, cert_pem => '...', ca_pem => '...', dispatcher_serial => '...' }
 #      or { ok => 0, error => '...' }
-sub await_pairing_result {
-    my (%opts) = @_;
+sub await_pairing_result (%opts) {
     my $sock  = $opts{sock}  or croak "sock required";
     my $nonce = $opts{nonce} or croak "nonce required";
 
@@ -290,8 +286,7 @@ sub await_pairing_result {
 # letters, digits, dot, hyphen, underscore, capped at 64 chars, so it is safe in
 # a syslog line, an env var value, a map-file token, and an async run-owner tag.
 # Serials rotate; this identity does not, so per-dispatcher policy keys on it.
-sub valid_dispatcher_id {
-    my ($id) = @_;
+sub valid_dispatcher_id ($id) {
     return defined $id && $id =~ /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/ ? 1 : 0;
 }
 
@@ -303,8 +298,7 @@ sub valid_dispatcher_id {
 # comments; malformed lines are skipped.
 #
 # Returns hashref: { '<hex-serial>' => '<id>', ... }
-sub load_trusted_dispatchers {
-    my (%opts) = @_;
+sub load_trusted_dispatchers (%opts) {
     my $path = $opts{path} or croak "path required";
 
     my %trusted;
@@ -332,8 +326,7 @@ sub load_trusted_dispatchers {
 # Returns the id string when the serial is trusted, or undef when it is not (or
 # when either input is empty). Normalises the serial the same way the loader
 # does, so a decimal serial from IO::Socket::SSL matches a hex map entry.
-sub dispatcher_trusted {
-    my ($peer_serial, $trusted) = @_;
+sub dispatcher_trusted ($peer_serial, $trusted) {
     return undef unless ref $trusted eq 'HASH';
     my $hex = Exec::CertInfo::serial_to_hex($peer_serial // '');
     return undef unless length $hex;
@@ -351,8 +344,7 @@ sub dispatcher_trusted {
 #   path   => $str
 #   serial => $str   (any form accepted by serial_to_hex)
 #   id     => $str   (must satisfy valid_dispatcher_id)
-sub add_trusted_dispatcher {
-    my (%opts) = @_;
+sub add_trusted_dispatcher (%opts) {
     my $path = $opts{path} or croak "path required";
     my $hex  = Exec::CertInfo::serial_to_hex($opts{serial} // '');
     croak "invalid dispatcher serial" unless length $hex;
@@ -382,8 +374,7 @@ sub add_trusted_dispatcher {
 # Required opts:
 #   path   => $str
 #   serial => $str   (any form accepted by serial_to_hex)
-sub remove_trusted_dispatcher {
-    my (%opts) = @_;
+sub remove_trusted_dispatcher (%opts) {
     my $path = $opts{path} or croak "path required";
     my $hex  = Exec::CertInfo::serial_to_hex($opts{serial} // '');
     croak "invalid dispatcher serial" unless length $hex;
@@ -409,8 +400,7 @@ sub remove_trusted_dispatcher {
 # Lines beginning with # are treated as comments and ignored.
 #
 # Returns hashref: { 'aabbcc...' => 1, ... }
-sub load_revoked_serials {
-    my (%opts) = @_;
+sub load_revoked_serials (%opts) {
     my $path = $opts{path} or croak "path required";
 
     my %revoked;
@@ -443,8 +433,7 @@ sub load_revoked_serials {
 # Return true if the given serial (lowercase hex from _peer_serial,
 # or any format accepted by serial_to_hex) is in the revoked set.
 # Normalises the input to lowercase hex before checking.
-sub serial_revoked {
-    my ($serial, $revoked) = @_;
+sub serial_revoked ($serial, $revoked) {
     return 0 unless defined $serial && ref $revoked eq 'HASH';
     my $hex = Exec::CertInfo::serial_to_hex($serial);
     return exists $revoked->{$hex} ? 1 : 0;
@@ -459,8 +448,8 @@ sub _gen_nonce {
     return Exec::Random::hex_bytes(16);
 }
 
-sub _run_or_die {
-    return Exec::Cmd::run_or_die(@_);
+sub _run_or_die (@args) {
+    return Exec::Cmd::run_or_die(@args);
 }
 
 # Validate a candidate (renewed) cert before adopting it: it must verify against
@@ -469,8 +458,7 @@ sub _run_or_die {
 # robustness gate - never adopt a cert that would not actually work, and never
 # let a buggy or hostile delivery overwrite a working cert - not a secret
 # boundary. Returns (1) on success or (0, $reason).
-sub validate_cert {
-    my (%o) = @_;
+sub validate_cert (%o) {
     my $cert_pem = defined $o{cert_pem} ? $o{cert_pem} : croak "cert_pem required";
     my $ca_path  = $o{ca_path}  or croak "ca_path required";
     my $key_path = $o{key_path} or croak "key_path required";
@@ -503,8 +491,7 @@ sub validate_cert {
 # it atomically to $staged_path (in the agent-writable state dir). The live cert
 # is NOT touched here - it is promoted at the next agent start (promote_staged_cert).
 # Returns { ok => 1 } or { ok => 0, error => ... }.
-sub stage_renewed_cert {
-    my (%o) = @_;
+sub stage_renewed_cert (%o) {
     my $cert_pem    = defined $o{cert_pem} ? $o{cert_pem} : croak "cert_pem required";
     my $staged_path = $o{staged_path} or croak "staged_path required";
 
@@ -523,8 +510,7 @@ sub stage_renewed_cert {
 # file. A staged cert that fails validation is dropped without touching the live
 # cert, so a bad delivery can never wedge promotion or break the running agent.
 # Returns { ok => 1, promoted => 0|1 } or { ok => 0, error => ... }.
-sub promote_staged_cert {
-    my (%o) = @_;
+sub promote_staged_cert (%o) {
     my $staged_path = $o{staged_path} or croak "staged_path required";
     my $cert_path   = $o{cert_path}   or croak "cert_path required";
 
@@ -555,8 +541,7 @@ sub promote_staged_cert {
 # present, is owned by it (0750) so the non-root agent can rewrite files in it
 # later. Best-effort: a missing user/group or a failed chown (e.g. non-root in
 # tests) is left to the caller's packaging to settle, not fatal here.
-sub _ensure_owned_dir {
-    my ($dir, $account) = @_;
+sub _ensure_owned_dir ($dir, $account) {
     make_path($dir) unless -d $dir;
     my $uid = getpwnam($account);
     my $gid = getgrnam($account);
@@ -566,13 +551,12 @@ sub _ensure_owned_dir {
     chmod 0750, $dir;
 }
 
-sub _write_file {
-    my ($path, $content, $mode) = @_;
+sub _write_file ($path, $content, $mode) {
     return Exec::FileUtil::write_atomic($path, $content, mode => $mode, make_dir => 0);
 }
 
-sub _cert_expiry {
-    return Exec::CertInfo::expiry_from_path($_[0]);
+sub _cert_expiry ($cert) {
+    return Exec::CertInfo::expiry_from_path($cert);
 }
 
 1;

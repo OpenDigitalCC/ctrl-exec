@@ -2,6 +2,8 @@
 
 use strict;
 use warnings;
+use feature qw(signatures);
+no warnings qw(experimental::signatures);
 use FindBin qw($Bin);
 use lib "$Bin/../lib";
 
@@ -27,8 +29,8 @@ sub main {
     Exec::API::run(config => $config);
 }
 
-sub load_config {
-    return Exec::DispatcherConfig::load_config($_[0]);
+sub load_config ($path) {
+    return Exec::DispatcherConfig::load_config($path);
 }
 
 sub usage {

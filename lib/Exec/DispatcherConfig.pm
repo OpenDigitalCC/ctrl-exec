@@ -7,12 +7,13 @@ package Exec::DispatcherConfig;
 
 use strict;
 use warnings;
+use feature      qw(signatures);
+no warnings      qw(experimental::signatures);
 use Exporter qw(import);
 
 our @EXPORT_OK = qw(load_config);
 
-sub load_config {
-    my ($path) = @_;
+sub load_config ($path) {
     open my $fh, '<', $path
         or die "Cannot open config '$path': $!\n";
     my %config;

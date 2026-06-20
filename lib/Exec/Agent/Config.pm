@@ -2,6 +2,8 @@ package Exec::Agent::Config;
 
 use strict;
 use warnings;
+use feature qw(signatures);
+no warnings qw(experimental::signatures);
 use Carp qw(croak);
 use Cwd  qw(abs_path);
 use Exec::Log qw();
@@ -10,8 +12,7 @@ use Exec::RateLimit qw();
 
 # Load and validate agent.conf
 # Returns hashref of config values or dies with error
-sub load_config {
-    my ($path) = @_;
+sub load_config ($path = undef) {
     $path //= '/etc/ctrl-exec-agent/agent.conf';
 
     open my $fh, '<', $path
@@ -67,8 +68,7 @@ sub load_config {
     return \%config;
 }
 
-sub _validate_config {
-    my ($config, $path) = @_;
+sub _validate_config ($config, $path) {
     my @required = qw(port cert key ca);
     for my $key (@required) {
         croak "Missing required config key '$key' in '$path'"
@@ -241,8 +241,7 @@ sub _validate_config {
 #
 # Optional opts:
 #   script_dirs => \@dirs   (arrayref of approved directories; undef = no restriction)
-sub load_allowlist {
-    my ($path, $script_dirs) = @_;
+sub load_allowlist ($path = undef, $script_dirs = undef) {
     $path //= '/etc/ctrl-exec-agent/scripts.conf';
 
     open my $fh, '<', $path
@@ -307,8 +306,7 @@ sub load_allowlist {
 # Returns the script path if permitted, undef otherwise
 #
 # Optional: script_dirs => \@dirs  re-validates path at execution time
-sub validate_script {
-    my ($name, $allowlist, $script_dirs) = @_;
+sub validate_script ($name, $allowlist, $script_dirs = undef) {
     return unless defined $name && $name =~ /^[\w-]+$/;
     my $entry = $allowlist->{$name};
     return unless defined $entry;
@@ -324,8 +322,7 @@ sub validate_script {
 }
 
 # The profile name assigned to a script in the allowlist ('default' when unset).
-sub script_profile {
-    my ($name, $allowlist) = @_;
+sub script_profile ($name, $allowlist) {
     my $entry = $allowlist->{$name};
     return undef unless defined $entry;
     return ref $entry eq 'HASH' ? ($entry->{profile} // 'default') : 'default';
@@ -339,8 +336,7 @@ sub script_profile {
 # (empty when all resolve). Fail-closed: callers (serve startup, self-check)
 # treat a non-empty result as a fatal config error rather than silently running
 # an undefined - possibly over-permissive - profile.
-sub validate_profiles {
-    my ($allowlist, $config) = @_;
+sub validate_profiles ($allowlist, $config) {
     my %defined = %{ $config->{profiles} // {} };
     my @unknown;
     for my $name (sort keys %$allowlist) {
@@ -360,8 +356,7 @@ sub validate_profiles {
 # not-yet-installed script being filtered at config load time) it falls back
 # to the literal path; such an entry cannot be executed anyway, and once the
 # file exists the execution-time check resolves it.
-sub _path_in_dirs {
-    my ($path, $dirs) = @_;
+sub _path_in_dirs ($path, $dirs) {
     my $real = abs_path($path) // $path;
     for my $dir (@$dirs) {
         my $rdir = abs_path($dir) // $dir;
@@ -375,8 +370,7 @@ sub _path_in_dirs {
 # with insignificant leading zeros stripped ("10.00.0.0" -> "10.0.0.0"). Returns
 # the canonical string, or undef if the address is not a well-formed IPv4. Used
 # at config load so ip_allowed only ever compares canonical octets.
-sub _normalize_ipv4 {
-    my ($addr) = @_;
+sub _normalize_ipv4 ($addr) {
     return undef unless defined $addr;
     my @oct = split /\./, $addr, -1;
     return undef unless @oct == 4;
@@ -393,9 +387,7 @@ sub _normalize_ipv4 {
 # every entry here is a well-formed dotted-quad with no leading zeros; the live
 # peer IP from the socket is likewise canonical, so string-eq octet matching is
 # sound. IPv6 addresses (containing ':') return 0 silently.
-sub ip_allowed {
-    my ($ip, $allowed_ref) = @_;
-
+sub ip_allowed ($ip, $allowed_ref) {
     # IPv6: not supported - return 0 silently
     return 0 if $ip =~ /:/;
 
