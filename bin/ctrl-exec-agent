@@ -10,6 +10,7 @@ use Exec::Agent::Schema    qw();
 use Exec::Agent::AgentPairing   qw();
 use Exec::Agent::Server         qw();
 use Exec::Digest                qw();
+use Exec::Random                qw();
 use Exec::RateLimit qw();
 use Exec::Log            qw();
 use JSON                       qw(encode_json decode_json);
@@ -663,7 +664,7 @@ sub mode_self_ping {
     print "  mTLS handshake: OK\n";
 
     # Send a ping request
-    my $reqid = sprintf('%08x', int(rand(0xffffffff)));
+    my $reqid = Exec::Random::hex_bytes(4);
     my $body  = JSON::encode_json({ reqid => $reqid });
     print $conn "POST /ping HTTP/1.0\r\n";
     print $conn "Content-Type: application/json\r\n";

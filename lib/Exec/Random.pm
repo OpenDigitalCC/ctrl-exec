@@ -11,16 +11,19 @@ use Exporter qw(import);
 
 our @EXPORT_OK = qw(hex_bytes);
 
-# $n random bytes as lowercase hex. Croaks if /dev/urandom cannot be read; a
-# caller that must not fail (e.g. a best-effort correlation id) should catch it
-# or keep its own fallback.
+# $n random bytes as lowercase hex. Croaks if /dev/urandom cannot be opened OR
+# returns a short read - fail closed rather than hand back a shorter, weaker
+# token. There is deliberately no rand() fallback: these bytes guard reqids and
+# nonces against guessing/replay, and Perl's rand() is not cryptographic.
 sub hex_bytes {
     my ($n) = @_;
     open my $fh, '<:raw', '/dev/urandom'
         or croak "Cannot open /dev/urandom: $!";
-    my $buf;
-    read $fh, $buf, $n;
+    my $got = read $fh, my $buf, $n;
     close $fh;
+    croak "Short read from /dev/urandom: wanted $n bytes, got "
+        . (defined $got ? $got : 'undef')
+        unless defined $got && $got == $n;
     return unpack 'H*', $buf;
 }
 

@@ -5,6 +5,7 @@ use warnings;
 use JSON  qw(encode_json decode_json);
 use Carp  qw(croak);
 use Exec::CertInfo qw();
+use Exec::Random   qw();
 
 use Exec::Log qw();
 
@@ -320,14 +321,11 @@ sub parse_host {
     return ($host_str, $default_port // $DEFAULT_PORT);
 }
 
-# Generate a cryptographically random 16-hex-character request ID.
+# Generate a cryptographically random 16-hex-character request ID. Delegates to
+# the one urandom reader (Exec::Random) - no rand() fallback, because a reqid is
+# the unguessable capability that gates async result fetches.
 sub gen_reqid {
-    open my $fh, '<:raw', '/dev/urandom'
-        or return sprintf '%08x%08x', int(rand(0xffffffff)), int(rand(0xffffffff));
-    my $buf;
-    sysread $fh, $buf, 8;
-    close $fh;
-    return unpack 'H*', $buf;
+    return Exec::Random::hex_bytes(8);
 }
 
 # --- private ---
