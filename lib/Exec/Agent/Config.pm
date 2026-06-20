@@ -86,6 +86,11 @@ sub _validate_config {
         delete $config->{script_dirs};   # absent = no restriction
     }
 
+    # KEEP IN SYNC WITH src/ctrl-exec-exec.c (set_profile_field / parse_agent_conf).
+    # The executor re-derives the same security decision from this same config; if
+    # the two parsers diverge, the executor applies a different privilege than this
+    # front-end authorised. t/exec-conformance.t gates that they agree.
+    #
     # Normalise security profiles ([profile <name>] blocks): caps -> arrayref of
     # CAP_* names, writable -> arrayref of absolute dirs, run_as validated,
     # no_new_privileges -> bool (default on). The executor enforces caps, run_as

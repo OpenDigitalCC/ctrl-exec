@@ -18,6 +18,10 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
   bounding an aggregate connection flood.
 - **Fixed** a registry lost-update in `edit_agent` too (now under the same lock as
   the other read-modify-write updates).
+- **Changed** the agent renew timer to decide via `ctrl-exec-agent cert-staged`
+  (which reads `cert_staging_path` from config) instead of a hard-coded path, so a
+  staging-path override is honoured. Added `cert-promote`/`maintain` failure
+  patterns to the LOGGING alert reference.
 - **Changed** the three servers (API, agent, pairing) to share one `Exec::Http`
   response writer, removing the drifted hand-rolled status-phrase tables (413 and
   500 were inconsistent across them). No wire change beyond the phrase text.

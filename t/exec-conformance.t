@@ -104,6 +104,18 @@ my @fixtures = (
         scripts => "s = /opt/s.sh profile=big\n",
         names   => [qw(s)],
     },
+    {
+        label   => 'whole-line comments + mixed comma/space cap separators agree',
+        agent   => $REQUIRED . "script_dirs = /opt/s\n"
+                 . "# a comment line in agent.conf\n"
+                 . "[profile mixed]\n"
+                 . "run_as = www-data\n"
+                 . "caps = CAP_CHOWN,CAP_KILL CAP_SETUID\n"
+                 . "no_new_privileges = yes\n",
+        scripts => "# a comment line in scripts.conf\n"
+                 . "s = /opt/s/s.sh profile=mixed\n",
+        names   => [qw(s)],
+    },
 );
 
 for my $fx (@fixtures) {

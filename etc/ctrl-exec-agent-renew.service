@@ -9,6 +9,6 @@ Type=oneshot
 # agent was running). The restart triggers the unit's ExecStartPre promote step,
 # which installs the staged cert; the server then comes up on it. No staged cert
 # means no restart and no disruption. Runs as root (default) so try-restart works.
-# The staged path matches the agent default (cert_staging_path); if you override
-# that in agent.conf, update this line to match.
-ExecStart=/bin/sh -c 'test -f /var/lib/ctrl-exec-agent/agent.crt.staged && systemctl try-restart ctrl-exec-agent.service || true'
+# `cert-staged` reads cert_staging_path from agent.conf, so an override is honoured
+# without editing this unit.
+ExecStart=/bin/sh -c 'ctrl-exec-agent cert-staged && systemctl try-restart ctrl-exec-agent.service || true'

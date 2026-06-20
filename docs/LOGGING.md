@@ -1520,6 +1520,8 @@ Execution failures
 | `ACTION=run ERROR=` (dispatcher-side) | dispatcher could not reach agent or parse response | Check agent reachability and cert validity |
 | `ACTION=ping ERROR=` | Ping failed | Agent unreachable or cert issue; cert renewal will not trigger until ping succeeds |
 | `ACTION=renew ERROR=` | Cert renewal failed | Check agent connectivity; cert will expire if renewals continue to fail |
+| `ACTION=cert-promote ERROR=` (agent) | Agent could not install a staged renewed cert at startup | The agent keeps its current (still-valid) cert and starts normally - but the renewal is not adopted; check the staged cert and the cert-dir permissions. A silently ineffective `ExecStartPre`/promote shows up only here, so alert on it. |
+| `ACTION=maintain PHASE=<phase> ERROR=` (dispatcher) | A maintenance phase (ping/rotate/broadcast/expire) failed during the periodic run | Renewal/rotation for that run did not complete; retried on the next maintenance interval. Repeated failures mean certs are not being renewed - investigate before they expire. |
 | `ACTION=cert-rotation-fail` | dispatcher cert rotation failed | Investigate immediately; rotation retried on next check interval |
 
 Rotation events

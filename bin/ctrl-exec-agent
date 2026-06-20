@@ -65,6 +65,7 @@ sub main {
         'self-check'      => \&mode_self_check,
         'self-ping'       => \&mode_self_ping,
         'promote-cert'    => \&mode_promote_cert,
+        'cert-staged'     => \&mode_cert_staged,
     );
 
     my $handler = $dispatch{$mode}
@@ -116,6 +117,19 @@ sub mode_promote_cert {
     elsif (!$r->{ok}) {
         Exec::Log::log_action('WARNING', { ACTION => 'cert-promote', ERROR => $r->{error} });
     }
+}
+
+# Exit 0 if a renewed cert is staged and awaiting adoption, else exit 1. Reads
+# cert_staging_path from config so the renew timer's decision honours an override
+# (the timer cannot read the config itself). Used as the guard in
+# ctrl-exec-agent-renew.service before it restarts the agent.
+sub mode_cert_staged {
+    my ($opts) = @_;
+    my $config = eval { Exec::Agent::Config::load_config($CONFIG_PATH) };
+    exit 1 unless $config;
+    my $staged = $config->{cert_staging_path}
+              // '/var/lib/ctrl-exec-agent/agent.crt.staged';
+    exit(-f $staged ? 0 : 1);
 }
 
 sub mode_serve {

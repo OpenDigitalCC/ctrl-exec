@@ -462,7 +462,10 @@ sub _pairing_serve {
         $check_pid = 0;
     }
     elsif ($check_pid == 0) {
-        sleep 5;   # let the listener bind first
+        # Best-effort ordering nudge so the pairing listener binds before the
+        # first rotation check logs - not a correctness requirement (the rotation
+        # loop does not depend on the listener), so the exact delay is not load-bearing.
+        sleep 5;
         eval {
             Exec::Rotation::check_and_rotate(config => $config);
             Exec::Rotation::broadcast_serial(config => $config);
