@@ -26,6 +26,25 @@ use Exec::Log                 qw();
 # --- connection handler (runs in forked child) ---
 # Reads raw HTTP/1.0 request from IO::Socket::SSL, dispatches, sends response.
 
+# Authenticate the calling dispatcher by its cert serial against the trusted map.
+# Returns the dispatcher id on success. On a serial mismatch it sends the 403,
+# logs a serial-reject (with the request's reqid, or '(none)' where there is none
+# yet), and returns undef - the caller then returns. The single place run/ping/
+# rotate-serial/result enforce the trusted-serial gate.
+sub _require_dispatcher {
+    my ($conn, $peer, $peer_serial, $trusted, $reqid) = @_;
+    my $dispatcher = Exec::Agent::AgentPairing::dispatcher_trusted($peer_serial, $trusted);
+    return $dispatcher if defined $dispatcher;
+    _send_raw($conn, 403, encode_json({ error => 'serial mismatch', status => 'forbidden' }));
+    Exec::Log::log_action('WARNING', {
+        ACTION      => 'serial-reject',
+        PEER        => $peer,
+        PEER_SERIAL => $peer_serial,
+        REQID       => (defined $reqid ? $reqid : '(none)'),
+    });
+    return undef;
+}
+
 sub handle_connection {
     my ($conn, $peer, $allowlist, $config, $revoked, $trusted, $peer_serial, $schemas, $version) = @_;
 
@@ -119,14 +138,8 @@ sub handle_connection {
 sub handle_rotate_serial {
     my ($conn, $body, $peer, $config, $trusted, $peer_serial) = @_;
 
-    my $dispatcher = Exec::Agent::AgentPairing::dispatcher_trusted($peer_serial, $trusted);
-    unless (defined $dispatcher) {
-        _send_raw($conn, 403, encode_json({ error => 'serial mismatch', status => 'forbidden' }));
-        Exec::Log::log_action('WARNING', {
-            ACTION => 'serial-reject', PEER => $peer, PEER_SERIAL => $peer_serial,
-        });
-        return;
-    }
+    my $dispatcher = _require_dispatcher($conn, $peer, $peer_serial, $trusted);
+    return unless defined $dispatcher;
 
     my $data       = eval { decode_json($body) } // {};
     my $new_serial = $data->{serial};
@@ -208,17 +221,8 @@ sub handle_rotate_serial {
 sub handle_run {
     my ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial) = @_;
 
-    my $dispatcher = Exec::Agent::AgentPairing::dispatcher_trusted($peer_serial, $trusted);
-    unless (defined $dispatcher) {
-        _send_raw($conn, 403, encode_json({ error => 'serial mismatch', status => 'forbidden' }));
-        Exec::Log::log_action('WARNING', {
-            ACTION      => 'serial-reject',
-            PEER        => $peer,
-            PEER_SERIAL => $peer_serial,
-            REQID       => '(none)',
-        });
-        return;
-    }
+    my $dispatcher = _require_dispatcher($conn, $peer, $peer_serial, $trusted);
+    return unless defined $dispatcher;
 
     my $data = eval { decode_json($body) };
     if ($@) {
@@ -420,17 +424,8 @@ sub handle_run {
 sub handle_ping {
     my ($conn, $body, $peer, $config, $trusted, $peer_serial, $version) = @_;
 
-    my $dispatcher = Exec::Agent::AgentPairing::dispatcher_trusted($peer_serial, $trusted);
-    unless (defined $dispatcher) {
-        _send_raw($conn, 403, encode_json({ error => 'serial mismatch', status => 'forbidden' }));
-        Exec::Log::log_action('WARNING', {
-            ACTION      => 'serial-reject',
-            PEER        => $peer,
-            PEER_SERIAL => $peer_serial,
-            REQID       => '(none)',
-        });
-        return;
-    }
+    my $dispatcher = _require_dispatcher($conn, $peer, $peer_serial, $trusted);
+    return unless defined $dispatcher;
 
     my $data  = eval { decode_json($body) } // {};
     my $reqid = $data->{reqid} // '';
@@ -645,17 +640,8 @@ sub handle_capabilities {
 sub handle_result {
     my ($conn, $reqid, $peer, $config, $trusted, $peer_serial) = @_;
 
-    my $dispatcher = Exec::Agent::AgentPairing::dispatcher_trusted($peer_serial, $trusted);
-    unless (defined $dispatcher) {
-        _send_raw($conn, 403, encode_json({ error => 'serial mismatch', status => 'forbidden' }));
-        Exec::Log::log_action('WARNING', {
-            ACTION      => 'serial-reject',
-            PEER        => $peer,
-            PEER_SERIAL => $peer_serial,
-            REQID       => $reqid,
-        });
-        return;
-    }
+    my $dispatcher = _require_dispatcher($conn, $peer, $peer_serial, $trusted, $reqid);
+    return unless defined $dispatcher;
 
     my $record = Exec::Agent::AsyncRunner::result($reqid, _async_runs_dir($config), $dispatcher);
 
