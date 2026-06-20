@@ -6,7 +6,7 @@
 #
 # serial_to_hex is a private function (_serial_to_hex is how handle_capabilities
 # calls it) but is also called as serial_to_hex from serial_revoked. Tests
-# call it as Exec::Agent::AgentPairing::serial_to_hex, which is the public
+# call it as Exec::CertInfo::serial_to_hex, which is the public
 # name. If the agent code is calling _serial_to_hex that is a separate bug
 # noted in SECURITY-FINDINGS.md.
 
@@ -29,17 +29,17 @@ Exec::Log::init('test');
 # ---------------------------------------------------------------------------
 
 subtest 'serial_to_hex: lowercase hex passthrough' => sub {
-    is Exec::Agent::AgentPairing::serial_to_hex('deadbeef'), 'deadbeef',
+    is Exec::CertInfo::serial_to_hex('deadbeef'), 'deadbeef',
         'lowercase hex returned unchanged';
 };
 
 subtest 'serial_to_hex: uppercase hex normalised to lowercase' => sub {
-    is Exec::Agent::AgentPairing::serial_to_hex('DEADBEEF'), 'deadbeef',
+    is Exec::CertInfo::serial_to_hex('DEADBEEF'), 'deadbeef',
         'uppercase hex lowercased';
 };
 
 subtest 'serial_to_hex: mixed case normalised' => sub {
-    is Exec::Agent::AgentPairing::serial_to_hex('DeAdBeEf'), 'deadbeef',
+    is Exec::CertInfo::serial_to_hex('DeAdBeEf'), 'deadbeef',
         'mixed case lowercased';
 };
 
@@ -48,24 +48,24 @@ subtest 'serial_to_hex: mixed case normalised' => sub {
 # normalise to the same minimal hex the live readers produce, or it never
 # matches and the dispatcher is rejected as a serial mismatch.
 subtest 'serial_to_hex: leading 00 byte stripped' => sub {
-    is Exec::Agent::AgentPairing::serial_to_hex('00aabbccdd'), 'aabbccdd',
+    is Exec::CertInfo::serial_to_hex('00aabbccdd'), 'aabbccdd',
         'leading 00 byte dropped';
-    is Exec::Agent::AgentPairing::serial_to_hex('0000aabbccdd'), 'aabbccdd',
+    is Exec::CertInfo::serial_to_hex('0000aabbccdd'), 'aabbccdd',
         'multiple leading zero bytes dropped';
-    is Exec::Agent::AgentPairing::serial_to_hex('00DEADBEEF'), 'deadbeef',
+    is Exec::CertInfo::serial_to_hex('00DEADBEEF'), 'deadbeef',
         'leading 00 dropped and lowercased';
 };
 
 subtest 'serial_to_hex: stored leading-00 matches live minimal hex' => sub {
     # The exact failure mode: openssl/Net::SSLeay emit 'aabbccdd'; an older
     # migrated entry stored '00aabbccdd'. Both must resolve to one key.
-    is Exec::Agent::AgentPairing::serial_to_hex('00aabbccdd'),
-       Exec::Agent::AgentPairing::serial_to_hex('aabbccdd'),
+    is Exec::CertInfo::serial_to_hex('00aabbccdd'),
+       Exec::CertInfo::serial_to_hex('aabbccdd'),
        'migrated and live forms canonicalise identically';
 };
 
 subtest 'serial_to_hex: an all-zero serial keeps one digit' => sub {
-    is Exec::Agent::AgentPairing::serial_to_hex('00'), '0',
+    is Exec::CertInfo::serial_to_hex('00'), '0',
         'all-zero serial does not strip to empty';
 };
 
@@ -74,12 +74,12 @@ subtest 'serial_to_hex: an all-zero serial keeps one digit' => sub {
 # ---------------------------------------------------------------------------
 
 subtest 'serial_to_hex: 0x prefix stripped' => sub {
-    is Exec::Agent::AgentPairing::serial_to_hex('0xDEADBEEF'), 'deadbeef',
+    is Exec::CertInfo::serial_to_hex('0xDEADBEEF'), 'deadbeef',
         '0x prefix stripped and lowercased';
 };
 
 subtest 'serial_to_hex: 0X uppercase prefix stripped' => sub {
-    is Exec::Agent::AgentPairing::serial_to_hex('0XDEADBEEF'), 'deadbeef',
+    is Exec::CertInfo::serial_to_hex('0XDEADBEEF'), 'deadbeef',
         '0X prefix stripped';
 };
 
@@ -88,12 +88,12 @@ subtest 'serial_to_hex: 0X uppercase prefix stripped' => sub {
 # ---------------------------------------------------------------------------
 
 subtest 'serial_to_hex: serial= prefix stripped' => sub {
-    is Exec::Agent::AgentPairing::serial_to_hex('serial=DEADBEEF'), 'deadbeef',
+    is Exec::CertInfo::serial_to_hex('serial=DEADBEEF'), 'deadbeef',
         'serial= prefix stripped';
 };
 
 subtest 'serial_to_hex: Serial= mixed-case prefix stripped' => sub {
-    is Exec::Agent::AgentPairing::serial_to_hex('Serial=DEADBEEF'), 'deadbeef',
+    is Exec::CertInfo::serial_to_hex('Serial=DEADBEEF'), 'deadbeef',
         'Serial= mixed-case prefix stripped';
 };
 
@@ -102,17 +102,17 @@ subtest 'serial_to_hex: Serial= mixed-case prefix stripped' => sub {
 # ---------------------------------------------------------------------------
 
 subtest 'serial_to_hex: decimal 3735928559 = 0xDEADBEEF' => sub {
-    is Exec::Agent::AgentPairing::serial_to_hex('3735928559'), 'deadbeef',
+    is Exec::CertInfo::serial_to_hex('3735928559'), 'deadbeef',
         'decimal converted to hex';
 };
 
 subtest 'serial_to_hex: decimal 255 -> ff' => sub {
-    is Exec::Agent::AgentPairing::serial_to_hex('255'), 'ff',
+    is Exec::CertInfo::serial_to_hex('255'), 'ff',
         '255 decimal -> ff';
 };
 
 subtest 'serial_to_hex: decimal 256 -> 100' => sub {
-    is Exec::Agent::AgentPairing::serial_to_hex('256'), '100',
+    is Exec::CertInfo::serial_to_hex('256'), '100',
         '256 decimal -> 100';
 };
 
@@ -125,7 +125,7 @@ subtest 'serial_to_hex: large decimal serial >64-bit' => sub {
     # = '0x3a0c92075c0dbf3b8acbc5f96ce3f0ad2'
     my $decimal  = '1234567890123456789012345678901234567890';
     my $expected = '3a0c92075c0dbf3b8acbc5f96ce3f0ad2';
-    my $result   = eval { Exec::Agent::AgentPairing::serial_to_hex($decimal) };
+    my $result   = eval { Exec::CertInfo::serial_to_hex($decimal) };
     if ($@) {
         skip "Math::BigInt not available: $@", 1;
         return;
@@ -135,7 +135,7 @@ subtest 'serial_to_hex: large decimal serial >64-bit' => sub {
 
 subtest 'serial_to_hex: large hex serial round-trips unchanged' => sub {
     my $hex    = 'a3f9b2c10001deadbeef0102030405060708090a';
-    my $result = Exec::Agent::AgentPairing::serial_to_hex($hex);
+    my $result = Exec::CertInfo::serial_to_hex($hex);
     is $result, $hex, 'large hex serial returned unchanged';
 };
 
@@ -144,17 +144,17 @@ subtest 'serial_to_hex: large hex serial round-trips unchanged' => sub {
 # ---------------------------------------------------------------------------
 
 subtest 'serial_to_hex: colon-separated hex DE:AD:BE:EF' => sub {
-    my $result = Exec::Agent::AgentPairing::serial_to_hex('DE:AD:BE:EF');
+    my $result = Exec::CertInfo::serial_to_hex('DE:AD:BE:EF');
     is $result, 'deadbeef', 'colon-separated hex normalised';
 };
 
 subtest 'serial_to_hex: colon-separated with leading zero byte 00:DE:AD:BE:EF' => sub {
-    my $result = Exec::Agent::AgentPairing::serial_to_hex('00:DE:AD:BE:EF');
+    my $result = Exec::CertInfo::serial_to_hex('00:DE:AD:BE:EF');
     is $result, 'deadbeef', 'leading zero byte in colon-separated stripped';
 };
 
 subtest 'serial_to_hex: colon-separated lowercase ca:fe:ba:be' => sub {
-    my $result = Exec::Agent::AgentPairing::serial_to_hex('ca:fe:ba:be');
+    my $result = Exec::CertInfo::serial_to_hex('ca:fe:ba:be');
     is $result, 'cafebabe', 'lowercase colon-separated normalised';
 };
 
@@ -163,16 +163,16 @@ subtest 'serial_to_hex: colon-separated lowercase ca:fe:ba:be' => sub {
 # ---------------------------------------------------------------------------
 
 subtest 'serial_to_hex: zero decimal' => sub {
-    my $result = Exec::Agent::AgentPairing::serial_to_hex('0');
+    my $result = Exec::CertInfo::serial_to_hex('0');
     like $result, qr/^0+$/, "zero decimal -> '0'";
 };
 
 subtest 'serial_to_hex: empty string returns empty string' => sub {
-    is Exec::Agent::AgentPairing::serial_to_hex(''), '', 'empty string -> empty string';
+    is Exec::CertInfo::serial_to_hex(''), '', 'empty string -> empty string';
 };
 
 subtest 'serial_to_hex: undef returns empty string' => sub {
-    is Exec::Agent::AgentPairing::serial_to_hex(undef), '', 'undef -> empty string';
+    is Exec::CertInfo::serial_to_hex(undef), '', 'undef -> empty string';
 };
 
 # ---------------------------------------------------------------------------
@@ -181,21 +181,21 @@ subtest 'serial_to_hex: undef returns empty string' => sub {
 
 subtest 'serial_to_hex: decimal and hex of same value produce identical output' => sub {
     # 4294967295 = 0xFFFFFFFF
-    my $from_decimal = Exec::Agent::AgentPairing::serial_to_hex('4294967295');
-    my $from_hex     = Exec::Agent::AgentPairing::serial_to_hex('FFFFFFFF');
+    my $from_decimal = Exec::CertInfo::serial_to_hex('4294967295');
+    my $from_hex     = Exec::CertInfo::serial_to_hex('FFFFFFFF');
     is $from_decimal, $from_hex,
         'decimal and hex of same serial produce identical output';
 };
 
 subtest 'serial_to_hex: 0x-prefixed and plain hex produce identical output' => sub {
-    my $with    = Exec::Agent::AgentPairing::serial_to_hex('0xCAFEBABE');
-    my $without = Exec::Agent::AgentPairing::serial_to_hex('CAFEBABE');
+    my $with    = Exec::CertInfo::serial_to_hex('0xCAFEBABE');
+    my $without = Exec::CertInfo::serial_to_hex('CAFEBABE');
     is $with, $without, '0x-prefixed and plain hex identical';
 };
 
 subtest 'serial_to_hex: serial= prefix and plain hex produce identical output' => sub {
-    my $prefixed = Exec::Agent::AgentPairing::serial_to_hex('serial=CAFEBABE');
-    my $plain    = Exec::Agent::AgentPairing::serial_to_hex('CAFEBABE');
+    my $prefixed = Exec::CertInfo::serial_to_hex('serial=CAFEBABE');
+    my $plain    = Exec::CertInfo::serial_to_hex('CAFEBABE');
     is $prefixed, $plain, 'serial= prefix and plain hex identical';
 };
 
@@ -205,14 +205,14 @@ subtest 'serial_to_hex: serial= prefix and plain hex produce identical output' =
 
 subtest 'serial_to_hex: output is always lowercase' => sub {
     for my $input ('ABCDEF01', '0xABCDEF', 'serial=ABCDEF') {
-        my $result = Exec::Agent::AgentPairing::serial_to_hex($input);
+        my $result = Exec::CertInfo::serial_to_hex($input);
         next unless length $result;
         is lc($result), $result, "output is lowercase for '$input'";
     }
 };
 
 subtest 'serial_to_hex: output has no 0x prefix' => sub {
-    my $result = Exec::Agent::AgentPairing::serial_to_hex('0xDEADBEEF');
+    my $result = Exec::CertInfo::serial_to_hex('0xDEADBEEF');
     unlike $result, qr/^0x/i, 'no 0x prefix in output';
 };
 

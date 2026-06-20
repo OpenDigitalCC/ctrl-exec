@@ -353,7 +353,7 @@ sub approve_request {
     if (-f $disp_cert) {
         my $out = `openssl x509 -noout -serial -in \Q$disp_cert\E 2>/dev/null`;
         if (defined $out && $out =~ /serial=([0-9A-Fa-f]+)/) {
-            $disp_serial = lc $1;
+            $disp_serial = Exec::CertInfo::serial_to_hex($1);
         }
     }
     # An empty serial means the agent is paired but trusts no serial for this

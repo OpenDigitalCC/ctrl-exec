@@ -19,6 +19,7 @@ use Exec::Agent::AsyncRunner  qw();
 use Exec::Agent::Schema       qw();
 use Exec::Agent::AgentPairing qw();
 use Exec::Agent::ExecClient   qw();
+use Exec::CertInfo            qw();
 use Exec::Auth                qw();
 use Exec::Http                qw();
 use Exec::Log                 qw();
@@ -186,7 +187,7 @@ sub handle_rotate_serial {
         else {
             # Retire: only a serial that currently belongs to THIS dispatcher's
             # identity - never another dispatcher's, and a no-op if absent.
-            my $hex = Exec::Agent::AgentPairing::serial_to_hex($new_serial);
+            my $hex = Exec::CertInfo::serial_to_hex($new_serial);
             my $map = Exec::Agent::AgentPairing::load_trusted_dispatchers(path => $trusted_path);
             die "serial not owned by '$dispatcher'\n"
                 if exists $map->{$hex} && $map->{$hex} ne $dispatcher;

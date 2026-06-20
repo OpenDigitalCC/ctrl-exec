@@ -9,6 +9,7 @@ use lib "$Bin/../lib";
 use JSON       qw(decode_json);
 
 use Exec::CA               qw();
+use Exec::CertInfo         qw();
 use Exec::Pairing          qw();
 use Exec::Agent::AgentPairing qw();
 
@@ -21,8 +22,10 @@ use Exec::Agent::AgentPairing qw();
 sub cert_serial {
     my ($path) = @_;
     my $out = `openssl x509 -noout -serial -in \Q$path\E 2>/dev/null`;
-    return lc($1) if $out =~ /serial=([0-9A-Fa-f]+)/;
-    return '';
+    # Canonicalise the same way the readers do (Exec::CertInfo::serial_to_hex) -
+    # openssl can emit a leading 00 byte that the canonical form strips, so a raw
+    # lc() here would not match the stored serial.
+    return $out =~ /serial=([0-9A-Fa-f]+)/ ? Exec::CertInfo::serial_to_hex($1) : '';
 }
 
 my $ca   = tempdir(CLEANUP => 1);

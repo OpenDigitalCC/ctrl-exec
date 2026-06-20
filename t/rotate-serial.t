@@ -36,7 +36,7 @@ sub rotate_add {
 # Mirror the handler's RETIRE: refuse to remove a serial owned by another identity.
 sub rotate_remove {
     my ($path, $serial, $caller_id) = @_;
-    my $hex = Exec::Agent::AgentPairing::serial_to_hex($serial);
+    my $hex = Exec::CertInfo::serial_to_hex($serial);
     my $map = load($path);
     die "serial not owned by '$caller_id'\n"
         if exists $map->{$hex} && $map->{$hex} ne $caller_id;

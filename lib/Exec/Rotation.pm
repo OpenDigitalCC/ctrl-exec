@@ -454,7 +454,7 @@ sub _read_cert_serial {
     my ($cert_path) = @_;
     my $out = `openssl x509 -noout -serial -in \Q$cert_path\E 2>/dev/null`;
     return unless defined $out && $out =~ /serial=([0-9A-Fa-f]+)/;
-    return lc $1;
+    return Exec::CertInfo::serial_to_hex($1);
 }
 
 sub _cert_days_remaining {
