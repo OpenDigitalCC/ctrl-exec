@@ -30,6 +30,11 @@ auth_hook = /etc/ctrl-exec/auth-hook
 # Scripts that exceed this will be reported as a timeout failure.
 # read_timeout = 60
 
+# Max concurrent agent connections per fan-out operation (run/ping/discovery over
+# a fleet) (default: 64). Bounds how many TLS clients are forked at once so a large
+# fleet does not exhaust file descriptors; hosts beyond the cap queue.
+# max_parallel = 64
+
 # API server port (default: 7445).
 # api_port = 7445
 
