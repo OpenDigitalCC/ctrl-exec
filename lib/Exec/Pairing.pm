@@ -13,6 +13,7 @@ use Socket      qw(getaddrinfo getnameinfo
                    AI_NUMERICHOST NI_NAMEREQD NI_NUMERICHOST NIx_NOSERV);
 
 use Exec::RateLimit qw();
+use Exec::Http      qw();
 
 
 my $PAIRING_DIR = '/var/lib/ctrl-exec/pairing';
@@ -850,12 +851,7 @@ sub _handle_pair_request {
 
 sub _send_raw {
     my ($conn, $body) = @_;
-    print $conn
-        "HTTP/1.0 200 OK\r\n",
-        "Content-Type: application/json\r\n",
-        "Content-Length: ", length($body), "\r\n",
-        "\r\n",
-        $body;
+    Exec::Http::send_raw($conn, 200, $body);
 }
 
 sub _gen_reqid {

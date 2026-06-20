@@ -7,6 +7,9 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 
 ## 0.11.2 — security hardening; config errors fail clearly instead of looping
 
+- **Changed** the three servers (API, agent, pairing) to share one `Exec::Http`
+  response writer, removing the drifted hand-rolled status-phrase tables (413 and
+  500 were inconsistent across them). No wire change beyond the phrase text.
 - **Fixed** a registry lost-update: concurrent read-modify-write of an agent
   record (serial status, expiry, tags - which a maintenance run can touch at
   once) could drop a change. A registry-wide lock now serialises those updates.

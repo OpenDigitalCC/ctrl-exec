@@ -6,6 +6,7 @@ use JSON       qw(encode_json decode_json);
 use POSIX      qw(WNOHANG);
 use Carp       qw(croak);
 
+use Exec::Http     qw();
 use Exec::Log      qw();
 use Exec::Engine   qw();
 use Exec::Auth     qw();
@@ -726,14 +727,7 @@ sub _parse_body {
 
 sub _send_json {
     my ($conn, $status, $data) = @_;
-    my $body   = encode_json($data);
-    my $phrase = _status_phrase($status);
-    print $conn
-        "HTTP/1.0 $status $phrase\r\n",
-        "Content-Type: application/json\r\n",
-        "Content-Length: ", length($body), "\r\n",
-        "\r\n",
-        $body;
+    Exec::Http::send_json($conn, $status, $data);
 }
 
 sub _send_error {
@@ -743,22 +737,6 @@ sub _send_error {
         error => $error,
         ($detail ? (detail => $detail) : ()),
     });
-}
-
-sub _status_phrase {
-    my ($code) = @_;
-    my %phrases = (
-        200 => 'OK',
-        202 => 'Accepted',
-        400 => 'Bad Request',
-        403 => 'Forbidden',
-        404 => 'Not Found',
-        409 => 'Conflict',
-        413 => 'Payload Too Large',
-        431 => 'Request Header Fields Too Large',
-        500 => 'Internal Server Error',
-    );
-    return $phrases{$code} // 'Unknown';
 }
 
 1;

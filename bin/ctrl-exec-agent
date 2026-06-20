@@ -12,6 +12,7 @@ use Exec::Agent::Schema    qw();
 use Exec::Agent::AgentPairing   qw();
 use Exec::RateLimit qw();
 use Exec::Auth           qw();
+use Exec::Http           qw();
 use Exec::Log            qw();
 use JSON                       qw(encode_json decode_json);
 use POSIX                      qw(SIGTERM WNOHANG strftime);
@@ -1359,23 +1360,7 @@ sub _send_json {
 
 sub _send_raw {
     my ($conn, $code, $body) = @_;
-    my %status_text = (
-        200 => 'OK',
-        202 => 'Accepted',
-        400 => 'Bad Request',
-        403 => 'Forbidden',
-        404 => 'Not Found',
-        409 => 'Conflict',
-        413 => 'Content Too Large',
-        431 => 'Request Header Fields Too Large',
-    );
-    my $text = $status_text{$code} // 'Error';
-    print $conn
-        "HTTP/1.0 $code $text\r\n",
-        "Content-Type: application/json\r\n",
-        "Content-Length: ", length($body), "\r\n",
-        "\r\n",
-        $body;
+    Exec::Http::send_raw($conn, $code, $body);
 }
 
 # Compute a 6-digit confirmation code from a CSR PEM string.
