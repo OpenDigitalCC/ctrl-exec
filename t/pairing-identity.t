@@ -9,9 +9,9 @@ use Exec::Pairing qw();
 
 # --- _reverse_lookup: graceful on bad/absent input (no DNS dependency) ---
 
-is Exec::Pairing::_reverse_lookup(undef),       undef, 'reverse: undef IP -> undef';
-is Exec::Pairing::_reverse_lookup(''),          undef, 'reverse: empty IP -> undef';
-is Exec::Pairing::_reverse_lookup('unknown'),   undef, "reverse: 'unknown' -> undef";
+is Exec::Pairing::Identity::reverse_lookup(undef),       undef, 'reverse: undef IP -> undef';
+is Exec::Pairing::Identity::reverse_lookup(''),          undef, 'reverse: empty IP -> undef';
+is Exec::Pairing::Identity::reverse_lookup('unknown'),   undef, "reverse: 'unknown' -> undef";
 
 # --- _identity_recommendation: keyed on the reverse-DNS signal ---
 
@@ -22,7 +22,7 @@ subtest 'confirmed reverse differs from reported name -> suggest rename' => sub 
         reverse_dns       => 'ai-dev.home.example',
         reverse_confirmed => 1,
     };
-    my $rec = Exec::Pairing::_identity_recommendation($req);
+    my $rec = Exec::Pairing::Identity::identity_recommendation($req);
     like $rec, qr/forward-confirmed/,            'mentions forward-confirmed';
     like $rec, qr/edit-agent ai-dev --rename ai-dev\.home\.example/,
         'suggests rename to the resolvable FQDN';
@@ -36,7 +36,7 @@ subtest 'confirmed reverse equals reported name -> hostname is fine' => sub {
         reverse_dns       => 'web-01.lan.example',
         reverse_confirmed => 1,
     };
-    my $rec = Exec::Pairing::_identity_recommendation($req);
+    my $rec = Exec::Pairing::Identity::identity_recommendation($req);
     like $rec, qr/forward-confirmed/,        'notes confirmation';
     like $rec, qr/lookup_by=hostname/,       'says hostname resolution is fine';
     unlike $rec, qr/edit-agent/,             'no fix needed, no edit suggested';
@@ -49,7 +49,7 @@ subtest 'no confirmed reverse -> suggest lookup-by ip with source' => sub {
         reverse_dns       => '',
         reverse_confirmed => 0,
     };
-    my $rec = Exec::Pairing::_identity_recommendation($req);
+    my $rec = Exec::Pairing::Identity::identity_recommendation($req);
     like $rec, qr/could not forward-confirm/i,                'explains the gap';
     like $rec, qr/edit-agent ai-dev --lookup-by ip --ip 10\.0\.0\.6/,
         'suggests dispatch by source IP';
@@ -64,7 +64,7 @@ subtest 'unconfirmed reverse is treated as no name' => sub {
         reverse_dns       => 'evil.example',
         reverse_confirmed => 0,
     };
-    my $rec = Exec::Pairing::_identity_recommendation($req);
+    my $rec = Exec::Pairing::Identity::identity_recommendation($req);
     unlike $rec, qr/--rename/,        'unconfirmed PTR is never a rename target';
     like   $rec, qr/--lookup-by ip/,  'falls back to IP';
 };
@@ -72,7 +72,7 @@ subtest 'unconfirmed reverse is treated as no name' => sub {
 # --- _identity_lines: surfaces all signals ---
 
 subtest 'identity lines show name, source IP, reverse DNS' => sub {
-    my @lines = Exec::Pairing::_identity_lines({
+    my @lines = Exec::Pairing::Identity::identity_lines({
         hostname          => 'ai-dev',
         ip                => '10.0.0.6',
         source_ip         => '10.0.0.6',
@@ -87,7 +87,7 @@ subtest 'identity lines show name, source IP, reverse DNS' => sub {
 };
 
 subtest 'identity lines flag a reported IP that differs (NAT)' => sub {
-    my @lines = Exec::Pairing::_identity_lines({
+    my @lines = Exec::Pairing::Identity::identity_lines({
         hostname  => 'ai-dev',
         ip        => '192.168.1.5',   # agent self-reported (private)
         source_ip => '203.0.113.9',   # what the dispatcher saw (NAT gateway)
@@ -97,7 +97,7 @@ subtest 'identity lines flag a reported IP that differs (NAT)' => sub {
 };
 
 subtest 'identity lines note when no reverse DNS resolves' => sub {
-    my @lines = Exec::Pairing::_identity_lines({
+    my @lines = Exec::Pairing::Identity::identity_lines({
         hostname => 'ai-dev', ip => '10.0.0.6', source_ip => '10.0.0.6',
     });
     like join("\n", @lines), qr/Reverse DNS:\s+\(none/, 'notes absent reverse DNS';
