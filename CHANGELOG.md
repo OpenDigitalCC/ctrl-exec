@@ -5,6 +5,45 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
+## 0.12.2 — security & correctness review hardening
+
+- **Changed (BREAKING)** the security-profile model: there is no longer an
+  implicit built-in `default` profile. Previously a script with no `profile=`
+  annotation ran under a built-in default whose empty `run_as` meant it executed
+  as **root** (capless) - the opposite of the "restrictive default" the docs
+  described, so enabling the executor escalated unannotated scripts to root.
+  Now every profile, including `default` (the name an unannotated script resolves
+  to), must be defined in `agent.conf`; an undefined profile is refused
+  (fail-closed) rather than run under an implicit context. The shipped
+  `agent.conf.example` defines `[profile default]` as `run_as=nobody`, and the
+  rule is uniform: nothing runs as root unless a profile sets `run_as=root`.
+  UPGRADE: an existing `agent.conf` with unannotated scripts and no
+  `[profile default]` will refuse to serve until that block is added (the error
+  names exactly what to add) or those scripts are annotated.
+- **Fixed** a trust-key divergence in cert-serial canonicalisation: the colon
+  and plain-hex branches stripped leading zeros differently, so the same serial
+  could canonicalise two ways and a revoked/trusted entry pasted from
+  `openssl x509 -text` (colon form) could silently fail to match. One strip now,
+  used at every read.
+- **Fixed** reqid/nonce generation to route every value through the single
+  `/dev/urandom` reader, dropping a non-cryptographic `rand()` fallback.
+- **Changed** input hardening: `allowed_ips` octets are validated and
+  canonicalised at config load (a zero-padded entry no longer fails open by never
+  matching), and the unauthenticated pairing port caps the request body before
+  reading it (memory-exhaustion DoS).
+- **Changed** rate-limit eviction to an amortised single pass instead of an
+  O(n log n) sort on every accept; rotation now batches its registry writes under
+  one lock; and `list_hostnames` reads the registry from directory entries
+  instead of decoding every record.
+- **Added** behaviour tests for the root executor's privilege drop (cap masks,
+  run_as, no_new_privileges, out-of-range run_as), the previously-untested shared
+  utility modules, and made several masked/always-skipping tests able to fail.
+- **Fixed** `make-release.sh` to tag the release commit rather than the prior
+  HEAD (every tag had been one commit too early; `v0.12.0`/`v0.12.1` corrected).
+- **Changed** documentation: removed references to a removed `Exec::Output`
+  module and `request_pairing`, corrected install/source paths, completed the
+  module reference, and documented `max_parallel`.
+
 ## 0.12.0 — unprivileged API, enforced writable profiles, hands-free certs, hardening
 
 - **Changed** the HTTP API server to run as a dedicated unprivileged `ctrl-exec`
