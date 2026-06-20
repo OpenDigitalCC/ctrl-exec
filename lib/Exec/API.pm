@@ -236,10 +236,7 @@ sub _handle_connection {
         config    => $config,
     );
     unless ($auth->{ok}) {
-        _send_json($conn, 403, {
-            ok => JSON::false,
-            %{ Exec::Auth::deny_fields($auth, $config) },
-        });
+        _send_auth_denied($conn, $auth, $config);
         return;
     }
 
@@ -301,10 +298,7 @@ sub _handle_ping {
         config    => $config,
     );
     unless ($auth->{ok}) {
-        _send_json($conn, 403, {
-            ok => JSON::false,
-            %{ Exec::Auth::deny_fields($auth, $config) },
-        });
+        _send_auth_denied($conn, $auth, $config);
         return;
     }
 
@@ -312,12 +306,7 @@ sub _handle_ping {
     # Engine forks grandchildren and collects them with waitpid. Without this
     # guard the reaper steals grandchildren before waitpid can collect them,
     # returning a partial results array. local restores the handler on scope exit.
-    my $resolved = Exec::Registry::resolve_dispatch($hosts);
-    unless ($resolved->{ok}) {
-        _send_error($conn, 404, 'unknown agent',
-            'not a registered agent: ' . join(', ', @{ $resolved->{unknown} }));
-        return;
-    }
+    my $resolved = _resolve_or_404($conn, $hosts) or return;
 
     local $SIG{CHLD} = 'DEFAULT';
     my $results = Exec::Engine::ping_all(
@@ -367,10 +356,7 @@ sub _handle_run {
         config    => $config,
     );
     unless ($auth->{ok}) {
-        _send_json($conn, 403, {
-            ok => JSON::false,
-            %{ Exec::Auth::deny_fields($auth, $config) },
-        });
+        _send_auth_denied($conn, $auth, $config);
         return;
     }
 
@@ -388,12 +374,7 @@ sub _handle_run {
         return;
     }
 
-    my $resolved = Exec::Registry::resolve_dispatch($hosts);
-    unless ($resolved->{ok}) {
-        _send_error($conn, 404, 'unknown agent',
-            'not a registered agent: ' . join(', ', @{ $resolved->{unknown} }));
-        return;
-    }
+    my $resolved = _resolve_or_404($conn, $hosts) or return;
 
     my $reqid = Exec::Engine::gen_reqid();
     # The API server's SIGCHLD reaper is inherited by request-handler children.
@@ -466,10 +447,7 @@ sub _handle_discovery {
         config    => $config,
     );
     unless ($auth->{ok}) {
-        _send_json($conn, 403, {
-            ok => JSON::false,
-            %{ Exec::Auth::deny_fields($auth, $config) },
-        });
+        _send_auth_denied($conn, $auth, $config);
         return;
     }
 
@@ -479,12 +457,7 @@ sub _handle_discovery {
     # returning a partial results array. local restores the handler on scope exit.
     # Resolve registry names to connect targets through the same path as
     # ping/run, keying results by the canonical registry name.
-    my $resolved = Exec::Registry::resolve_dispatch($hosts);
-    unless ($resolved->{ok}) {
-        _send_error($conn, 404, 'unknown agent',
-            'not a registered agent: ' . join(', ', @{ $resolved->{unknown} }));
-        return;
-    }
+    my $resolved = _resolve_or_404($conn, $hosts) or return;
 
     local $SIG{CHLD} = 'DEFAULT';
     my $results = Exec::Engine::capabilities_all(
@@ -538,12 +511,7 @@ sub _handle_openapi {
     local $/;
     my $body = <$fh>;
     close $fh;
-    print $conn
-        "HTTP/1.0 200 OK\r\n",
-        "Content-Type: application/json\r\n",
-        "Content-Length: ", length($body), "\r\n",
-        "\r\n",
-        $body;
+    Exec::Http::send_raw($conn, 200, $body);
 }
 
 sub _handle_openapi_live {
@@ -587,12 +555,7 @@ sub _handle_openapi_live {
     $spec->{info}{version} = $base_version . '+' . time();
 
     my $body = encode_json($spec);
-    print $conn
-        "HTTP/1.0 200 OK\r\n",
-        "Content-Type: application/json\r\n",
-        "Content-Length: ", length($body), "\r\n",
-        "\r\n",
-        $body;
+    Exec::Http::send_raw($conn, 200, $body);
 }
 
 # Augment a parsed OpenAPI spec in place with live discovery data: inject the
@@ -749,6 +712,27 @@ sub _parse_body {
 sub _send_json {
     my ($conn, $status, $data) = @_;
     Exec::Http::send_json($conn, $status, $data);
+}
+
+# Send the standard 403 auth-denial (with the hook's deny fields). Used by every
+# endpoint that gates on the auth hook except /status, which denies as 404.
+sub _send_auth_denied {
+    my ($conn, $auth, $config) = @_;
+    _send_json($conn, 403, {
+        ok => JSON::false,
+        %{ Exec::Auth::deny_fields($auth, $config) },
+    });
+}
+
+# Resolve a host list to dispatch targets, or send a 404 and return undef. On
+# success returns the full resolve_dispatch result (callers read ->{hosts}).
+sub _resolve_or_404 {
+    my ($conn, $hosts) = @_;
+    my $resolved = Exec::Registry::resolve_dispatch($hosts);
+    return $resolved if $resolved->{ok};
+    _send_error($conn, 404, 'unknown agent',
+        'not a registered agent: ' . join(', ', @{ $resolved->{unknown} }));
+    return undef;
 }
 
 sub _send_error {
