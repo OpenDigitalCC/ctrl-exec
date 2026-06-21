@@ -1,7 +1,7 @@
 ---
 title: Changelog
 subtitle: Release history for ctrl-exec.
-updated: 2026-06-20
+updated: 2026-06-21
 github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/CHANGELOG.md
 current_page: /changelog
 ---
@@ -12,6 +12,18 @@ in [`CHANGELOG.md`](https://github.com/OpenDigitalCC/ctrl-exec/blob/main/CHANGEL
 in the repository, and the complete detail is in the git log. Unreleased work on
 `main` may be ahead of the latest version below.
 :::
+
+0.12.3
+: Critical fix - the 0.12.2 agent crashed its listener on every connection (an
+  unqualified internal call left by the handler refactor), so no agent could
+  serve run, ping or discovery. 0.12.3 restores service; no config change needed.
+
+0.12.2
+: Security and correctness review hardening. BREAKING: the built-in `default`
+  security profile is removed - every profile, including `default`, must now be
+  defined in `agent.conf`, and nothing runs as root unless a profile sets
+  `run_as = root` (fail-closed). Plus cert-serial canonicalisation, input
+  hardening and rate-limit fixes, and new executor privilege-drop tests.
 
 0.12.0
 : The HTTP API runs unprivileged - a dedicated `ctrl-exec` service user, not root,

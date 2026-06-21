@@ -5,6 +5,23 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
+## 0.12.3 — fix agent crash on every connection (0.12.2 regression)
+
+- **Fixed (CRITICAL)** the agent crashing its main process on every accepted
+  connection. The 0.12.2 refactor that moved the request handlers into
+  `Exec::Agent::Server` left the accept loop's pre-fork serial read calling
+  `_peer_serial` unqualified, so it resolved to `main::_peer_serial` (undefined)
+  and died with `Undefined subroutine &main::_peer_serial` the instant a
+  connection arrived - taking down the listener and looping under systemd
+  restart. The sub is now the public `Exec::Agent::Server::peer_serial` and the
+  bin calls it through the package qualifier. Any agent on 0.12.2 was unable to
+  serve a single request (run/ping/discovery all failed); 0.12.3 restores
+  service. No config change required.
+- **Added** a static regression guard (`t/agent-serve-symbols.t`) asserting the
+  agent bin makes no unqualified call to any `Exec::Agent::Server` sub - the
+  exact class of error `use strict` and `perl -c` cannot catch because an
+  undefined-subroutine call only fails at runtime, on a live connection.
+
 ## 0.12.2 — security & correctness review hardening
 
 - **Changed (BREAKING)** the security-profile model: there is no longer an

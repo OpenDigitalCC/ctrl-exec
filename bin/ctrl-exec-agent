@@ -363,7 +363,7 @@ MSG
 
         # Read peer cert serial before forking - after the parent closes its
         # copy of $conn the SSL object becomes invalid in the child.
-        my $peer_serial = _peer_serial($conn);
+        my $peer_serial = Exec::Agent::Server::peer_serial($conn);
         my $pid  = fork();
         if (!defined $pid) {
             warn "fork failed: $!\n";

@@ -679,7 +679,12 @@ sub _async_runs_dir ($config) {
 # IO::Socket::SSL's peer_certificate('serialNumber') is not supported in
 # all versions - use Net::SSLeay directly to read the ASN1 integer.
 # Returns '' if no peer cert or serial cannot be read.
-sub _peer_serial ($conn) {
+#
+# Public (not _private): the agent's accept loop calls this from the bin BEFORE
+# it forks - the serial must be read in the parent while the SSL object is still
+# valid - so it is part of this module's cross-package interface alongside
+# handle_connection, not an internal helper.
+sub peer_serial ($conn) {
     my $ssl  = eval { $conn->_get_ssl_object } or return '';
     my $cert = eval { Net::SSLeay::get_peer_certificate($ssl) } or return '';
     my $asn1 = eval { Net::SSLeay::X509_get_serialNumber($cert) } or return '';
