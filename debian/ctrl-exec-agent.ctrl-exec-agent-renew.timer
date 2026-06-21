@@ -1,6 +1,6 @@
 [Unit]
 Description=ctrl-exec agent - adopt a staged renewed certificate
-Documentation=https://github.com/yourorg/ctrl-exec
+Documentation=https://github.com/OpenDigitalCC/ctrl-exec
 
 [Timer]
 # Check daily (and shortly after boot) whether a renewed cert has been staged.

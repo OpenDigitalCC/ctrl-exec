@@ -1,6 +1,6 @@
 [Unit]
 Description=ctrl-exec dispatcher - certificate maintenance run
-Documentation=https://github.com/yourorg/ctrl-exec
+Documentation=https://github.com/OpenDigitalCC/ctrl-exec
 After=network-online.target
 Wants=network-online.target
 

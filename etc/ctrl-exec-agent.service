@@ -1,6 +1,6 @@
 [Unit]
 Description=ctrl-exec Agent - remote script execution service
-Documentation=https://github.com/yourorg/ctrl-exec
+Documentation=https://github.com/OpenDigitalCC/ctrl-exec
 After=network.target
 Wants=network.target
 

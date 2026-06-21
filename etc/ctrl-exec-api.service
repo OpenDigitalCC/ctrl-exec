@@ -1,6 +1,6 @@
 [Unit]
 Description=ctrl-exec-dispatcher API - HTTP API server for remote script execution
-Documentation=https://github.com/yourorg/ctrl-exec
+Documentation=https://github.com/OpenDigitalCC/ctrl-exec
 After=network.target
 Wants=network.target
 

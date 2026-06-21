@@ -1,6 +1,6 @@
 [Unit]
 Description=ctrl-exec agent - restart to adopt a staged renewed certificate
-Documentation=https://github.com/yourorg/ctrl-exec
+Documentation=https://github.com/OpenDigitalCC/ctrl-exec
 After=ctrl-exec-agent.service
 
 [Service]

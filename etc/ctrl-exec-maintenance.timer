@@ -1,6 +1,6 @@
 [Unit]
 Description=ctrl-exec dispatcher - periodic certificate maintenance
-Documentation=https://github.com/yourorg/ctrl-exec
+Documentation=https://github.com/OpenDigitalCC/ctrl-exec
 
 [Timer]
 # Drives renewal + dispatcher rotation. The renewal check fires at cert half-life
