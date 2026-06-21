@@ -134,6 +134,12 @@ FROM=""
 BUILD_DEBS=1
 DRY_RUN=0
 
+# Integration branch the release lands on. A release is normally cut on a
+# short-lived fix/prep branch; auto mode fast-forwards that into $RELEASE_BRANCH
+# before pushing, so the tag and the branch tip agree. Override for a non-main
+# trunk: RELEASE_BRANCH=trunk ./make-release.sh
+RELEASE_BRANCH="${RELEASE_BRANCH:-main}"
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --auto|--force)
@@ -613,7 +619,7 @@ echo ""
 if [[ "$DRY_RUN" -eq 1 ]]; then
     info "DRY RUN: build of $VERSION succeeded (tarball + .deb). Nothing kept."
 elif [[ "$AUTO" -eq 1 ]]; then
-    info "Auto mode: committing and pushing..."
+    info "Auto mode: committing the release..."
     git add -u                             # stages tarball/deb deletions from git rm above
     git add sbom.json VERSION NEXT_VERSION debian/changelog
     git add -f "$TARBALL" "${TARBALL}.sha256"
@@ -623,9 +629,26 @@ elif [[ "$AUTO" -eq 1 ]]; then
         git tag -a "$TAG" -m "Release $VERSION"   # now points at the release commit
         info "Tagged: $TAG ($(git rev-parse --short HEAD))"
     fi
-    git push
-    git push origin "$TAG"
-    info "Released and pushed."
+
+    # Land the release on $RELEASE_BRANCH and push commit + tag. The release is
+    # normally cut on a short-lived fix/prep branch, so fast-forward it into
+    # $RELEASE_BRANCH first - that is what makes the tag and the branch tip agree.
+    # If already on $RELEASE_BRANCH the merge is a no-op. Pushes name the remote
+    # and branch explicitly: a fix branch has no upstream, so a bare `git push`
+    # aborts with "no upstream branch" (which left a release tagged-but-unpushed).
+    REL_SRC=$(git rev-parse --abbrev-ref HEAD)
+    if [[ "$REL_SRC" != "$RELEASE_BRANCH" ]]; then
+        info "Fast-forwarding $RELEASE_BRANCH to the release commit (from $REL_SRC)..."
+        git checkout "$RELEASE_BRANCH" \
+            || die "Cannot checkout $RELEASE_BRANCH to land the release. The release commit and tag exist on $REL_SRC; merge it manually."
+        git merge --ff-only "$REL_SRC" \
+            || die "$RELEASE_BRANCH cannot fast-forward from $REL_SRC (it has diverged). Reconcile, then: git push origin $RELEASE_BRANCH && git push origin $TAG"
+    fi
+    git push origin "$RELEASE_BRANCH" \
+        || die "Push of $RELEASE_BRANCH failed. Retry: git push origin $RELEASE_BRANCH && git push origin $TAG"
+    git push origin "$TAG" \
+        || die "Push of tag $TAG failed. Retry: git push origin $TAG"
+    info "Released $VERSION: $RELEASE_BRANCH and $TAG pushed."
 else
     echo "Next steps:"
     echo ""
@@ -641,8 +664,11 @@ else
     echo "  2. Tag the release commit (must come AFTER the commit above):"
     echo "       git tag -a $TAG -m 'Release $VERSION'"
     echo ""
-    echo "  3. Push commits and tag:"
-    echo "       git push && git push origin $TAG"
+    echo "  3. Land on $RELEASE_BRANCH (if you cut this on a fix/prep branch) and"
+    echo "     push the commit and tag:"
+    echo "       git checkout $RELEASE_BRANCH"
+    echo "       git merge --ff-only <your-release-branch>"
+    echo "       git push origin $RELEASE_BRANCH && git push origin $TAG"
     echo ""
     if [[ "$BUILD_DEBS" -eq 1 ]]; then
         echo "  The .deb packages in $DIST_DIR/ are tracked in git (latest"
