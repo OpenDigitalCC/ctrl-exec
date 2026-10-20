@@ -34,7 +34,7 @@ use Exec::Log qw();   # _write_stdin logs a stdin-timeout; load it directly rath
 #                               system temp dir)
 #                   context: the stdin JSON gains an 'input' object (only when
 #                   there is input). raw: stdin is the one field's bytes and the
-#                   context JSON (without input) is in CTRL_EXEC_CONTEXT.
+#                   context JSON (without input or token) is in CTRL_EXEC_CONTEXT.
 #                   fields: stdin is empty, each field is a 0600 file in a 0700
 #                   per-run directory named by CTRL_EXEC_INPUT (CTRL_EXEC_CONTEXT
 #                   as for raw), removed once the script has been reaped
@@ -60,8 +60,11 @@ sub run_script ($script_path, $args = undef, $context = undef, $timeout = undef,
         }
     }
     else {
-        my $ctx = encode_json($context // {});
-        $extra_env{CTRL_EXEC_CONTEXT} = $ctx;
+        # The environment reaches every child the script starts, so the
+        # caller's token stays out of it (it is on stdin only, in context mode).
+        my %ctx = %{ $context // {} };
+        delete $ctx{token};
+        $extra_env{CTRL_EXEC_CONTEXT} = encode_json(\%ctx);
         if ($mode eq 'fields') {
             $fields_dir = eval { _make_fields_dir($input, $in->{tmpdir}) };
             unless (defined $fields_dir) {

@@ -26,7 +26,8 @@
 #   input=raw:<name> stdin is the bytes of the input field <name>
 #   input=fields     one 0600 file per field in $CTRL_EXEC_INPUT (a private
 #                    directory removed afterwards); stdin is empty
-# raw and fields put the context JSON in $CTRL_EXEC_CONTEXT. Any other value
+# raw and fields put the context JSON (without the caller's token) in
+# $CTRL_EXEC_CONTEXT. Any other value
 # skips the entry. Input needs executor support, which is not yet available:
 # with executor_socket set, a run that carries input is refused.
 #

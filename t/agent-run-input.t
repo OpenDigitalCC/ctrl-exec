@@ -157,7 +157,7 @@ subtest 'context mode without input: stdin has no input key' => sub {
 };
 
 subtest 'raw: stdin is the field bytes; context moves to CTRL_EXEC_CONTEXT' => sub {
-    my $r = run('rawone', { whatever => $SENTINEL });
+    my $r = run('rawone', { whatever => $SENTINEL }, token => 'TOKEN-7f3a');
     is $r->{exit}, 0, 'ran';
     my $seen = slurp("$dir/seen.rawone");
     is section($seen, 'STDIN'), $SENTINEL, 'stdin is exactly the value';
@@ -166,6 +166,8 @@ subtest 'raw: stdin is the field bytes; context moves to CTRL_EXEC_CONTEXT' => s
     my $c = JSON::PP::decode_json($ctx);
     is $c->{script}, 'rawone', 'context JSON';
     ok !exists $c->{input}, 'without input';
+    ok !exists $c->{token}, 'without the token';
+    unlike section($seen, 'ENV'), qr/TOKEN-7f3a/, 'token nowhere in the environment';
     unlike section($seen, 'ENV'), qr/CTRL_EXEC_INPUT/, 'no CTRL_EXEC_INPUT';
     not_elsewhere('rawone', 'raw');
 };

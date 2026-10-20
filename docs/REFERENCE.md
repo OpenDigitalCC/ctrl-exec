@@ -1194,7 +1194,10 @@ script changes form on the agent alone:
   `raw:<name>` needs the field `<name>` (other fields are ignored). A request
   that does not fit is refused before the script starts, naming the field
   (`invalid input: script takes input=raw:key but input field 'key' is
-  missing`). The context JSON, without `input`, is in `CTRL_EXEC_CONTEXT`.
+  missing`). The context JSON, without `input` and without the caller's
+  `token`, is in `CTRL_EXEC_CONTEXT`. The environment is inherited by every
+  program the script starts, so the token is kept out of it; a script that
+  needs the token uses `input=context`.
 
 `input=fields`
 : Stdin is empty. Each field is a file `$CTRL_EXEC_INPUT/<name>` (mode 0600) in
