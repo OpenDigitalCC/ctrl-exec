@@ -415,6 +415,51 @@ sub validate_profiles ($allowlist, $config) {
     return @unknown;
 }
 
+# Settings the running process has already acted on and cannot change without a
+# restart: the listener is bound to 'port' and holds the TLS identity loaded from
+# 'cert', 'key' and 'ca'. A reload keeps the running value of these and says so.
+use constant RESTART_ONLY_KEYS => qw(port cert key ca);
+
+# Plan a SIGHUP reload of agent.conf (and the allowlist it must agree with).
+# Nothing is applied here: the caller swaps the result in only when this returns.
+#
+#   reload_plan($config_path, $allowlist_path, $old_config, $old_allowlist)
+#     -> { config => \%new, allowlist => \%allow, notes => [ ... ] }
+#
+# Dies, leaving the caller's old config in force, when agent.conf cannot be
+# parsed or validated, or when the allowlist that would be in force names a
+# profile the new agent.conf does not define (fail-closed, as at startup). A
+# scripts.conf that cannot be read does not by itself block the reload: the
+# previous allowlist stays and the plan says so in notes. Restart-only settings
+# that changed keep their running value in the returned config and add a note.
+sub reload_plan ($config_path, $allowlist_path, $old_config, $old_allowlist) {
+    my $config = load_config($config_path);   # dies on parse/validation error
+    my @notes;
+
+    my $allowlist = eval { load_allowlist($allowlist_path) };
+    unless ($allowlist) {
+        my $err = $@ || 'unknown error'; chomp $err;
+        push @notes, "allowlist reload failed, keeping the previous allowlist: $err";
+        $allowlist = $old_allowlist;
+    }
+
+    if (my @bad = validate_profiles($allowlist, $config)) {
+        die "script(s) reference an undefined profile: " . join(', ', @bad) . "\n";
+    }
+
+    for my $k (RESTART_ONLY_KEYS) {
+        my ($old, $new) = ($old_config->{$k}, $config->{$k});
+        next if !defined $old && !defined $new;
+        next if defined $old && defined $new && $old eq $new;
+        push @notes, "'$k' changed in agent.conf but needs a restart to take effect;"
+                   . " keeping the running value";
+        if   (defined $old) { $config->{$k} = $old }
+        else                { delete $config->{$k} }
+    }
+
+    return { config => $config, allowlist => $allowlist, notes => \@notes };
+}
+
 # Return true if $path is under any directory in @$dirs.
 #
 # When the script exists - the case that matters at execution time - the path

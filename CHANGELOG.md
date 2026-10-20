@@ -113,6 +113,14 @@ task group, each adding its bullets to this entry.
   Every phase still runs, so one failure does not stop the others. A systemd
   timer run now shows the unit as failed instead of hiding a stalled certificate
   renewal. (T-040)
+- **Fixed** the agent not reloading `agent.conf` on SIGHUP: an operator who
+  tightened `allowed_ips`, a rate limit, `max_children` or `auth_hook` and reloaded
+  was not protected. SIGHUP now parses `agent.conf` into a new config
+  (`Exec::Agent::Config::reload_plan`) and swaps it in with the allowlist only if it
+  parses and every script's profile is still defined; otherwise the old config
+  stays in force and `reload-fail` is logged. `port`, `cert`, `key` and `ca` keep
+  their running value and log `reload-note` (restart needed). A `scripts.conf` that
+  cannot be read no longer empties the allowlist: the previous one is kept. (T-021)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 

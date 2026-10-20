@@ -4,6 +4,14 @@
 # Comments must be on their own line (starting with '#'). An inline '# ...' after
 # a value is NOT stripped - it becomes part of the value. So write a profile's
 # caps as `caps = CAP_CHOWN, CAP_KILL`, with any note on a separate line above.
+#
+# This file is reloaded on SIGHUP (systemctl reload ctrl-exec-agent), together
+# with scripts.conf. Everything takes effect for subsequent connections except
+# port, cert, key and ca: the listener is already bound and holds that TLS
+# identity, so changing them needs a restart (a reload keeps the running value
+# and logs that a restart is needed). A reload that cannot be applied - agent.conf
+# does not parse, or scripts.conf now names a profile this file does not define -
+# leaves the previous configuration in force and logs the reason.
 
 port = 7443
 cert = /etc/ctrl-exec-agent/agent.crt

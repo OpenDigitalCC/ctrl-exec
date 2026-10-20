@@ -690,7 +690,9 @@ Key settings:
 : Port the agent listens on for mTLS connections from the dispatcher. Default: 7443.
 
 `cert`, `key`, `ca`
-: Paths to the agent's TLS certificate, private key, and CA certificate.
+: Paths to the agent's TLS certificate, private key, and CA certificate. Like
+  `port`, these are read once at start: a change needs a restart (SIGHUP keeps
+  the running values and logs that a restart is needed).
 
 `revoked_serials`
 : Path to a file listing revoked TLS certificate serial numbers, one per line.
@@ -973,8 +975,8 @@ Under normal operation this is started and managed by the init system
 (systemd or procd). Run directly for debugging or on systems without
 a supported init system.
 
-The agent reloads `scripts.conf` and the revocation list on SIGHUP without
-restarting:
+The agent reloads `agent.conf`, `scripts.conf`, the revocation list and the
+trusted-dispatcher map on SIGHUP without restarting:
 
 ```bash
 # On systemd hosts (preferred)
@@ -983,6 +985,18 @@ systemctl reload ctrl-exec-agent
 # On systems without systemd
 kill -HUP $(pidof ctrl-exec-agent)
 ```
+
+`agent.conf` is parsed into a new configuration first and swapped in only if it
+parses and every script in `scripts.conf` still names a defined profile. If it
+does not, the previous `agent.conf` and allowlist stay in force and the reason
+is logged (`ACTION=reload-fail`) - a reload never leaves the agent serving a
+half-applied or fail-open configuration. On a successful reload `allowed_ips`,
+the rate-limit settings, `max_children`, `auth_hook`, `script_dirs`, `[tags]`,
+`[profile ...]` blocks, `executor_socket` and the other keys apply to
+subsequent connections. `port`, `cert`, `key` and `ca` cannot change without a
+restart (the listener is bound and holds that identity): the running values are
+kept and `ACTION=reload-note` logs that a restart is needed. The executor
+re-reads `agent.conf` by itself when its modification time changes.
 
 ---
 

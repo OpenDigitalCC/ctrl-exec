@@ -272,16 +272,41 @@ MSG
     );
 
     my %rate_state;
-    my $rate_config = $config->{rate_limit} // {};
+    my $rate_config  = $config->{rate_limit} // {};
+    my $max_children = $config->{max_children} // 256;
 
     $SIG{HUP} = sub {
-        warn "Reloading allowlist, schemas, revocation list, and trusted-dispatcher map...\n";
-        $allowlist = eval { Exec::Agent::Config::load_allowlist($ALLOWLIST_PATH) };
-        warn "Allowlist reload failed: $@\n" if $@;
-        $schemas = $allowlist
-            ? (eval { Exec::Agent::Schema::load_for_allowlist($allowlist) } // {})
-            : {};
-        warn "Schema reload failed: $@\n" if $@;
+        warn "Reloading agent.conf, allowlist, schemas, revocation list, and trusted-dispatcher map...\n";
+
+        # agent.conf and the allowlist are planned together and swapped in only
+        # if the plan succeeds: a broken agent.conf, or a scripts.conf that now
+        # names a profile agent.conf does not define, leaves the old config in
+        # force. Settings derived from $config are re-derived on a swap.
+        my $plan = eval {
+            Exec::Agent::Config::reload_plan($CONFIG_PATH, $ALLOWLIST_PATH, $config, $allowlist)
+        };
+        if ($plan) {
+            for my $note (@{ $plan->{notes} }) {
+                warn "ctrl-exec-agent: reload: $note\n";
+                Exec::Log::log_action('WARNING', { ACTION => 'reload-note', REASON => $note });
+            }
+            $config       = $plan->{config};
+            $allowlist    = $plan->{allowlist};
+            $rate_config  = $config->{rate_limit} // {};
+            $max_children = $config->{max_children} // 256;
+            $revoked_path = $config->{revoked_serials}
+                         // '/etc/ctrl-exec-agent/revoked-serials';
+            $trusted_path = $config->{trusted_dispatchers_path}
+                         // '/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers';
+            $schemas = eval { Exec::Agent::Schema::load_for_allowlist($allowlist) } // {};
+            warn "Schema reload failed: $@\n" if $@;
+        }
+        else {
+            my $err = $@ || 'unknown error'; $err =~ s/\s+\z//;
+            warn "agent.conf reload failed, keeping the previous configuration and allowlist: $err\n";
+            Exec::Log::log_action('ERR', { ACTION => 'reload-fail', ERROR => $err });
+        }
+
         $revoked = eval {
             Exec::Agent::AgentPairing::load_revoked_serials(path => $revoked_path)
         };
@@ -349,7 +374,6 @@ MSG
     # The agent only accepts CA-signed peers, so this is defence-in-depth against
     # a many-peer flood. Generous default; configurable via max_children. $live is
     # kept exact - reaped synchronously in this loop (no async SIGCHLD handler).
-    my $max_children = $config->{max_children} // 256;
     my $live = 0;
     my $accept_failures = 0;   # consecutive accept() failures, reset on success
 

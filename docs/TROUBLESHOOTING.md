@@ -230,6 +230,14 @@ This parses both files and reports any error without touching the running
 service. It is the cheapest way to catch an inline comment or an undefined
 profile before it becomes a failed start.
 
+`systemctl reload ctrl-exec-agent` (SIGHUP) re-reads `agent.conf` as well as
+`scripts.conf`, so a tightened `allowed_ips`, rate limit or `max_children` takes
+effect without a restart. If the new `agent.conf` does not parse, or
+`scripts.conf` names a profile it does not define, the reload is refused and the
+previous configuration stays in force: look for `reload-fail` in the agent log.
+Only `port`, `cert`, `key` and `ca` need a restart; the log says so
+(`reload-note`) and the running values are kept.
+
 
 ### Agent exits 78 with "script(s) reference an undefined profile"
 

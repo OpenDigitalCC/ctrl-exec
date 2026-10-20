@@ -15,8 +15,15 @@ runs on a managed host and executes only the scripts named in a per-host
 allowlist, on request from a paired control host over HTTPS with mutual
 certificate authentication. There is no shell: arguments are passed directly
 to the named program. The agent listens on port 7443 by default and reloads
-its allowlist, revocation list, and trusted-dispatcher map on
+its configuration (except
+.IR port ,
+.IR cert ,
+.I key
+and
+.IR ca ,
+which need a restart), allowlist, revocation list, and trusted-dispatcher map on
 .BR SIGHUP .
+A reload that cannot be applied leaves the previous configuration in force.
 The agent may be paired with more than one dispatcher: each is recorded in the
 trusted-dispatcher map and every request is attributed to the dispatcher that
 made it.
