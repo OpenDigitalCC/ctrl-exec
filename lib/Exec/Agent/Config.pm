@@ -24,11 +24,11 @@ sub unreadable_path (@paths) {
     return undef;
 }
 
-# Storage limits of the C executor (src/ctrl-exec-exec.c: MAX_PROFILES, MAX_CAPS,
+# Storage limits of the C executor (src/ctrl-exec-executor.c: MAX_PROFILES, MAX_CAPS,
 # MAX_WRITABLE, MAX_DIRS, NAMELEN, VALLEN). The executor rejects a config that
 # exceeds them rather than truncating a name or path, so this parser rejects the
 # same configs - otherwise the front end would authorise a file the executor
-# refuses to load. KEEP IN SYNC WITH src/ctrl-exec-exec.c.
+# refuses to load. KEEP IN SYNC WITH src/ctrl-exec-executor.c.
 use constant {
     MAX_PROFILES => 64,
     MAX_CAPS     => 32,

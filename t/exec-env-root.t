@@ -42,8 +42,8 @@ plan skip_all => 'no free uid for the numeric run_as case' if defined getpwuid($
 
 my $TMP = tempdir(DIR => '/var/tmp', CLEANUP => 1);
 chmod 0755, $TMP;
-my $BIN = "$TMP/ctrl-exec-exec";
-system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-exec.c", '-lcap') == 0
+my $BIN = "$TMP/ctrl-exec-executor";
+system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-executor.c", '-lcap') == 0
     or plan skip_all => 'could not compile the executor';
 
 my $probe = "$TMP/probe.sh";
