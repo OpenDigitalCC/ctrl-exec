@@ -890,6 +890,8 @@ Script not found
 : Check `scripts.conf` - path must be absolute and the file must be executable
   by the `ctrl-exec-agent` user. Check syslog for `ACTION=deny` lines.
   If `script_dirs` is set, confirm the path is under an approved directory.
+  A refused run reports the reason (`script not permitted: ...`); see
+  TROUBLESHOOTING.md.
 
 Auth denied unexpectedly
 : Confirm `auth_hook` is absent or commented out in `ctrl-exec.conf` if no

@@ -296,18 +296,28 @@ sub _validate_config ($config, $path) {
 }
 
 # Load and parse scripts.conf allowlist
-# Returns hashref: { script_name => /absolute/path }
+# Returns hashref: { script_name => { path, profile } }
 # Dies on parse errors; unknown/bad entries are skipped with a warning
 #
 # Optional opts:
 #   script_dirs => \@dirs   (arrayref of approved directories; undef = no restriction)
 sub load_allowlist ($path = undef, $script_dirs = undef) {
+    my ($allowlist) = load_allowlist_full($path, $script_dirs);
+    return $allowlist;
+}
+
+# As load_allowlist, but also returns the entries that were skipped and why:
+#   ($allowlist, $skipped) = load_allowlist_full($path, $script_dirs)
+# $skipped is { script_name => "reason" }, the text a refused run reports as
+# "script not permitted: <reason>" (T-044). A line with no usable name (NUL
+# byte, malformed) cannot be keyed by name and is only warned about.
+sub load_allowlist_full ($path = undef, $script_dirs = undef) {
     $path //= '/etc/ctrl-exec-agent/scripts.conf';
 
     open my $fh, '<', $path
         or croak "Cannot open allowlist '$path': $!";
 
-    my %allowlist;
+    my (%allowlist, %skipped);
     while (my $line = <$fh>) {
         chomp $line;
         if (index($line, "\0") >= 0) {
@@ -337,23 +347,35 @@ sub load_allowlist ($path = undef, $script_dirs = undef) {
             }
 
             unless (defined $script_path) {
+                $skipped{$name} = 'its scripts.conf entry has no script path';
                 warn "Allowlist: skipping '$name' - no script path\n";
                 next;
             }
             if (defined $extra_path) {
+                $skipped{$name} = "its scripts.conf entry has more than one path"
+                                . " ('$script_path' and '$extra_path')";
                 warn "Allowlist: skipping '$name' - more than one path on the line\n";
                 next;
             }
-            if (length $script_path >= VALLEN
-                || length($annot{profile} // '') >= NAMELEN) {
+            if (length $script_path >= VALLEN) {
+                $skipped{$name} = 'its path is too long (' . length($script_path)
+                                . ' characters; the limit is ' . (VALLEN - 1) . ')';
+                warn "Allowlist: skipping '$name' - path or profile name too long\n";
+                next;
+            }
+            if (length($annot{profile} // '') >= NAMELEN) {
+                $skipped{$name} = 'its profile name is too long (' . length($annot{profile})
+                                . ' characters; the limit is ' . (NAMELEN - 1) . ')';
                 warn "Allowlist: skipping '$name' - path or profile name too long\n";
                 next;
             }
             unless ($script_path =~ m{^/}) {
+                $skipped{$name} = "'$script_path' is not an absolute path";
                 warn "Allowlist: skipping '$name' - path must be absolute: $script_path\n";
                 next;
             }
             if ($script_dirs && !_path_in_dirs($script_path, $script_dirs)) {
+                $skipped{$name} = not_in_dirs_reason($script_path, $script_dirs);
                 warn "Allowlist: skipping '$name' - path not in approved script_dirs: $script_path\n";
                 next;
             }
@@ -368,7 +390,40 @@ sub load_allowlist ($path = undef, $script_dirs = undef) {
     }
     close $fh;
 
-    return \%allowlist;
+    return (\%allowlist, \%skipped);
+}
+
+# The reason text for a path outside script_dirs, shared by the load-time skip
+# and the execution-time re-check.
+sub not_in_dirs_reason ($path, $dirs) {
+    return "'$path' is not under script_dirs (" . join(':', @$dirs) . ')';
+}
+
+# Why a run of $name is refused, for "script not permitted: <reason>":
+# the recorded skip reason, an execution-time script_dirs rejection, or
+# 'not in scripts.conf' for a name the allowlist has never heard of.
+sub not_permitted_reason ($name, $allowlist, $skipped = undef, $script_dirs = undef) {
+    return 'not in scripts.conf' unless defined $name && $name =~ /^[\w-]+$/;
+    return $skipped->{$name} if $skipped && defined $skipped->{$name};
+    my $entry = $allowlist->{$name};
+    return 'not in scripts.conf' unless defined $entry;
+    my $path = ref $entry eq 'HASH' ? $entry->{path} : $entry;
+    if (defined $path && $script_dirs && !_path_in_dirs($path, $script_dirs)) {
+        return not_in_dirs_reason($path, $script_dirs);
+    }
+    return 'not in scripts.conf';
+}
+
+# Log each skipped scripts.conf entry once (the caller calls this once per load:
+# at start-up and on each reload), with the reason a run of it will be given.
+sub log_skipped ($skipped) {
+    for my $name (sort keys %{ $skipped // {} }) {
+        Exec::Log::log_action('WARNING', {
+            ACTION => 'allowlist-skip',
+            SCRIPT => $name,
+            REASON => $skipped->{$name},
+        });
+    }
 }
 
 # Check whether a script name is permitted
@@ -423,8 +478,8 @@ use constant RESTART_ONLY_KEYS => qw(port cert key ca);
 # Plan a SIGHUP reload of agent.conf (and the allowlist it must agree with).
 # Nothing is applied here: the caller swaps the result in only when this returns.
 #
-#   reload_plan($config_path, $allowlist_path, $old_config, $old_allowlist)
-#     -> { config => \%new, allowlist => \%allow, notes => [ ... ] }
+#   reload_plan($config_path, $allowlist_path, $old_config, $old_allowlist, $old_skipped)
+#     -> { config => \%new, allowlist => \%allow, skipped => \%why, notes => [ ... ] }
 #
 # Dies, leaving the caller's old config in force, when agent.conf cannot be
 # parsed or validated, or when the allowlist that would be in force names a
@@ -432,15 +487,16 @@ use constant RESTART_ONLY_KEYS => qw(port cert key ca);
 # scripts.conf that cannot be read does not by itself block the reload: the
 # previous allowlist stays and the plan says so in notes. Restart-only settings
 # that changed keep their running value in the returned config and add a note.
-sub reload_plan ($config_path, $allowlist_path, $old_config, $old_allowlist) {
+sub reload_plan ($config_path, $allowlist_path, $old_config, $old_allowlist, $old_skipped = undef) {
     my $config = load_config($config_path);   # dies on parse/validation error
     my @notes;
 
-    my $allowlist = eval { load_allowlist($allowlist_path) };
+    my ($allowlist, $skipped) = eval { load_allowlist_full($allowlist_path, $config->{script_dirs}) };
     unless ($allowlist) {
         my $err = $@ || 'unknown error'; chomp $err;
         push @notes, "allowlist reload failed, keeping the previous allowlist: $err";
         $allowlist = $old_allowlist;
+        $skipped   = $old_skipped // {};
     }
 
     if (my @bad = validate_profiles($allowlist, $config)) {
@@ -457,7 +513,7 @@ sub reload_plan ($config_path, $allowlist_path, $old_config, $old_allowlist) {
         else                { delete $config->{$k} }
     }
 
-    return { config => $config, allowlist => $allowlist, notes => \@notes };
+    return { config => $config, allowlist => $allowlist, skipped => $skipped, notes => \@notes };
 }
 
 # Return true if $path is under any directory in @$dirs.

@@ -870,6 +870,13 @@ Functions:
   If `$script_dirs` is provided (arrayref), rejects any path not under an
   approved directory with a warning. If undef, any absolute path is accepted.
 
+`load_allowlist_full($path, $script_dirs)`
+: As `load_allowlist`, but returns `($allowlist, $skipped)`. `$skipped` maps
+  each skipped entry's name to the reason text a refused run reports (T-044).
+  `reload_plan` carries it as `skipped`; `not_permitted_reason` turns it (or an
+  execution-time `script_dirs` rejection, or an unknown name) into the text
+  after `script not permitted: `; `log_skipped` logs it once per load.
+
 `validate_script($name, $allowlist, $script_dirs)`
 : Returns the script path if `$name` matches `/^[\w-]+$/` and exists in the
   allowlist, `undef` otherwise. Security gate called on every `run` request.

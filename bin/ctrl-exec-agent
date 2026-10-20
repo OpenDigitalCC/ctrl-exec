@@ -205,10 +205,11 @@ sub mode_serve ($opts) {
         exit 78;
     }
 
-    my ($config, $allowlist, $schemas);
+    my ($config, $allowlist, $skipped, $schemas);
     eval {
         $config    = Exec::Agent::Config::load_config($CONFIG_PATH);
-        $allowlist = Exec::Agent::Config::load_allowlist($ALLOWLIST_PATH);
+        ($allowlist, $skipped) = Exec::Agent::Config::load_allowlist_full(
+            $ALLOWLIST_PATH, $config->{script_dirs});
         $schemas   = Exec::Agent::Schema::load_for_allowlist($allowlist);
 
         # Fail-closed: every allowlisted script must reference a defined profile
@@ -242,6 +243,8 @@ MSG
         # reports a single clear failure instead of respawning into a loop.
         exit 78;
     };
+
+    Exec::Agent::Config::log_skipped($skipped);
 
     # Profiles are enforced only by the executor. If scripts declare non-default
     # profiles but executor_socket is not set, those profiles are NOT applied -
@@ -283,7 +286,7 @@ MSG
         # names a profile agent.conf does not define, leaves the old config in
         # force. Settings derived from $config are re-derived on a swap.
         my $plan = eval {
-            Exec::Agent::Config::reload_plan($CONFIG_PATH, $ALLOWLIST_PATH, $config, $allowlist)
+            Exec::Agent::Config::reload_plan($CONFIG_PATH, $ALLOWLIST_PATH, $config, $allowlist, $skipped)
         };
         if ($plan) {
             for my $note (@{ $plan->{notes} }) {
@@ -292,6 +295,8 @@ MSG
             }
             $config       = $plan->{config};
             $allowlist    = $plan->{allowlist};
+            $skipped      = $plan->{skipped};
+            Exec::Agent::Config::log_skipped($skipped);
             $rate_config  = $config->{rate_limit} // {};
             $max_children = $config->{max_children} // 256;
             $revoked_path = $config->{revoked_serials}
@@ -530,7 +535,7 @@ MSG
         if ($pid == 0) {
             # Child: close server socket, handle connection, exit
             $server->close(SSL_no_shutdown => 1);
-            Exec::Agent::Server::handle_connection($conn, $peer, $allowlist, $config, $revoked, $trusted, $peer_serial, $schemas, $VERSION);
+            Exec::Agent::Server::handle_connection($conn, $peer, $allowlist, $config, $revoked, $trusted, $peer_serial, $schemas, $VERSION, $skipped);
             $conn->close;
             exit 0;
         }
@@ -759,9 +764,14 @@ sub mode_self_check {
         }
     }
 
-    my $allowlist = eval { Exec::Agent::Config::load_allowlist($ALLOWLIST_PATH) };
+    my ($allowlist, $skipped) = eval {
+        Exec::Agent::Config::load_allowlist_full($ALLOWLIST_PATH, $config->{script_dirs})
+    };
     if ($@) { print "Allowlist error: $@\n"; exit 1; }
     printf "  Allowlist OK (%d scripts)\n", scalar keys %$allowlist;
+    for my $name (sort keys %$skipped) {
+        print "  Script '$name': SKIPPED - $skipped->{$name}\n";
+    }
 
     my $status = Exec::Agent::AgentPairing::pairing_status(cert_dir => $CERT_DIR);
     if ($status->{paired}) {

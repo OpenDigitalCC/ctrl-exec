@@ -239,6 +239,36 @@ Only `port`, `cert`, `key` and `ca` need a restart; the log says so
 (`reload-note`) and the running values are kept.
 
 
+### "script not permitted"
+
+Symptom
+: A run fails with `script not permitted: <reason>`, for example:
+
+  ```
+  error: script not permitted: '/srv/scripts/agent-cert-deploy.sh' is not under script_dirs (/opt/ctrl-exec-scripts)
+  ```
+
+Cause
+: The agent refused the name. The text after the colon says which of these it
+  was:
+
+  | Reason | Fix |
+  | --- | --- |
+  | `not in scripts.conf` | The name is not listed. Add `<name> = /abs/path` to the agent's `scripts.conf`, then `systemctl reload ctrl-exec-agent` (SIGHUP). Check the spelling of the name. |
+  | `'<path>' is not under script_dirs (<dirs>)` | The most common one. `script_dirs` in `agent.conf` restricts scripts to those directories. Move the script into one, or add its directory to `script_dirs` (colon-separated), then reload. |
+  | `'<path>' is not an absolute path` | Write the full path from `/` in `scripts.conf`. |
+  | `its scripts.conf entry has more than one path` | One path per line; annotations such as `profile=` are `key=value`. |
+  | `its scripts.conf entry has no script path` | The line has only `key=value` annotations; add the path. |
+  | `its path is too long` / `its profile name is too long` | Shorten the path (under 4096 characters) or profile name (under 128). |
+
+Fix
+: Run `sudo ctrl-exec-agent self-check` on the agent: it lists every skipped
+  entry as `Script '<name>': SKIPPED - <reason>`. The agent also logs each one
+  when it loads `scripts.conf` (`ACTION=allowlist-skip`). The reasons are
+  recomputed on every reload, so edit the file and reload to clear one. A listed
+  script that is not executable is not refused with this message; the agent
+  does not check that when it loads `scripts.conf`.
+
 ### Agent exits 78 with "script(s) reference an undefined profile"
 
 Symptom

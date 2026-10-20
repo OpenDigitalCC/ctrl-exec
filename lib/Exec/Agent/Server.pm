@@ -50,7 +50,7 @@ sub _require_dispatcher ($conn, $peer, $peer_serial, $trusted, $reqid = undef) {
     return undef;
 }
 
-sub handle_connection ($conn, $peer, $allowlist, $config, $revoked, $trusted, $peer_serial = undef, $schemas = undef, $version = undef) {
+sub handle_connection ($conn, $peer, $allowlist, $config, $revoked, $trusted, $peer_serial = undef, $schemas = undef, $version = undef, $skipped = undef) {
     # $peer_serial is extracted before fork() in the accept loop - after the
     # parent closes its copy of $conn the SSL object is invalid in the child.
     $peer_serial //= '';
@@ -103,7 +103,7 @@ sub handle_connection ($conn, $peer, $allowlist, $config, $revoked, $trusted, $p
     }
 
     if ($method eq 'POST' && $path eq '/run') {
-        handle_run($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial);
+        handle_run($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial, $skipped);
     }
     elsif ($method eq 'POST' && $path eq '/ping') {
         handle_ping($conn, $body, $peer, $config, $trusted, $peer_serial, $version);
@@ -219,7 +219,7 @@ sub handle_rotate_serial ($conn, $body, $peer, $config, $trusted, $peer_serial) 
     });
 }
 
-sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial) {
+sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial, $skipped = undef) {
     my $dispatcher = _require_dispatcher($conn, $peer, $peer_serial, $trusted);
     return unless defined $dispatcher;
 
@@ -247,6 +247,11 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
     );
 
     unless ($script_path) {
+        # Say why (T-044): the reason a scripts.conf entry was skipped, or that
+        # the name is not in scripts.conf at all.
+        my $why = Exec::Agent::Config::not_permitted_reason(
+            $name, $allowlist, $skipped, $config->{script_dirs}
+        );
         Exec::Log::log_action('WARNING', {
             ACTION => 'deny',
             SCRIPT => $name,
@@ -256,7 +261,7 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
         _send_json($conn, {
             script => $name,
             exit   => -1,
-            error  => 'script not permitted',
+            error  => "script not permitted: $why",
             reqid  => $reqid,
         });
         return;

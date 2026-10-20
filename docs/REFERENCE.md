@@ -745,7 +745,10 @@ Key settings:
 `script_dirs`
 : Colon-separated list of absolute directory paths. If set, any script in
   `scripts.conf` whose path does not fall under one of these directories is
-  rejected at load time and re-validated at execution time.
+  rejected at load time and re-validated at execution time. A run of a script
+  rejected this way answers `script not permitted: '<path>' is not under
+  script_dirs (<dirs>)`, and `ctrl-exec-agent self-check` lists it as SKIPPED
+  (see "script not permitted" in TROUBLESHOOTING.md).
 
   ```
   script_dirs = /opt/ctrl-exec-scripts:/usr/local/lib/ctrl-exec-scripts
@@ -1276,7 +1279,9 @@ ctrl-exec-agent self-check
 Checks performed:
 
 - `agent.conf` parses without error and required keys are present
-- `scripts.conf` allowlist loads and all listed scripts are executable
+- `scripts.conf` allowlist loads and all listed scripts are executable;
+  entries that were skipped (path outside `script_dirs`, relative, two paths,
+  over-long) are listed as `SKIPPED` with the reason
 - Pairing certificates are present and not expired
 - If `script_dirs` is configured, all scripts in `scripts.conf` fall under
   one of the permitted directories

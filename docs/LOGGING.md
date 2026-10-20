@@ -807,7 +807,8 @@ Fields
 | REQID | hex | Request ID |
 | REASON | string | Present only when denied by auth hook; contains the hook denial reason |
 
-Allowlist denial (no REASON field):
+Allowlist denial (no REASON field; the reason is in the `allowlist-skip` line
+logged when the allowlist loaded, and in the error returned to the caller):
 
 ```
 ACTION=deny SCRIPT=unknown-script PEER=10.0.0.1 REQID=a1b2c3d4e5f60001
@@ -1190,6 +1191,28 @@ Fields
 ACTION=pair-timeout REQID=00c9845e0001
 ```
 
+### allowlist-skip
+
+Emitted at agent startup and on each SIGHUP reload, once per `scripts.conf`
+entry that was skipped, with the reason a run of that name is refused with
+(`script not permitted: <reason>`). Entries with no usable name (malformed
+lines) are reported by `config-warn` only.
+
+Priority
+: WARNING
+
+Fields
+
+| Field | Type | Description |
+| --- | --- | --- |
+| ACTION | string | `allowlist-skip` |
+| SCRIPT | string | Script name from `scripts.conf` |
+| REASON | string | Why it was skipped, e.g. path not under `script_dirs`, not absolute, two paths, path or profile name too long, no path |
+
+```
+ACTION=allowlist-skip REASON="'/srv/scripts/agent-cert-deploy.sh' is not under script_dirs (/opt/ctrl-exec-scripts)" SCRIPT=agent-cert-deploy
+```
+
 ### config-warn
 
 Emitted at startup (or SIGHUP reload) when `agent.conf` or `scripts.conf`
@@ -1538,7 +1561,7 @@ ACTION=rotation-state-corrupt PATH=/var/lib/ctrl-exec/rotation.json ERROR="..." 
 | Priority | Syslog level | Used for |
 | --- | --- | --- |
 | INFO | `daemon.info` | Normal operations: `start`, `run`, `ping`, `dispatch`, `lock-acquire`, `lock-release`, `renew`, `renew-complete`, `auth` pass, `pair-complete`, `pair-approve`, `pair-deny`, `pair-request`, `pair-reject`, `pairing-mode-start`, `pairing-mode-stop`, `capabilities` success, `rate-evict`, `unpair`, `api-start`, `api-stop`, `api-request`, `status-read` (served, not-found), `cert-check`, `cert-renewal-start`, `cert-rotated`, `serial-broadcast`, `serial-retire`, `serial-confirmed`, `revoked-serials-absent` |
-| WARNING | `daemon.warning` | Security and access events requiring attention: `deny`, `serial-reject`, `result-deny`, `status-read` (denied), `revoked-cert`, `tls-failure`, `ip-block`, `rate-block`, `capabilities-deny`, `capabilities-no-serial`, `pair-denied`, `pair-timeout`, `lock-conflict`, `config-warn`, `stdin-timeout`, `auth` deny, `serial-broadcast-fail`, `serial-stale` |
+| WARNING | `daemon.warning` | Security and access events requiring attention: `deny`, `serial-reject`, `result-deny`, `status-read` (denied), `revoked-cert`, `tls-failure`, `ip-block`, `rate-block`, `capabilities-deny`, `capabilities-no-serial`, `pair-denied`, `pair-timeout`, `lock-conflict`, `config-warn`, `allowlist-skip`, `stdin-timeout`, `auth` deny, `serial-broadcast-fail`, `serial-stale` |
 | ERR | `daemon.err` | Failures requiring investigation: `accept-fatal`, `renew` failure, `capabilities` error, `ping` error, `run` error, `auth` error (hook not executable), `cert-rotation-fail`, `rotation-state-corrupt`, `run-store-fail`, `status-read` (error) |
 
 
