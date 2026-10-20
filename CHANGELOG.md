@@ -106,6 +106,7 @@ task group, each adding its bullets to this entry.
   are unaffected. (T-022)
 - **Fixed** the Perl and C config parsers now agree on every case in a broadened conformance corpus (t/exec-conformance.t, which gates them in the normal suite): the executor takes the last valid duplicate script name as the front end does, honours `script_dirs` only at top level, treats `[PROFILE x]` case-insensitively, restricts everything for a `script_dirs` that yields no directory, rejects malformed lines, NUL bytes and the reserved top-level keys `profiles`/`tags`, and rejects over-long or over-numerous values instead of truncating them (the front end enforces the same limits). (T-031)
 - **Added** a `status-read` audit log line for every `GET /status/{reqid}` (caller IP, reqid, recorded submitter, served / denied / not-found; never the token or output), so reads of a run's output are attributable. (T-030)
+- **Added** `etc/auth-hook-args.example`, an opt-in agent `auth_hook` that validates a run's arguments against the script's schema sidecar (`argv` mapping; type, enum, pattern, bounds, and realpath-resolved `x-path-prefixes`), denying with exit 3 and a syslog line that names the argument and rule but never the value; shipped by `install.sh` and the Debian agent package, off unless `auth_hook` names it. Documented in `docs/SECURITY.md` and `docs/SCHEMA-SIDECAR.md`. (T-011)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 

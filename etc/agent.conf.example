@@ -79,6 +79,10 @@ executor_socket = /run/ctrl-exec-agent/exec.sock
 # See REFERENCE.md for the hook interface and exit code semantics.
 #
 # auth_hook = /etc/ctrl-exec-agent/auth-hook
+#
+# To constrain script ARGUMENTS from each script's schema sidecar, install
+# auth-hook-args.example (shipped beside this file) and point auth_hook at it.
+# Opt-in only; see docs/SCHEMA-SIDECAR.md and docs/SECURITY.md.
 
 # Max seconds to wait for the auth hook to finish (default: 10). A hook that
 # exceeds this is killed and the request is denied (fail closed).

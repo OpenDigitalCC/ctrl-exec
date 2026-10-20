@@ -608,6 +608,10 @@ install_agent() {
         info "Script allowlist already exists, not overwriting."
     fi
 
+    # Optional argument-constraint hook: shipped as a reference copy only. It is
+    # inactive until the operator sets auth_hook in agent.conf (off by default).
+    safe_install 755 "$SOURCE_DIR/etc/auth-hook-args.example" "$AGENT_CONF_DIR/auth-hook-args.example"
+
     # Scripts directory - root owns, agent group can read/execute
     if [[ ! -d "$SCRIPTS_DIR" ]]; then
         mkdir -p "$SCRIPTS_DIR"

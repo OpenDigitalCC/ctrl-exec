@@ -54,6 +54,7 @@ override_dh_auto_install:
 	install -m644 etc/scripts.conf.example      debian/tmp/usr/share/ctrl-exec/examples/
 	install -m644 etc/ctrl-exec.conf.example    debian/tmp/usr/share/ctrl-exec/examples/
 	install -m755 etc/auth-hook.example         debian/tmp/usr/share/ctrl-exec/examples/
+	install -m755 etc/auth-hook-args.example    debian/tmp/usr/share/ctrl-exec/examples/
 	install -m755 etc/ctrl-exec-demonstrator.sh debian/tmp/usr/share/ctrl-exec/examples/
 	# Per-package CycloneDX SBOMs. Each .deb carries an SBOM scoped to its own
 	# components - the agent's differs from the dispatcher's, and common has the

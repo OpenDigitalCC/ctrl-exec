@@ -1,0 +1,389 @@
+#!/usr/bin/perl
+# auth-hook-args.example - ctrl-exec AGENT auth hook that constrains arguments
+#
+# OPTIONAL and OFF BY DEFAULT. Nothing uses this file until you copy it to
+# the agent host and point agent.conf at it:
+#
+#   install -m 755 auth-hook-args.example /etc/ctrl-exec-agent/auth-hook-args
+#   # agent.conf:
+#   auth_hook = /etc/ctrl-exec-agent/auth-hook-args
+#
+# What it does: for a 'run' request it finds the script's schema sidecar
+# (<script path>.schema.json, see docs/SCHEMA-SIDECAR.md) and checks the
+# request's arguments against the sidecar's `argv` mapping and the matching
+# properties of `arguments`. A request that does not fit is denied (exit 3)
+# before the script is started. Core itself never interprets the sidecar;
+# this hook is one consumer that enforces it.
+#
+# Where the script path comes from: the agent gives a hook only the script
+# NAME (ENVEXEC_SCRIPT). The hook reads the agent's scripts.conf the same way
+# the agent does (name = /abs/path [key=value ...]) to learn the path. The
+# default location is /etc/ctrl-exec-agent/scripts.conf; change $SCRIPTS_CONF
+# below if you run the agent with --allowlist.
+#
+# Sidecar keywords understood (anything else is ignored):
+#   argv         how named inputs map to the positional args: string literals,
+#                {"arg":"n"}, {"arg":"n","flag":"--f"}, {"arg":"n","repeat":true}
+#   arguments.properties.<n>:
+#     type                 string | integer | number | boolean
+#                          (for repeat: the type of "items", or of the property)
+#     enum, const          allowed value(s), compared as strings
+#     pattern              regular expression; unanchored as in JSON Schema,
+#                          so anchor it yourself (^...$) when you mean it
+#     minLength/maxLength  string length
+#     minimum/maximum      numeric bounds
+#     minItems/maxItems    for "repeat" arguments, the number of values
+#     x-path-prefixes      ctrl-exec extension: array of absolute directories.
+#                          The value must be an absolute path that, after
+#                          resolving symlinks (realpath), lies inside one of
+#                          them (also resolved). A path that does not exist
+#                          yet is resolved from its deepest existing parent.
+#   arguments.required     names that must be supplied
+#
+# `argv` is required for enforcement: JSON objects have no order, so without
+# it the positional layout is unknown and the hook DENIES (fail closed). A
+# sidecar with neither `argv` nor `arguments` declares no constraints and is
+# handled like a missing sidecar.
+#
+# Settings (edit here, or set in the agent's environment):
+#   $ON_NO_SIDECAR  CTRL_EXEC_ARGHOOK_NO_SIDECAR  allow (default) | deny
+#                   what to do for a script with no sidecar (or no
+#                   constraints in it). 'deny' makes sidecars mandatory.
+#   $SCRIPTS_CONF   CTRL_EXEC_ARGHOOK_SCRIPTS_CONF  path of scripts.conf
+#   CTRL_EXEC_ARGHOOK_LOGFILE   append denial reasons to this file instead of
+#                   syslog (for tests)
+#
+# Safety: no shell, no eval of schema text (a pattern is only compiled as a
+# regex, and patterns with embedded code are refused); input sizes are
+# bounded; ANY internal error denies (exit 1). Denial is exit 3 with one line
+# to syslog naming the script, the argument and the rule that failed. Argument
+# VALUES are never logged - they may be secrets. The caller sees only the
+# generic "insufficient privilege" for exit 3; the detail is in syslog.
+#
+# Limits: the check and the run are separate moments (a path could be changed
+# between them); keep constrained directories root-owned. Control characters
+# (including newlines) are refused in any argument that has a pattern or a
+# path rule, since Perl's `$` would otherwise accept a trailing newline.
+#
+# Core modules only. Exit codes as in auth-hook.example: 0 allow, 1 deny
+# (generic or internal error), 3 deny (constraint failed).
+
+use strict;
+use warnings;
+use JSON::PP ();
+use Cwd      qw(realpath);
+use Sys::Syslog qw(openlog syslog closelog);
+
+# ---- settings --------------------------------------------------------------
+my $ON_NO_SIDECAR = 'allow';                              # allow | deny
+my $SCRIPTS_CONF  = '/etc/ctrl-exec-agent/scripts.conf';
+# ----------------------------------------------------------------------------
+
+$ON_NO_SIDECAR = $ENV{CTRL_EXEC_ARGHOOK_NO_SIDECAR}  if defined $ENV{CTRL_EXEC_ARGHOOK_NO_SIDECAR};
+$SCRIPTS_CONF  = $ENV{CTRL_EXEC_ARGHOOK_SCRIPTS_CONF} if defined $ENV{CTRL_EXEC_ARGHOOK_SCRIPTS_CONF};
+
+use constant {
+    MAX_ARGS_JSON => 65536,    # bytes of ENVEXEC_ARGS_JSON
+    MAX_SIDECAR   => 65536,    # same cap the agent applies
+    MAX_CONF      => 1048576,  # scripts.conf
+    MAX_ARGS      => 256,
+    MAX_ARG_LEN   => 4096,
+};
+
+# The hook must not write to stdout or stderr.
+open STDOUT, '>', '/dev/null';
+open STDERR, '>', '/dev/null';
+
+# Raised for a constraint failure (exit 3); any other die is an internal
+# error (exit 1).
+{ package Deny; sub new { my ($c, %a) = @_; bless {%a}, $c } }
+
+sub deny {
+    my ($arg, $rule) = @_;
+    die Deny->new(arg => (defined $arg ? $arg : '(request)'), rule => $rule);
+}
+
+sub audit {
+    my ($line) = @_;
+    $line =~ s/[^\x20-\x7e]/?/g;
+    if (defined $ENV{CTRL_EXEC_ARGHOOK_LOGFILE} && length $ENV{CTRL_EXEC_ARGHOOK_LOGFILE}) {
+        if (open my $fh, '>>', $ENV{CTRL_EXEC_ARGHOOK_LOGFILE}) { print {$fh} "$line\n"; close $fh }
+        return;
+    }
+    eval {
+        openlog('ctrl-exec-auth', 'pid', 'auth');
+        syslog('warning', '%s', $line);
+        closelog();
+    };
+}
+
+my $code = eval { main() };
+if (my $e = $@) {
+    if (ref $e && ref $e eq 'Deny') {
+        audit("denied: script '" . ($ENV{ENVEXEC_SCRIPT} // '') . "' argument '$e->{arg}' failed rule '$e->{rule}'");
+        exit 3;
+    }
+    audit('denied: argument hook internal error');
+    exit 1;
+}
+exit($code // 1);
+
+# ---------------------------------------------------------------------------
+
+sub main {
+    my $action = $ENV{ENVEXEC_ACTION} // '';
+    return 0 if $action eq 'ping';            # nothing to constrain
+    die "unsupported action\n" unless $action eq 'run';
+
+    die "bad ON_NO_SIDECAR\n" unless $ON_NO_SIDECAR eq 'allow' || $ON_NO_SIDECAR eq 'deny';
+
+    my $name = $ENV{ENVEXEC_SCRIPT} // '';
+    die "bad script name\n" unless $name =~ /\A[\w-]+\z/;
+
+    my $json = $ENV{ENVEXEC_ARGS_JSON};
+    die "no args json\n" unless defined $json && length($json) <= MAX_ARGS_JSON;
+    my $args = JSON::PP->new->decode($json);
+    die "args not an array\n" unless ref $args eq 'ARRAY';
+    die "too many args\n"     if @$args > MAX_ARGS;
+    for my $a (@$args) {
+        die "non-scalar arg\n" if !defined $a || ref $a;
+        $a = "$a";
+        die "arg too long\n" if length $a > MAX_ARG_LEN;
+    }
+
+    my $path    = script_path($name);
+    my $sidecar = "$path.schema.json";
+
+    unless (-e $sidecar) {
+        return no_sidecar($name, 'no sidecar');
+    }
+    my $schema = read_sidecar($sidecar);       # dies (exit 1) if malformed
+
+    unless (exists $schema->{argv} || exists $schema->{arguments}) {
+        return no_sidecar($name, 'no constraints');
+    }
+
+    validate($schema, $args);
+    return 0;
+}
+
+sub no_sidecar {
+    my ($name, $why) = @_;
+    return 0 if $ON_NO_SIDECAR eq 'allow';
+    deny(undef, "sidecar required ($why)");
+}
+
+# Same parsing as Exec::Agent::Config::load_allowlist: name = path [k=v ...]
+sub script_path {
+    my ($name) = @_;
+    my $raw = slurp($SCRIPTS_CONF, MAX_CONF);
+    for my $line (split /\n/, $raw) {
+        next if $line =~ /^\s*#/ || $line =~ /^\s*$/;
+        next unless $line =~ /^\s*([\w-]+)\s*=\s*(.+?)\s*$/;
+        next unless $1 eq $name;
+        for my $tok (split /\s+/, $2) {
+            next if $tok =~ /^[a-z_]+=/;
+            die "relative script path\n" unless $tok =~ m{^/};
+            return $tok;
+        }
+        die "no script path\n";
+    }
+    die "script not in scripts.conf\n";
+}
+
+sub slurp {
+    my ($file, $max) = @_;
+    open my $fh, '<', $file or die "cannot read $file\n";
+    binmode $fh;
+    my $size = -s $fh;
+    die "oversize $file\n" if !defined $size || $size > $max;
+    local $/;
+    my $raw = <$fh>;
+    close $fh;
+    die "empty read\n" unless defined $raw;
+    return $raw;
+}
+
+sub read_sidecar {
+    my ($file) = @_;
+    my $raw  = slurp($file, MAX_SIDECAR);
+    my $body = JSON::PP->new->decode($raw);
+    die "sidecar not an object\n" unless ref $body eq 'HASH';
+    return $body;
+}
+
+# ---- validation -----------------------------------------------------------
+
+sub validate {
+    my ($schema, $args) = @_;
+
+    my $argv  = $schema->{argv};
+    my $props = {};
+    my %required;
+    if (exists $schema->{arguments}) {
+        my $a = $schema->{arguments};
+        die "arguments not an object\n" unless ref $a eq 'HASH';
+        $props = $a->{properties} // {};
+        die "properties not an object\n" unless ref $props eq 'HASH';
+        if (defined $a->{required}) {
+            die "required not an array\n" unless ref $a->{required} eq 'ARRAY';
+            %required = map { $_ => 1 } grep { defined && !ref } @{ $a->{required} };
+        }
+    }
+
+    if (!defined $argv) {
+        # No order to map against. Only an input-less script can be checked.
+        deny(undef, 'sidecar has arguments but no argv mapping') if %$props;
+        $argv = [];
+    }
+    die "argv not an array\n" unless ref $argv eq 'ARRAY';
+
+    my $n = scalar @$args;
+    my $i = 0;
+
+    for my $k (0 .. $#$argv) {
+        my $el = $argv->[$k];
+
+        if (!ref $el) {
+            deny(undef, 'too few arguments') if $i >= $n;
+            deny(undef, 'fixed token mismatch') if $args->[$i] ne $el;
+            $i++;
+            next;
+        }
+        die "argv element not an object\n" unless ref $el eq 'HASH';
+        my $an = $el->{arg};
+        die "argv element without arg\n" unless defined $an && !ref $an;
+        my $p = $props->{$an};
+        $p = {} unless ref $p eq 'HASH';
+        my $must = $required{$an} && !defined $p->{default};
+
+        if ($el->{repeat}) {
+            # Leave enough tokens for the elements that follow.
+            my $tail = 0;
+            for my $j ($k + 1 .. $#$argv) {
+                my $f = $argv->[$j];
+                $tail++ if !ref $f
+                    || (ref $f eq 'HASH' && !$f->{repeat} && !defined $f->{flag}
+                        && $required{ $f->{arg} // '' });
+            }
+            my $take = $n - $i - $tail;
+            $take = 0 if $take < 0;
+            my $ip = ref $p->{items} eq 'HASH' ? $p->{items} : $p;
+            check_count($an, $p, $take);
+            for my $x (1 .. $take) { check_value($an, $ip, $args->[$i++]) }
+            next;
+        }
+
+        if (defined $el->{flag}) {
+            my $bool = ($p->{type} // '') eq 'boolean';
+            if ($i < $n && $args->[$i] eq $el->{flag}) {
+                $i++;
+                unless ($bool) {
+                    deny($an, 'missing value') if $i >= $n;
+                    check_value($an, $p, $args->[$i++]);
+                }
+            }
+            elsif ($must) { deny($an, 'required') }
+            next;
+        }
+
+        if ($i >= $n) {
+            deny($an, 'required') if $must;
+            next;
+        }
+        check_value($an, $p, $args->[$i++]);
+    }
+
+    deny(undef, 'too many arguments') if $i < $n;
+}
+
+sub check_count {
+    my ($an, $p, $count) = @_;
+    deny($an, 'minItems') if defined $p->{minItems} && $count < $p->{minItems};
+    deny($an, 'maxItems') if defined $p->{maxItems} && $count > $p->{maxItems};
+}
+
+sub check_value {
+    my ($an, $p, $v) = @_;
+
+    my $type = $p->{type};
+    if (defined $type) {
+        die "type not a string\n" if ref $type;
+        if    ($type eq 'string')  { }
+        elsif ($type eq 'integer') { deny($an, 'type integer') unless $v =~ /\A-?(?:0|[1-9][0-9]*)\z/ }
+        elsif ($type eq 'number')  { deny($an, 'type number')
+                                         unless $v =~ /\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?\z/ }
+        elsif ($type eq 'boolean') { deny($an, 'type boolean') unless $v eq 'true' || $v eq 'false' }
+        else                       { die "unsupported type\n" }
+    }
+
+    if (exists $p->{enum}) {
+        die "enum not an array\n" unless ref $p->{enum} eq 'ARRAY';
+        deny($an, 'enum') unless grep { defined && !ref && "$_" eq $v } @{ $p->{enum} };
+    }
+    if (exists $p->{const}) {
+        die "const not a scalar\n" if !defined $p->{const} || ref $p->{const};
+        deny($an, 'const') unless "$p->{const}" eq $v;
+    }
+
+    deny($an, 'minLength') if defined $p->{minLength} && length $v < $p->{minLength};
+    deny($an, 'maxLength') if defined $p->{maxLength} && length $v > $p->{maxLength};
+
+    if (defined $p->{minimum} || defined $p->{maximum}) {
+        deny($an, 'numeric bound on non-number')
+            unless $v =~ /\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?\z/;
+        deny($an, 'minimum') if defined $p->{minimum} && $v < $p->{minimum};
+        deny($an, 'maximum') if defined $p->{maximum} && $v > $p->{maximum};
+    }
+
+    my $has_pat  = defined $p->{pattern};
+    my $has_path = defined $p->{'x-path-prefixes'};
+    deny($an, 'control character') if ($has_pat || $has_path) && $v =~ /[\x00-\x1f\x7f]/;
+
+    if ($has_pat) {
+        die "pattern not a string\n" if ref $p->{pattern};
+        die "pattern with embedded code\n" if $p->{pattern} =~ /\(\?\??\{/;
+        my $re = eval { qr/$p->{pattern}/ };
+        die "bad pattern\n" unless defined $re;
+        deny($an, 'pattern') unless $v =~ $re;
+    }
+
+    if ($has_path) {
+        my $pre = $p->{'x-path-prefixes'};
+        die "x-path-prefixes not an array\n" unless ref $pre eq 'ARRAY' && @$pre;
+        deny($an, 'path not absolute') unless $v =~ m{\A/};
+        my $real = resolve($v);
+        deny($an, 'path unresolvable') unless defined $real;
+        my $ok = 0;
+        for my $d (@$pre) {
+            die "bad path prefix\n" if !defined $d || ref $d || $d !~ m{\A/};
+            my $rd = realpath($d);
+            next unless defined $rd;           # absent prefix matches nothing
+            $rd =~ s{/+\z}{} unless $rd eq '/';
+            if ($real eq $rd || $rd eq '/' || index($real, "$rd/") == 0) { $ok = 1; last }
+        }
+        deny($an, 'path-prefix') unless $ok;
+    }
+}
+
+# realpath of a path, tolerating a not-yet-existing tail: resolve the deepest
+# existing ancestor, then append the remaining components (which must not
+# contain '..'; '.' and empty parts are dropped). Returns undef on failure.
+sub resolve {
+    my ($v) = @_;
+    my @parts = grep { length && $_ ne '.' } split m{/}, $v;
+    my @tail;
+    while (1) {
+        my $cur = '/' . join('/', @parts);
+        my $r = realpath($cur);
+        if (defined $r && -e $cur) {
+            return undef if grep { $_ eq '..' } @tail;
+            return join('/', ($r eq '/' ? '' : $r), reverse @tail) || '/';
+        }
+        return undef unless @parts;
+        # A dangling symlink exists (-l) but does not resolve: refuse it
+        # rather than treat it as a missing file inside its parent.
+        return undef if -l $cur;
+        push @tail, pop @parts;
+    }
+}

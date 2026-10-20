@@ -826,6 +826,19 @@ Argument validation scope
   on stdin; the script receives them directly as `@ARGV`. Neither path involves
   shell interpretation.
 
+  Sites that want arguments narrowed per script (permitted values, patterns,
+  or path prefixes) can opt in to the shipped agent hook `auth-hook-args.example`
+  (installed beside `agent.conf` by `install.sh`; under
+  `/usr/share/ctrl-exec/examples/` in the Debian agent package). It validates
+  `ENVEXEC_ARGS_JSON` against the script's schema sidecar (see
+  `SCHEMA-SIDECAR.md`), resolves path arguments through symlinks before
+  comparing them with the permitted prefixes, and denies with exit 3 before the
+  script starts. It is off by default: nothing changes until `auth_hook` in
+  `agent.conf` names it. Without it, every argument the allowlisted script
+  accepts is in scope, host-wide - a valid design where who may run the script
+  is the control. The hook sees only what the agent passes it, so the `input`
+  proposed in R-010 would not be constrained.
+
 
 ## API Deployment Guidance
 

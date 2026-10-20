@@ -131,6 +131,22 @@ ordering is implicit. Authors are encouraged to always supply `argv` for
 deterministic mapping. Core ignores `argv` entirely.
 
 
+### Enforcement: an optional agent hook
+
+Core never enforces `arguments`/`argv`, but one consumer that does ships with
+ctrl-exec: `etc/auth-hook-args.example`, an agent `auth_hook` (opt-in, off by
+default). For each `run` it reads this sidecar (finding the script path from
+`scripts.conf` by name) and checks the request's arguments against `argv` and
+`arguments.properties`: `type`, `enum`, `const`, `pattern`, `minLength`,
+`maxLength`, `minimum`, `maximum`, `minItems`/`maxItems` (repeat arguments),
+`required`, and the extension keyword `x-path-prefixes` (an array of absolute
+directories; the value is realpath-resolved, so symlinks cannot escape).
+`argv` is required for enforcement, because a JSON object has no order to map
+positional arguments against. A script with no sidecar is allowed or denied
+as the hook is configured (default allow); a sidecar that cannot be read
+or parsed denies. See the header of the hook for settings and limits.
+
+
 ## Version identity (core-derived)
 
 The agent computes one `schema_version` string per sidecar and hoists it to the
