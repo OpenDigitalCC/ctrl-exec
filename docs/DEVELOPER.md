@@ -614,7 +614,7 @@ ENVEXEC_ARGS        space-joined args (lossy if args contain spaces - see below)
 ENVEXEC_ARGS_JSON   args as a JSON array string (reliable for all arg values)
 ENVEXEC_USERNAME    username from request (may be empty)
 ENVEXEC_TOKEN       token from request (may be empty)
-ENVEXEC_SOURCE_IP   originating IP address
+ENVEXEC_SOURCE_IP   originating IP address (the proxy's, not the client's, behind a reverse proxy - not client identity)
 ENVEXEC_TIMESTAMP   ISO8601 UTC timestamp
 ```
 

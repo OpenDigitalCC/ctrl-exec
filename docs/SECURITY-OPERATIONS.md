@@ -114,6 +114,7 @@ Agent hook scope
   the agent hook. An agent hook cannot restrict which sources may call the
   `ping` endpoint; source-based restrictions on the agent use `allowed_ips`
   in `agent.conf` or `ENVEXEC_SOURCE_IP` in the hook for `run` requests.
+  Behind a reverse proxy this is the proxy's address, not the client's, so hooks must not use it for client identity there.
   The absence of a `hosts` field on the agent side is intentional: the agent
   is unaware of which other agents are targeted in the same invocation.
 

@@ -87,6 +87,7 @@ task group, each adding its bullets to this entry.
 - **Fixed** `/run` `args` are now type-checked: any element that is a reference or undef is rejected (agent: `exit -1` error before allowlist/auth/exec, the real boundary; dispatcher API: 400), so such values never reach the exec boundary. (T-024)
 - **Fixed** lock files (dispatcher `locks/`, agent `.locks/`, registry lock) are opened with `O_NOFOLLOW`, so a symlink planted at a lock path is refused with a clear error instead of being followed and its target created or chmod-ed. (T-024)
 - **Fixed** lock files no longer accumulate: idle files are swept opportunistically (`Exec::Lock::acquire`, and the agent's `AsyncRunner` purge). Release still does not unlink (that would let two processes lock different inodes of one lock); the sweep unlinks only while holding the flock, and lockers re-check the path after locking and retry on the fresh file. (T-024)
+- **Changed** docs (and `etc/auth-hook.example`) now say `ENVEXEC_SOURCE_IP` is the reverse proxy's address, not the client's, when ctrl-exec sits behind one, so hooks must not use it for client identity there. (T-024)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 

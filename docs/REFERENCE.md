@@ -1147,6 +1147,7 @@ The same context is available as environment variables:
 
 `ENVEXEC_SOURCE_IP`
 : IP address of the dispatcher connection.
+  Behind a reverse proxy this is the proxy's address, not the client's, so hooks must not use it for client identity there.
 
 `ENVEXEC_DISPATCHER`
 : Stable identity of the calling dispatcher, resolved from its cert serial via

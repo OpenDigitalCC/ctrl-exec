@@ -602,7 +602,7 @@ ENVEXEC_ARGS        space-joined args (ambiguous if args contain spaces)
 ENVEXEC_ARGS_JSON   args as a JSON array string (use this for arg inspection)
 ENVEXEC_USERNAME    username from request (may be empty)
 ENVEXEC_TOKEN       token from request (may be empty)
-ENVEXEC_SOURCE_IP   127.0.0.1 for CLI, caller IP for API
+ENVEXEC_SOURCE_IP   127.0.0.1 for CLI, caller IP for API (the proxy's address behind a reverse proxy - not client identity)
 ENVEXEC_TIMESTAMP   ISO 8601 UTC timestamp
 ```
 

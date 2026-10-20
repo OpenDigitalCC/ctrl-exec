@@ -12,7 +12,9 @@
 #   ENVEXEC_ARGS_JSON   script args as a JSON array (use this)
 #   ENVEXEC_USERNAME    username from request (may be empty)
 #   ENVEXEC_TOKEN       token from request (may be empty)
-#   ENVEXEC_SOURCE_IP   originating IP address
+#   ENVEXEC_SOURCE_IP   originating IP address (behind a reverse proxy this is the
+#                       proxy's address, not the client's - do not use it for
+#                       client identity there)
 #   ENVEXEC_TIMESTAMP   ISO8601 UTC timestamp
 #
 # ENVEXEC_ARGS (space-joined) is also set for backward compatibility

@@ -365,7 +365,7 @@ Agent-side hook
   `token`. It does not receive a `hosts` field; the agent is unaware of
   which other agents are targeted in the same invocation. For
   source-based restriction on the agent, use `allowed_ips` in `agent.conf`
-  or `ENVEXEC_SOURCE_IP` in the hook. If no agent hook is configured,
+  or `ENVEXEC_SOURCE_IP` in the hook. Behind a reverse proxy this is the proxy's address, not the client's, so hooks must not use it for client identity there. If no agent hook is configured,
   the agent authorises unconditionally at the agent level, relying on
   mTLS and the allowlist as its primary controls.
 
