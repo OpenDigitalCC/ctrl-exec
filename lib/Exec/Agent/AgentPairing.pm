@@ -10,6 +10,7 @@ use File::Path qw(make_path);
 use Carp qw(croak);
 use Exec::CertInfo qw();
 use Exec::Cmd      qw();
+use Exec::Digest   qw();
 use Exec::FileUtil qw(slurp);
 use Exec::Log qw();
 use Exec::Random qw();
@@ -143,9 +144,21 @@ sub pairing_status (%opts) {
     return { paired => 1, expiry => $expiry };
 }
 
+# The pairing code version this agent computes and states in its request.
+# See Exec::Digest for the versions.
+our $PAIRING_CODE_VERSION = 2;
+
 # Two-phase pairing: submit CSR, get reqid, keep socket open.
-# Returns { ok => 1, reqid => '...', sock => $sock, nonce => '...' }
+# Returns { ok => 1, reqid => '...', sock => $sock, nonce => '...',
+#           code => '123456', code_version => 2,
+#           dispatcher_fpr => '<64 hex>', dispatcher_confirms_v2 => 0|1 }
 #      or { ok => 0, error => '...' }
+#
+# code is the v2 pairing code, bound to the certificate presented on THIS
+# connection: the operator compares it with the dispatcher's display. A relay
+# that terminates TLS presents a different certificate, so the codes differ.
+# dispatcher_confirms_v2 is false when the acknowledgement does not echo the
+# code version - a dispatcher older than 0.13, which shows a v1 code instead.
 sub submit_pairing_request (%opts) {
     my $dispatcher_host = $opts{'ctrl-exec'} or croak "ctrl-exec required";
     my $port            = $opts{port}       // 7444;
@@ -173,10 +186,21 @@ sub submit_pairing_request (%opts) {
     my $sock = IO::Socket::SSL->new(%ssl_opts)
         or return { ok => 0, error => "connect failed: $IO::Socket::SSL::SSL_ERROR" };
 
+    # SHA-256 of the DER of the certificate the dispatcher (or whatever answered)
+    # presented on this connection - the value the v2 code binds to.
+    my $fpr_bin = eval { $sock->get_fingerprint_bin('sha256') };
+    return { ok => 0, error => "cannot fingerprint the dispatcher certificate" }
+        unless defined $fpr_bin && length $fpr_bin == 32;
+    my $dispatcher_fpr = unpack 'H*', $fpr_bin;
+    my $code = eval {
+        Exec::Digest::pairing_code_for($PAIRING_CODE_VERSION, $csr_pem, $dispatcher_fpr)
+    } // return { ok => 0, error => "cannot compute the pairing code: $@" };
+
     my %request = (
         hostname => $hostname,
         csr      => $csr_pem,
         nonce    => $nonce,
+        code_version => $PAIRING_CODE_VERSION,
     );
     $request{lookup_by} = $lookup_by  if defined $lookup_by;
     $request{port}      = $agent_port if defined $agent_port;
@@ -232,6 +256,10 @@ sub submit_pairing_request (%opts) {
         reqid => $data->{reqid},
         sock  => $sock,
         nonce => $nonce,
+        code           => $code,
+        code_version   => $PAIRING_CODE_VERSION,
+        dispatcher_fpr => $dispatcher_fpr,
+        dispatcher_confirms_v2 => (($data->{code_version} // '') eq '2' ? 1 : 0),
     };
 }
 

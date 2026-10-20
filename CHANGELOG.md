@@ -88,6 +88,22 @@ task group, each adding its bullets to this entry.
 - **Fixed** lock files (dispatcher `locks/`, agent `.locks/`, registry lock) are opened with `O_NOFOLLOW`, so a symlink planted at a lock path is refused with a clear error instead of being followed and its target created or chmod-ed. (T-024)
 - **Fixed** lock files no longer accumulate: idle files are swept opportunistically (`Exec::Lock::acquire`, and the agent's `AsyncRunner` purge). Release still does not unlink (that would let two processes lock different inodes of one lock); the sweep unlinks only while holding the flock, and lockers re-check the path after locking and retry on the fresh file. (T-024)
 - **Changed** docs (and `etc/auth-hook.example`) now say `ENVEXEC_SOURCE_IP` is the reverse proxy's address, not the client's, when ctrl-exec sits behind one, so hooks must not use it for client identity there. (T-024)
+- **Changed (security)** the pairing confirmation code is now bound to the
+  dispatcher certificate the agent saw on the pairing connection: v2 =
+  `SHA-256(CSR || SHA-256 fingerprint of that certificate's DER)`, same six
+  digits. A man in the middle on port 7444 must show the agent its own
+  certificate, so the two codes no longer match even when it relays the CSR
+  unchanged (the old `SHA-256(CSR)` code matched). The agent prints the code
+  once connected and states `code_version: 2` in its request; the dispatcher
+  shows `v2` codes for those and the old code, marked `v1, pre-0.13 agent`, for
+  agents that send no version, in the prompt, `list-requests` and `approve`.
+  Upgrade dispatchers before agents: an older dispatcher shows a code a 0.13
+  agent will not match (the agent warns). Existing pairings are untouched.
+  (T-022)
+- **Added (security)** the pairing listener refuses a CSR that is not exactly
+  as openssl writes it, so text appended to a relayed CSR cannot be varied
+  until the codes match. Agents send openssl's own output, so genuine requests
+  are unaffected. (T-022)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 

@@ -11,7 +11,6 @@ use Exec::Agent::Config    qw();
 use Exec::Agent::Schema    qw();
 use Exec::Agent::AgentPairing   qw();
 use Exec::Agent::Server         qw();
-use Exec::Digest                qw();
 use Exec::Random                qw();
 use Exec::RateLimit qw();
 use Exec::Http           qw();
@@ -537,12 +536,8 @@ WARN
         hostname => $host,
     );
 
-    unless ($background) {
-        my $pairing_code = _pairing_code($pair->{csr_pem});
-        print "Pairing code: $pairing_code\n";
-        print "  Verify this code matches the ctrl-exec display before approving.\n\n";
-        print "Connecting to ctrl-exec at $ctrl_exec_host for pairing...\n";
-    }
+    print "Connecting to ctrl-exec at $ctrl_exec_host for pairing...\n"
+        unless $background;
 
     # Submit the CSR. The ctrl-exec queues it and returns a reqid immediately.
     my $submitted = Exec::Agent::AgentPairing::submit_pairing_request(
@@ -578,6 +573,18 @@ WARN
     }
 
     my $reqid = $submitted->{reqid};
+
+    # The code is bound to the certificate the dispatcher presented on this
+    # connection, so it can only be shown once connected.
+    unless ($background) {
+        print "Pairing code: $submitted->{code} (v$submitted->{code_version})\n";
+        print "  Verify this code matches the ctrl-exec display before approving.\n";
+        unless ($submitted->{dispatcher_confirms_v2}) {
+            print "  The dispatcher did not confirm code v2: it is probably older than\n"
+                . "  0.13 and shows a different code. Upgrade the dispatcher first.\n";
+        }
+        print "\n";
+    }
 
     if ($background) {
         # Print reqid to stdout for the orchestrator, then fork.
@@ -804,14 +811,6 @@ sub mode_self_ping {
     print "Self-ping complete.\n";
 }
 
-
-# Compute a 6-digit confirmation code from a CSR PEM string.
-# The same computation on the ctrl-exec side produces an identical code,
-# allowing the operator to verify the request visually without any
-# out-of-band channel.
-sub _pairing_code ($csr_pem) {
-    return Exec::Digest::pairing_code($csr_pem);
-}
 
 # Quick TCP reachability probe for the pairing port, run before the slow keygen.
 # Dies with an actionable message if the ctrl-exec cannot be reached at all.

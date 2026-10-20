@@ -139,6 +139,13 @@ sub run_pairing_mode (%opts) {
         Exec::TLS::hardening(),
     ) or die "Cannot start pairing server: $IO::Socket::SSL::SSL_ERROR\n";
 
+    # Fingerprint of the certificate this listener presents, read from the same
+    # file it was just loaded from (and once, so a rotation that rewrites the
+    # file mid-session cannot make it disagree with what agents see). The v2
+    # pairing code binds to it; see Exec::Digest.
+    my $cert_fpr = Exec::CertInfo::fingerprint_from_path($cert)
+        // die "Cannot fingerprint the pairing certificate '$cert'\n";
+
     $log_fn->({ ACTION => 'pairing-mode-start', PORT => $port });
 
     my $interactive = -t STDIN;
@@ -202,7 +209,7 @@ sub run_pairing_mode (%opts) {
                 }
                 if ($pid == 0) {
                     $server->close;
-                    _handle_pair_request($conn, $peer_ip, $log_fn, $max_queue, $pairing_dir);
+                    _handle_pair_request($conn, $peer_ip, $log_fn, $max_queue, $pairing_dir, $cert_fpr);
                     $conn->close;
                     exit 0;
                 }
@@ -433,6 +440,7 @@ sub approve_request (%opts) {
     my $name = $req->{hostname};
     my $addr = ($lookup_by eq 'hostname') ? $name : ($ip // '?');
     print "Approved '$name' ($reqid). Cert delivered on next poll.\n";
+    printf "  Code:        %s\n", code_label($req);
     printf "  Registered:  %s   lookup_by=%s   addr=%s:%s\n",
         $name, $lookup_by, $addr, ($port // '?');
     if (length($req->{source_ip} // '') || $req->{reverse_confirmed}) {
@@ -544,7 +552,8 @@ sub _interactive_prompt ($log_fn) {
         printf "Pairing request from %s (%s) - ID: %s\n",
             $r->{hostname} // '?', $r->{ip} // '?', $r->{id} // '?';
         printf "  Code:     %s   (verify this matches the agent display)\n",
-            $r->{code} // '??????';
+            code_label($r);
+        print "$_\n" for code_note($r);
         printf "  Received: %s\n", $r->{received} // '?';
         print "$_\n" for Exec::Pairing::Identity::identity_lines($r);
         if (my $rec = Exec::Pairing::Identity::identity_recommendation($r)) {
@@ -568,7 +577,7 @@ sub _print_queue ($reqs) {
             $i++,
             $r->{hostname} // '?',
             $r->{ip}       // '?',
-            $r->{code}     // '??????',
+            code_label($r),
             $r->{received} // '?';
     }
 }
@@ -631,7 +640,9 @@ sub _do_deny ($reqid, $log_fn) {
     }
 }
 
-sub _handle_pair_request ($conn, $peer_ip, $log_fn, $max_queue = undef, $pairing_dir = undef) {
+# $cert_fpr is the SHA-256 fingerprint of the certificate the pairing listener
+# presents (run_pairing_mode); the v2 code binds to it.
+sub _handle_pair_request ($conn, $peer_ip, $log_fn, $max_queue = undef, $pairing_dir = undef, $cert_fpr = undef) {
     $max_queue  //= 10;
     $pairing_dir //= $PAIRING_DIR;
 
@@ -669,6 +680,35 @@ sub _handle_pair_request ($conn, $peer_ip, $log_fn, $max_queue = undef, $pairing
         return;
     }
 
+    # The CSR must be exactly as openssl writes it. openssl ignores text around
+    # the PEM block, so extra text would change the bytes the code is computed
+    # from without changing the request that is signed - letting a relay try
+    # variants until its code matched the agent's. Agents send openssl's own
+    # output, so a genuine request always passes.
+    my $canonical = Exec::Digest::canonical_csr($data->{csr});
+    unless (defined $canonical && $canonical eq $data->{csr}) {
+        my $why = defined $canonical ? 'non-canonical-csr' : 'invalid-csr';
+        _send_raw($conn, encode_json({ status => 'error',
+            reason => (defined $canonical ? 'CSR has unexpected extra content'
+                                          : 'invalid CSR') }));
+        $log_fn->({ ACTION => 'pair-reject', IP => $peer_ip, REASON => $why });
+        return;
+    }
+
+    # Code version: the agent states the one it computed. None means an agent
+    # older than 0.13, which computes v1. Anything else is refused rather than
+    # shown as a code the agent does not display.
+    my $code_version = $data->{code_version} // 1;
+    unless (($code_version eq '1' || $code_version eq '2')
+            && ($code_version eq '1' || defined $cert_fpr)) {
+        _send_raw($conn, encode_json({ status => 'error',
+            reason => 'unsupported pairing code version' }));
+        $log_fn->({ ACTION => 'pair-reject', IP => $peer_ip,
+            REASON => 'unsupported-code-version' });
+        return;
+    }
+    $code_version = int $code_version;
+
     my $reqid      = _gen_reqid();
     my $hostname   = $data->{hostname};
     my $csr        = $data->{csr};
@@ -681,7 +721,7 @@ sub _handle_pair_request ($conn, $peer_ip, $log_fn, $max_queue = undef, $pairing
     # still override it at 'approve --ip'.
     my $eff_ip     = $reported_ip // $peer_ip;
     my $received   = strftime('%Y-%m-%dT%H:%M:%SZ', gmtime);
-    my $code       = _pairing_code($csr);
+    my $code       = _pairing_code($code_version, $csr, $cert_fpr);
 
     # Resolve the network's canonical name for the connection's source IP once,
     # now, so the operator can see how this dispatcher resolves the agent before
@@ -714,20 +754,24 @@ sub _handle_pair_request ($conn, $peer_ip, $log_fn, $max_queue = undef, $pairing
         port      => $agent_port,
         received  => $received,
         code      => $code,
+        code_version => $code_version,
         reverse_dns       => ($rev ? $rev->{ptr} : ''),
         reverse_confirmed => ($rev && $rev->{confirmed} ? 1 : 0),
     }));
 
     $log_fn->({ ACTION => 'pair-request', AGENT => $hostname, IP => $peer_ip,
         ($reported_ip ? (REPORTED_IP => $reported_ip) : ()),
-        REQID => $reqid, STATUS => 'pending' });
+        REQID => $reqid, CODE_VERSION => $code_version, STATUS => 'pending' });
     print "Pairing request queued: $hostname ($eff_ip) - ID: $reqid\n";
 
     # Send reqid to agent immediately so orchestrators can use it to call
     # 'ctrl-exec-dispatcher approve <reqid>' without waiting for the connection to close.
     # The agent reads this first response, extracts the reqid, then reads
     # a second response for the approval or denial.
-    _send_raw($conn, encode_json({ status => 'pending', reqid => $reqid }));
+    # code_version tells a 0.13+ agent this dispatcher computed the code version
+    # it asked for; older agents ignore the extra field.
+    _send_raw($conn, encode_json({ status => 'pending', reqid => $reqid,
+        code_version => $code_version }));
 
     # Poll for approval or denial (max 10 minutes)
     my $resp_approved = "$pairing_dir/$reqid.approved";
@@ -785,12 +829,31 @@ sub _write_file ($path, $content) {
     return Exec::FileUtil::write_atomic($path, $content);
 }
 
-# Compute a 6-digit confirmation code from a CSR PEM string.
-# Identical computation to the agent side - both derive the code from the
-# CSR content independently so no extra round-trip is required.
-# The operator verifies both displays match before approving.
-sub _pairing_code ($csr_pem) {
-    return Exec::Digest::pairing_code($csr_pem);
+# Compute the 6-digit confirmation code of the given version (see
+# Exec::Digest). Identical computation to the agent side - both derive the code
+# independently, the agent from the certificate it saw and the dispatcher from
+# the certificate it presents, so no extra round-trip is required. The operator
+# verifies both displays match before approving.
+sub _pairing_code ($version, $csr_pem, $cert_fpr = undef) {
+    return Exec::Digest::pairing_code_for($version, $csr_pem, $cert_fpr);
+}
+
+# A pending request's code for display, with its version so an operator can
+# tell a bound v2 code from the weaker v1 code of an agent older than 0.13. A
+# record without a version was queued as v1 (before 0.13).
+sub code_label ($r) {
+    my $code = $r->{code} // '??????';
+    return ($r->{code_version} // 1) == 2
+        ? "$code (v2)"
+        : "$code (v1, pre-0.13 agent)";
+}
+
+# Explanation printed under a v1 code in the single-request interactive
+# prompt, where there is room for it; nothing for v2.
+sub code_note ($r) {
+    return () if ($r->{code_version} // 1) == 2;
+    return "  Note:     a v1 code (agent older than 0.13) is not bound to this "
+         . "dispatcher,\n            so a matching code does not rule out a relay.";
 }
 
 # Extract the notAfter date from a PEM cert string (via Exec::CertInfo).

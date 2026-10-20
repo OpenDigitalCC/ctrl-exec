@@ -46,6 +46,19 @@ sub serial_from_path ($path) {
     return serial_to_hex($1);
 }
 
+# Return the SHA-256 fingerprint of the cert (the digest of its DER encoding) as
+# 64 lowercase hex characters, or undef if the file is unreadable or not a cert.
+# For a file holding a chain this is the first cert, which is the one a TLS
+# server loaded from it presents. The dispatcher binds the v2 pairing code to
+# this value; the agent computes the same digest from the certificate it saw on
+# the pairing connection (Exec::Agent::AgentPairing::submit_pairing_request).
+sub fingerprint_from_path ($path) {
+    my $out = `openssl x509 -noout -fingerprint -sha256 -in \Q$path\E 2>/dev/null`;
+    return unless defined $out && $out =~ /=\s*((?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2})\s*$/m;
+    (my $hex = lc $1) =~ s/://g;
+    return $hex;
+}
+
 # Parse an openssl notAfter string ("Mon DD HH:MM:SS YYYY GMT", as produced by
 # expiry_from_path) to a Unix epoch (UTC), or undef if it cannot be parsed. The
 # single notAfter->epoch parser: the renewal-due check (Engine) and the

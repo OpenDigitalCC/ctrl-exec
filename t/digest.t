@@ -47,4 +47,20 @@ subtest 'pairing_code: distinct CSRs generally differ' => sub {
          'different CSRs produce different codes';
 };
 
+# v2 binds the code to the dispatcher certificate the agent saw:
+# sha256(csr || fingerprint bytes), same truncation as v1.
+# sha256("abc" . 32 x 0x00) = 1b23f860... -> 0x1b23f860 % 1_000_000 = 342176
+# sha256("abc" . 32 x 0x01) = 8b391049... -> 0x8b391049 % 1_000_000 = 772745
+subtest 'pairing_code_v2: known-answer vectors' => sub {
+    is Exec::Digest::pairing_code_v2('abc', '00' x 32), '342176',
+       'abc with an all-zero fingerprint';
+    is Exec::Digest::pairing_code_v2('abc', '01' x 32), '772745',
+       'abc with an all-0x01 fingerprint';
+    is Exec::Digest::pairing_code_v2('abc', 'AB' x 32),
+       Exec::Digest::pairing_code_v2('abc', 'ab' x 32),
+       'fingerprint hex is case-insensitive';
+    eval { Exec::Digest::pairing_code_v2('abc', 'zz') };
+    like $@, qr/fingerprint/, 'a malformed fingerprint dies';
+};
+
 done_testing;

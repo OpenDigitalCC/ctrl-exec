@@ -33,12 +33,24 @@ Exec::Log::init('test');
 # Helpers
 # ---------------------------------------------------------------------------
 
+# A real CSR: the handler rejects one openssl cannot parse (or that is not in
+# openssl's own PEM form) before it reaches the queue check.
+my $CSR = do {
+    my $d = tempdir(CLEANUP => 1);
+    system("openssl genrsa -out $d/k 2048 2>/dev/null") == 0
+        && system("openssl req -new -key $d/k -out $d/c -subj /CN=test-agent 2>/dev/null") == 0
+        or die "cannot generate a test CSR with openssl\n";
+    open my $fh, '<', "$d/c" or die $!;
+    local $/;
+    <$fh>;
+};
+
 sub make_pair_request {
     my (%opts) = @_;
     my $hostname = $opts{hostname} // 'test-agent';
     my $body = encode_json({
         hostname => $hostname,
-        csr      => "-----BEGIN CERTIFICATE REQUEST-----\nYQ==\n-----END CERTIFICATE REQUEST-----\n",
+        csr      => $CSR,
         nonce    => 'aabbccddaabbccdd',
     });
     return "POST /pair HTTP/1.0\r\n"
@@ -161,7 +173,8 @@ my $has_pairing_dir_param = do {
     if (-f $src) {
         open my $fh, '<', $src or die $!;
         local $/; my $text = <$fh>;
-        $text =~ /sub _handle_pair_request\s*\{\s*my\s*\([^)]*\$pairing_dir\b/s ? 1 : 0;
+        # Signature form (current) or the older "my (...) = @_" form.
+        $text =~ /sub _handle_pair_request\s*(?:\([^)]*\$pairing_dir\b|\{\s*my\s*\([^)]*\$pairing_dir\b)/s ? 1 : 0;
     } else { 0 }
 };
 

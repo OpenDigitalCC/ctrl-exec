@@ -617,10 +617,12 @@ sub mode_list_requests {
             $r->{hostname}  // '?',
             $r->{source_ip} // $r->{ip} // '?',
             $rev,
-            $r->{code}      // '??????';
+            Exec::Pairing::code_label($r);
     }
     print "\nReverse DNS is how this dispatcher resolves each agent's IP; "
         . "(ok) = forward-confirmed.\n"
+        . "A v2 code is bound to this dispatcher's certificate; a v1 code (agent "
+        . "older than 0.13)\nis not, so a match does not rule out a relay.\n"
         . "Approve shows the exact edit-agent command if a name will not resolve here.\n";
 }
 
