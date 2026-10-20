@@ -10,38 +10,6 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 The backlog line: every open task in todo/ lands here, one branch per task or
 task group, each adding its bullets to this entry.
 
-- **Changed** the seven systemd units to one canonical set in `etc/systemd/`
-  with `@BINDIR@` / `@SBINDIR@` placeholders, rendered by `etc/systemd/render-unit`
-  (install.sh with `/usr/local/{bin,sbin}`, `debian/rules` with `/usr/{bin,sbin}`)
-  in place of the hand-maintained `etc/` and `debian/` copies that had drifted
-  (the stale `yourorg` URL lived in both). The executor unit's `ExecStart` is now
-  `@SBINDIR@` (it was hard-coded in each copy). No hardening directive changed;
-  `t/units-render.t` checks both renderings. (T-014)
-- **Changed** the privileged executor `ctrl-exec-exec` to `ctrl-exec-executor`
-  (ctrl-exec is the package, its parts are `ctrl-exec-<part>`): the source
-  `src/ctrl-exec-executor.c`, the binary in `/usr/local/sbin` or `/usr/sbin`, the
-  unit `ctrl-exec-executor.service`, and every reference to them (the process list
-  no longer reads `ctrl-exec-exec`). The `executor_socket` key and the socket path
-  `/run/ctrl-exec-agent/exec.sock` are unchanged, so no `agent.conf` edit is
-  needed. Existing installs are switched over on upgrade (see the migration note
-  below). (T-008)
-- **Changed** the dispatcher's config directory from `/etc/ctrl-exec/` to
-  `/etc/ctrl-exec-dispatcher/`, to match `/etc/ctrl-exec-agent/`: the defaults in
-  `ctrl-exec-dispatcher`, `ctrl-exec-api`, the CA, pairing, rotation and engine
-  code, `etc/ctrl-exec.conf.example`, the units and the packaging. Where only the
-  old `/etc/ctrl-exec/` exists (a half-migrated host) it is still found, with a
-  warning; where both exist the new one wins (`Exec::DispatcherConfig::conf_dir`).
-  The `ctrl-exec` group and user, and `/var/lib/ctrl-exec/`, are unchanged. (T-008)
-- **Changed** upgrades of existing installs, with no manual steps (`install.sh`
-  and the `.deb` packages alike). Dispatcher: an existing `/etc/ctrl-exec/` is
-  moved to `/etc/ctrl-exec-dispatcher/`, the paths inside `ctrl-exec.conf` are
-  rewritten to match (the old file is kept as `ctrl-exec.conf.pre-0.13`), and
-  `/etc/ctrl-exec` is left as a symlink to the new directory for this one
-  release. **The symlink is removed in 0.14.** Agent: the old `ctrl-exec-exec`
-  unit is stopped and disabled, and its unit file and `/usr/sbin` or
-  `/usr/local/sbin` binary removed; `ctrl-exec-executor.service` is enabled and
-  started if the old unit was. A fresh install gets only the new names.
-  `install.sh --uninstall` now also stops and removes the executor. (T-008)
 - **Fixed** docs/SECURITY.md claimed the agent enforces "schema validation (constrained arguments)" and that the surface is "argument-constrained"; core never validates argument values (the schema sidecar is advertised data only). SECURITY.md now says so everywhere and points to the auth hooks (dispatcher hook and the agent's `auth_hook`, both given `ENVEXEC_ARGS_JSON`) as the place to constrain arguments. (T-010)
 - **Fixed** docs/TROUBLESHOOTING.md answered "profiles are optional?" with "Yes"; only the per-script `profile=` is optional, `[profile default]` in agent.conf is mandatory (an undefined profile exits 78). The answer is corrected and a troubleshooting entry added for "script(s) reference an undefined profile" with the `[profile default]` fix. (T-015)
 - **Fixed** `self-check`, `self-ping`, `pairing-status` and `serve` reported a

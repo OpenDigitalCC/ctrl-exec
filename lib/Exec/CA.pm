@@ -9,8 +9,8 @@ use File::Path  qw(make_path);
 use Carp        qw(croak);
 use Exec::FileUtil qw(slurp);
 use Exec::Cmd      qw();
-use Exec::DispatcherConfig qw();
 use Exec::Random   qw(hex_bytes);
+use Exec::DispatcherConfig qw();
 
 
 # Default CA directory: the dispatcher config dir (see Exec::DispatcherConfig).
