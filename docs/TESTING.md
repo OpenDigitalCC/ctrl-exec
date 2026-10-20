@@ -94,7 +94,7 @@ disable rate limiting on every agent:
 
 ```bash
 # On each agent host
-echo "disable_rate_limit = 1" >> /etc/ctrl-exec-agent/agent.conf
+echo "rate_limit_disable = 1" >> /etc/ctrl-exec-agent/agent.conf
 systemctl reload ctrl-exec-agent   # or: /etc/init.d/ctrl-exec-agent reload
 ```
 
@@ -241,7 +241,9 @@ results via dispatch.
 `13-rate-limit-integration.sh` is not included in the standard suite because
 it deliberately triggers a 5-minute agent block. Run it separately after
 restoring the default `volume_limit` on the agent (i.e. with
-`disable_rate_limit` removed):
+`rate_limit_disable` removed). Note that since 0.12.4 a *paired* dispatcher is
+exempt from the volume threshold, so this test must drive the agent from a
+CA-signed certificate whose serial is not in the trusted-dispatcher map:
 
 ```bash
 sudo bash t/integration/13-rate-limit-integration.sh
@@ -410,7 +412,9 @@ The rate limiter triggers at 10 connections per source IP within 60 seconds
 (default). When writing a new test file, count the number of `run_dispatcher`
 calls. If a single file sends more than 8-9 calls to the same agent, either
 spread them across both agents using `"${AGENTS[@]}"`, or document that
-`disable_rate_limit = 1` must be set before running the suite.
+`rate_limit_disable = 1` must be set before running the suite (since 0.12.4 a
+paired dispatcher is exempt from the volume threshold, so this only matters when
+the suite drives the agent from an unpaired certificate).
 
 The connection counters in `lib.sh` will detect and warn about rate-block
 symptoms automatically, but a well-designed test file should not rely on the

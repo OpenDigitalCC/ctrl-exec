@@ -272,4 +272,28 @@ use Exec::RateLimit qw();
     ok(exists $state{'10.8.0.1'}, 'actively-blocked entry not evicted');
 }
 
+# --- blocked_for: remaining block time, read-only, no autovivification ---
+{
+    my %state;
+    is(Exec::RateLimit::blocked_for('10.5.0.1', \%state), 0, 'blocked_for: unknown peer -> 0');
+    ok(!exists $state{'10.5.0.1'}, 'blocked_for does not autovivify an entry');
+
+    my $now = time();
+    $state{'10.5.0.2'} = { connections => [], failures => [], blocked_until => $now + 120 };
+    my $left = Exec::RateLimit::blocked_for('10.5.0.2', \%state);
+    ok($left >= 118 && $left <= 120, "blocked_for: active block reports seconds left ($left)");
+
+    $state{'10.5.0.3'} = { connections => [], failures => [], blocked_until => $now - 5 };
+    is(Exec::RateLimit::blocked_for('10.5.0.3', \%state), 0, 'blocked_for: expired block -> 0');
+
+    # End to end: the 11th connection in a clean window trips, and blocked_for is ~VOLUME_BLOCK.
+    my %s2;
+    { no warnings 'redefine'; local *Exec::Log::log_action = sub {};
+      for (1..10) { Exec::RateLimit::check('10.5.0.4', \%s2); Exec::RateLimit::record_connection('10.5.0.4', \%s2) }
+      is(Exec::RateLimit::check('10.5.0.4', \%s2), 1, 'defaults: 11th connection in 60s is blocked');
+    }
+    my $b = Exec::RateLimit::blocked_for('10.5.0.4', \%s2);
+    ok($b >= 298 && $b <= 300, "blocked_for after a fresh volume block is ~300s ($b)");
+}
+
 done_testing();

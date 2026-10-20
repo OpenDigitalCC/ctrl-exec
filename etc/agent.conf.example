@@ -96,6 +96,10 @@ executor_socket = /run/ctrl-exec-agent/exec.sock
 # By default, rate limiting is active with the following thresholds:
 #   Volume: 10 connections within 60s triggers a 5-minute block
 #   Probe:  3 TLS handshake failures within 600s triggers a 1-hour block
+# Dispatchers in the trusted-dispatcher map (paired with this agent) are exempt
+# from the volume threshold: every run/ping/discovery is a fresh connection, so
+# counting them blocked the one legitimate caller after ~10 operations in a
+# minute. A blocked peer gets an HTTP 429 with retry_after before the close.
 #
 # To disable rate limiting entirely (e.g. during testing):
 # rate_limit_disable = 1

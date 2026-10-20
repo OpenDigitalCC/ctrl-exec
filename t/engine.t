@@ -399,4 +399,20 @@ sub _resp {
     ok !exists $r->{reported_hostname}, '_canonicalise: drops empty reported hostname';
 }
 
+# A 200 whose body is valid JSON but not an object (an array here) must come
+# back as 'invalid JSON response', not die inside the worker with "Not a HASH
+# reference" (which a fan-out would have reported as an empty result).
+{
+    no warnings 'redefine';
+    local *Exec::Engine::_build_ua = sub {
+        MockUA->new(on_post => sub { _resp(200, 'OK', '[1,2,3]') });
+    };
+    my $r = Exec::Engine::_dispatch_one(
+        host => 'h', port => 7443, script => 's', args => [], reqid => 'r1',
+        config => {}, username => '', token => '',
+    );
+    is $r->{exit}, -1, 'non-object 200 body: exit -1';
+    is $r->{error}, 'invalid JSON response', 'non-object 200 body: invalid JSON response, no die';
+}
+
 done_testing;
