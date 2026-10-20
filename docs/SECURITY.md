@@ -350,6 +350,20 @@ The action's environment under the executor
   tools write) in `writable`. The executor unit sets no `ProtectHome`, so home
   directories are visible to actions.
 
+The action's file descriptors under the executor
+: The action inherits stdin, stdout and stderr and no other file descriptor:
+  0, 1 and 2 are the pipes the executor feeds and drains, and it holds nothing
+  of the executor's. The executor's connection to the agent is accepted
+  close-on-exec, as are its listening socket, the `input` directory fd and the
+  files and directories it opens; in the action's process, just before
+  `execve`, every fd from 3 up is closed (`close_range`, or each fd listed in
+  `/proc/self/fd` on a kernel without it), which also covers any fd the
+  executor itself inherited from whatever started it. Before 0.13.0 the
+  connection socket stayed open in the action, so a script could write its
+  own result frame to the agent (any exit status and output) or corrupt the
+  real one. An `input=fields` action reads its files by the path in
+  `CTRL_EXEC_INPUT`, never through an inherited descriptor.
+
 Schema sidecars are advertised, never executed
 : A script's optional `<script>.schema.json` sidecar (see REFERENCE.md) is read
   only for allowlisted scripts, capped at 64 KiB, and treated as opaque data:

@@ -49,6 +49,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/mount.h>
+#include <sys/resource.h>
 #include <sys/capability.h>
 #include <sys/syscall.h>
 
@@ -285,7 +286,7 @@ static int parse_kv(char *l, char **k, char **v) {
 }
 
 static int parse_agent_conf(const char *path, config_t *c) {
-    FILE *f = fopen(path, "r");
+    FILE *f = fopen(path, "re");
     if (!f) { fprintf(stderr, "Cannot open config '%s'\n", path); return -1; }
 
     memset(c, 0, sizeof(*c));
@@ -399,7 +400,7 @@ static int find_script(const char *path, const char *want,
                        char *out_path, size_t plen,
                        char *out_profile, size_t prlen,
                        char *out_input, size_t inlen) {
-    FILE *f = fopen(path, "r");
+    FILE *f = fopen(path, "re");
     if (!f) return 0;
     char *line = NULL; size_t cap = 0; ssize_t len; int found = 0;
 
@@ -1309,6 +1310,42 @@ static int buf_add(buf_t *b, const char *d, size_t n) {
     return 0;
 }
 
+/* Close every fd from 3 up in the action's process, just before execve, so the
+ * action holds only stdin, stdout and stderr (T-051). The executor's own fds are
+ * already close-on-exec or closed in the child (the connection socket from
+ * accept4 SOCK_CLOEXEC, the listening socket, the input base fd, the pipes'
+ * other ends); this also covers anything the executor inherited from whatever
+ * started it, anything a library opened without O_CLOEXEC, and any fd a later
+ * change forgets. close_range(2) is called through syscall() (kernel 5.9+, no
+ * glibc 2.34 symbol, keeping the libc floor low). Without it: close each fd
+ * listed in /proc/self/fd, and failing that every fd below the open-files
+ * limit. */
+static void close_inherited_fds(void) {
+#ifdef SYS_close_range
+    if (syscall(SYS_close_range, 3U, ~0U, 0U) == 0) return;
+#endif
+    DIR *d = opendir("/proc/self/fd");
+    if (d) {
+        int self = dirfd(d);
+        struct dirent *de;
+        while ((de = readdir(d)) != NULL) {
+            /* Digits only, parsed by hand (not strtol: see run_as below). */
+            long fd = 0;
+            const char *q = de->d_name;
+            if (!*q) continue;
+            for (; *q >= '0' && *q <= '9' && fd < INT_MAX / 10; q++) fd = fd * 10 + (*q - '0');
+            if (*q || fd < 3 || fd == self) continue;
+            close((int)fd);
+        }
+        closedir(d);
+    } else {
+        struct rlimit rl;
+        long max = (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY)
+                   ? (long)rl.rlim_cur : 65536;
+        for (long fd = 3; fd < max; fd++) close((int)fd);
+    }
+}
+
 /* Run path/argv under profile p, feeding `indata` to stdin, capturing stdout and
  * stderr concurrently (select, to avoid pipe-buffer deadlock). */
 static int run_with_profile(const profile_t *p, const char *path, char *const argv[],
@@ -1359,7 +1396,7 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
          * has written a byte to this fifo (the swap-after-check test). */
         const char *pf = getenv("CE_TEST_PAUSE_FIFO");
         if (pf && *pf) {
-            int ffd = open(pf, O_RDONLY);
+            int ffd = open(pf, O_RDONLY | O_CLOEXEC);
             char b;
             if (ffd >= 0) { if (read(ffd, &b, 1) < 0) { /* proceed */ } close(ffd); }
         }
@@ -1422,6 +1459,9 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
         }
         for (int i = 0; ri && i < 2 && ri->env[i]; i++) clean_env[ne++] = ri->env[i];
         clean_env[ne] = NULL;
+        /* The action gets stdin, stdout and stderr (the pipes above) and no
+         * other descriptor of the executor's (T-051). */
+        close_inherited_fds();
         execve(path, argv, clean_env);
         dprintf(2, "executor: exec '%s' failed: %s\n", path, strerror(errno));
         _exit(127);
@@ -1716,7 +1756,7 @@ static int cmd_serve(const char *sockpath, const char *agent_conf,
     if (!pw) { fprintf(stderr, "ctrl-exec-executor: unknown peer user '%s'\n", peer_user); return 1; }
     uid_t peer_uid = pw->pw_uid;
 
-    int sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    int sfd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (sfd < 0) { perror("socket"); return 1; }
     struct sockaddr_un addr; memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
@@ -1747,7 +1787,10 @@ static int cmd_serve(const char *sockpath, const char *agent_conf,
     int input_bfd = input_base_init(sockpath, input_base, sizeof(input_base));
 
     for (;;) {
-        int cfd = accept(sfd, NULL, NULL);
+        /* SOCK_CLOEXEC: the connection must never reach the action. An action
+         * holding it could write its own result frame (any exit status and
+         * output) to the agent, or corrupt the real one (T-051). */
+        int cfd = accept4(sfd, NULL, NULL, SOCK_CLOEXEC);
         if (cfd < 0) { if (errno == EINTR) continue; perror("accept"); break; }
 
         struct ucred uc; socklen_t ucl = sizeof(uc);
