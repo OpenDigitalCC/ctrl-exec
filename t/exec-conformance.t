@@ -4,6 +4,11 @@
 # agent.conf/scripts.conf - same allow/deny, same resolved profile fields. If
 # they ever diverge, the executor would apply a different privilege than the
 # front-end authorised. Both parsers are exercised here against the same fixtures.
+#
+# Not compared, by design: front-end-only validation the executor has no use for
+# (required keys port/cert/key/ca, numeric port, allowed_ips, rate_limit_*,
+# auth_hook). The corpus below is the parity gate: a change to either parser that
+# alters any listed case makes this test fail.
 use strict;
 use warnings;
 use Test::More;
@@ -127,7 +132,8 @@ push @fixtures, (
     # -- scripts.conf: comments, blanks, whitespace -----------------------------
     {
         label   => 'scripts: inline # after a path makes extra tokens => skipped',
-        agent   => $REQUIRED,
+        expect  => { a => 'DENY not-allowlisted', c => 'OK', d => 'DENY not-allowlisted' },
+        agent   => $REQUIRED . "[profile default]\nrun_as = nobody\n",
         scripts => "a = /opt/a.sh # note\nb = /opt/b.sh profile=default # note\n"
                  . "c = /opt/c.sh#note\nd = /opt/d.sh #\n",
         names   => [qw(a b c d)],
@@ -141,6 +147,7 @@ push @fixtures, (
     },
     {
         label   => 'scripts: CRLF line endings',
+        expect  => { w => 'OK path=/opt/w.sh', v => 'OK path=/opt/v.sh|profile=default' },
         agent   => $REQUIRED . "[profile default]\nrun_as = nobody\n",
         scripts => "w = /opt/w.sh\r\nv = /opt/v.sh profile=default\r\n",
         names   => [qw(w v)],
@@ -169,6 +176,7 @@ push @fixtures, (
     },
     {
         label   => 'scripts: profile= placement, repeats, empty, odd annotations',
+        expect  => { l => 'OK path=/opt/l.sh|profile=a', r => 'OK path=/opt/r.sh|profile=a', rep => 'OK path=/opt/rep.sh|profile=b', emp => 'DENY undefined-profile', unk => 'OK path=/opt/unk.sh|profile=a', upper => 'DENY not-allowlisted' },
         agent   => $REQUIRED . "[profile a]\nrun_as = nobody\n[profile b]\nrun_as = root\n",
         scripts => "l = profile=a /opt/l.sh\nr = /opt/r.sh profile=a\n"
                  . "rep = /opt/rep.sh profile=a profile=b\nrep2 = profile=b /opt/rep2.sh profile=a\n"
@@ -180,6 +188,7 @@ push @fixtures, (
     },
     {
         label   => 'scripts: script_dirs boundary (prefix, trailing slash, dots)',
+        expect  => { in => 'OK', sib => 'DENY not-in-script-dirs', second => 'OK', out => 'DENY not-in-script-dirs' },
         agent   => $REQUIRED . "script_dirs = /opt/s/:/srv/x\n[profile default]\nrun_as = nobody\n",
         scripts => "in = /opt/s/a.sh\nsib = /opt/sx/a.sh\nexact = /opt/s\n"
                  . "second = /srv/x/y/z.sh\ndots = /opt/s/../evil.sh\nout = /etc/passwd\n",
@@ -187,6 +196,7 @@ push @fixtures, (
     },
     {
         label   => 'script_dirs: only separators => no restriction',
+        expect  => { a => 'DENY not-in-script-dirs' },
         agent   => $REQUIRED . "script_dirs = :::\n[profile default]\nrun_as = nobody\n",
         scripts => "a = /anywhere/a.sh\n",
         names   => [qw(a)],
@@ -199,12 +209,14 @@ push @fixtures, (
     },
     {
         label   => 'scripts: very long path line (5000 chars)',
+        expect  => { long => 'DENY not-allowlisted', after => 'OK' },
         agent   => $REQUIRED . "[profile default]\nrun_as = nobody\n",
         scripts => "long = $LONG\nafter = /opt/after.sh\n",
         names   => [qw(long after)],
     },
     {
         label   => 'scripts: name lookups case, hyphen, underscore, dot',
+        expect  => { 'My-Script_2' => 'OK', 'my-script_2' => 'DENY not-allowlisted', 'my.dot' => 'DENY not-allowlisted' },
         agent   => $REQUIRED . "[profile default]\nrun_as = nobody\n",
         scripts => "My-Script_2 = /opt/m.sh\nmy.dot = /opt/dot.sh\n",
         names   => ['My-Script_2', 'my-script_2', 'my.dot'],
@@ -212,18 +224,21 @@ push @fixtures, (
     # -- scripts.conf: duplicate names -----------------------------------------
     {
         label   => 'scripts: duplicate names, both valid',
+        expect  => { dup => 'OK path=/opt/second.sh|profile=b' },
         agent   => $REQUIRED . "[profile default]\nrun_as = nobody\n[profile b]\nrun_as = root\n",
         scripts => "dup = /opt/first.sh\ndup = /opt/second.sh profile=b\n",
         names   => [qw(dup)],
     },
     {
         label   => 'scripts: duplicate names, first skipped (two paths), second valid',
+        expect  => { dup => 'OK path=/opt/second.sh' },
         agent   => $REQUIRED . "[profile default]\nrun_as = nobody\n",
         scripts => "dup = /opt/a.sh /opt/b.sh\ndup = /opt/second.sh\n",
         names   => [qw(dup)],
     },
     {
         label   => 'scripts: duplicate names, first valid, second skipped (relative)',
+        expect  => { dup => 'OK path=/opt/first.sh' },
         agent   => $REQUIRED . "[profile default]\nrun_as = nobody\n",
         scripts => "dup = /opt/first.sh\ndup = rel.sh\n",
         names   => [qw(dup)],
@@ -231,6 +246,7 @@ push @fixtures, (
     # -- agent.conf: comments, whitespace, sections ----------------------------
     {
         label   => 'agent: inline # becomes part of the value (run_as invalid)',
+        expect  => { s => 'CONFIG-ERROR' },
         agent   => $REQUIRED . "[profile p]\nrun_as = root # because\n",
         scripts => "s = /opt/s.sh profile=p\n",
         names   => [qw(s)],
@@ -243,24 +259,28 @@ push @fixtures, (
     },
     {
         label   => 'agent: inline # in writable stays in the path',
+        expect  => { s => 'OK path=/opt/s.sh|profile=p|run_as=|nnp=1|caps=|writable=/var/lib/x # data' },
         agent   => $REQUIRED . "[profile p]\nwritable = /var/lib/x # data\n",
         scripts => "s = /opt/s.sh profile=p\n",
         names   => [qw(s)],
     },
     {
         label   => 'agent: inline # in no_new_privileges is not a true value',
+        expect  => { s => 'OK path=/opt/s.sh|profile=p|run_as=|nnp=0' },
         agent   => $REQUIRED . "[profile p]\nno_new_privileges = yes # ok\n",
         scripts => "s = /opt/s.sh profile=p\n",
         names   => [qw(s)],
     },
     {
         label   => 'agent: inline # in script_dirs is part of the dir',
+        expect  => { a => 'DENY not-in-script-dirs' },
         agent   => $REQUIRED . "script_dirs = /opt/s # dirs\n[profile default]\nrun_as = nobody\n",
         scripts => "a = /opt/s/a.sh\n",
         names   => [qw(a)],
     },
     {
         label   => 'agent: blank lines, tabs and spacing round = and in headers',
+        expect  => { s => 'OK path=/opt/s.sh|profile=sp|run_as=www-data|nnp=1|caps=CAP_KILL|writable=/a:/b' },
         agent   => $REQUIRED . "\n\n   \n\t[ profile   sp ]\t\n\trun_as\t=\t  www-data  \n"
                  . "  caps=CAP_KILL\n   writable   =   /a:/b   \n",
         scripts => "s = /opt/s.sh profile=sp\n",
@@ -268,6 +288,7 @@ push @fixtures, (
     },
     {
         label   => 'agent: CRLF line endings',
+        expect  => { s => 'OK path=/opt/s.sh|profile=p|run_as=www-data|nnp=0|caps=CAP_KILL' },
         agent   => "port = 7443\r\ncert = /x\r\nkey = /y\r\nca = /z\r\n"
                  . "[profile p]\r\nrun_as = www-data\r\ncaps = CAP_KILL\r\n"
                  . "no_new_privileges = no\r\n",
@@ -276,6 +297,7 @@ push @fixtures, (
     },
     {
         label   => 'agent: unknown keys (top level, profile, other sections) ignored',
+        expect  => { s => 'OK path=/opt/s.sh|profile=p|run_as=nobody' },
         agent   => $REQUIRED . "colour = blue\n[tags]\nrole = web\nscript_dirs = /nowhere\n"
                  . "[other]\nrun_as = root\n[profile p]\nfuture_key = 1\nrun_as = nobody\n",
         scripts => "s = /opt/s.sh profile=p\n",
@@ -289,6 +311,7 @@ push @fixtures, (
     },
     {
         label   => 'agent: profile blocks repeated merge, later keys win',
+        expect  => { s => 'OK path=/opt/s.sh|profile=p|run_as=www-data|nnp=1|caps=CAP_KILL|writable=/b' },
         agent   => $REQUIRED . "[profile p]\nrun_as = root\ncaps = CAP_KILL\nwritable = /a\n"
                  . "[profile q]\nrun_as = nobody\n"
                  . "[profile p]\nrun_as = www-data\nwritable = /b\n",
@@ -311,6 +334,7 @@ push @fixtures, (
     },
     {
         label   => 'agent: section keyword case ([PROFILE x])',
+        expect  => { s => 'OK path=/opt/s.sh|profile=x|run_as=nobody' },
         agent   => $REQUIRED . "[PROFILE x]\nrun_as = nobody\n",
         scripts => "s = /opt/s.sh profile=x\n",
         names   => [qw(s)],
@@ -464,6 +488,8 @@ push @fixtures, (
         ['32 script_dirs',                    "script_dirs = " . join(':', map {"/d$_"} 1..32) . "\n[profile p]\nrun_as = nobody\n"],
         ['script_dirs entry 5000 chars',      "script_dirs = /" . ('x' x 5000) . "\n[profile p]\nrun_as = nobody\n"],
         ['very long ignored value line',      "colour = " . ('z' x 100000) . "\n[profile p]\nrun_as = nobody\n"],
+        ['top-level key named profiles',      "profiles = x\n[profile p]\nrun_as = nobody\n"],
+        ['top-level key named tags',          "tags = x\n[tags]\nrole = web\n[profile p]\nrun_as = nobody\n"],
         ['very long unknown profile value',   "[profile p]\nrun_as = nobody\nfuture = " . ('z' x 100000) . "\n"],
     )),
     (map { my ($lbl, $body) = @$_; +{
@@ -495,60 +521,19 @@ push @fixtures, (
     )),
 );
 
-my %PENDING = map { $_ => 1 } (
-    q{script_dirs: only separators => no restriction},
-    q{scripts: very long path line (5000 chars)},
-    q{scripts: name lookups case, hyphen, underscore, dot},
-    q{scripts: duplicate names, both valid},
-    q{scripts: duplicate names, first skipped (two paths), second valid},
-    q{agent: unknown keys (top level, profile, other sections) ignored},
-    q{agent: section keyword case ([PROFILE x])},
-    q{run_as: very long name (200)},
-    q{run_as: second profile with empty value},
-    q{caps: 33 caps},
-    q{caps: long cap name (200)},
-    q{writable: 33 paths},
-    q{writable: long path (5000)},
-    q{agent malformed: line without =},
-    q{agent malformed: top-level line without =},
-    q{agent malformed: key with a dot},
-    q{agent malformed: key starting with hyphen},
-    q{agent malformed: empty value, no trailing space},
-    q{agent malformed: empty script_dirs value},
-    q{agent malformed: header with extra word},
-    q{agent malformed: header with junk after ]},
-    q{agent malformed: header with double ]},
-    q{agent malformed: empty header},
-    q{agent malformed: blank header},
-    q{agent malformed: header name with hyphen},
-    q{agent malformed: header three words},
-    q{agent malformed: profile name with odd char},
-    q{agent malformed: profile name with slash},
-    q{agent malformed: leading = (no key)},
-    q{agent malformed: NUL byte inside a value},
-    q{agent malformed: vertical tab between caps},
-    q{agent malformed: form feed between caps},
-    q{agent malformed: carriage return between caps},
-    q{agent malformed: UTF-8 in profile name},
-    q{agent malformed: UTF-8 in key},
-    q{agent malformed: 65 profiles},
-    q{agent malformed: 33 script_dirs},
-    q{scripts malformed: vertical tab between path and annotation},
-    q{scripts malformed: form feed between two paths},
-    q{scripts malformed: NUL inside path},
-    q{scripts malformed: path 4096 chars},
-    q{scripts malformed: path 4097 chars},
-);
-
 for my $fx (@fixtures) {
-    next if $PENDING{ $fx->{label} };
     my $a = wf($fx->{agent});
     my $s = wf($fx->{scripts});
     subtest $fx->{label} => sub {
         for my $name (@{ $fx->{names} }) {
             my $perl = perl_resolve($a, $s, $name);
             my $c    = c_resolve($a, $s, $name);
-            is $c, $perl, "'$name': C and Perl agree ($perl)";
+            is $c, $perl, "'$name': C and Perl agree (" . substr($perl, 0, 120) . ")";
+            # Pin the outcome where the label states one, so two parsers that
+            # both fail for the wrong reason cannot pass vacuously.
+            if (my $want = ($fx->{expect} // {})->{$name}) {
+                like $perl, qr/^\Q$want\E/, "'$name': outcome is $want";
+            }
         }
     };
 }

@@ -97,6 +97,8 @@ typedef struct {
     int       nprofiles;
     char      script_dirs[MAX_DIRS][VALLEN];
     int       ndirs;
+    int       dirs_restrict;       /* script_dirs set non-empty, even if it
+                                      yields no directories: deny all */
 } config_t;
 
 /* ---- small helpers ---------------------------------------------------- */
@@ -109,7 +111,10 @@ static char *trim(char *s) {
 }
 
 /* Split src on any char in `seps`, preserving order, into dst[][len].
- * Empty fields are dropped (matches Perl `grep { length } split`). */
+ * Empty fields are dropped (matches Perl `grep { length } split`). Returns -1
+ * when there are more than maxn fields or a field does not fit stride: a
+ * truncated writable path or capability name would silently mean something
+ * else, so it is a config error (the Perl parser enforces the same limits). */
 static int split_into(const char *src, const char *seps,
                       char *dst, size_t stride, int maxn, int *count) {
     *count = 0;
@@ -122,7 +127,7 @@ static int split_into(const char *src, const char *seps,
         size_t n = 0;
         while (*p && !strchr(seps, *p) && n + 1 < stride) out[n++] = *p++;
         out[n] = '\0';
-        while (*p && !strchr(seps, *p)) p++;       /* overflow guard: consume rest */
+        if (*p && !strchr(seps, *p)) return -1;    /* field too long */
         (*count)++;
     }
     return 0;
@@ -138,6 +143,7 @@ static profile_t *intern_profile(config_t *c, const char *name) {
     profile_t *p = find_profile(c, name);
     if (p) return p;
     if (c->nprofiles >= MAX_PROFILES) return NULL;
+    if (strlen(name) >= NAMELEN) return NULL;   /* never truncate a name */
     p = &c->profiles[c->nprofiles++];
     memset(p, 0, sizeof(*p));
     snprintf(p->name, sizeof(p->name), "%s", name);
@@ -153,9 +159,11 @@ static int set_profile_field(profile_t *p, const char *k, const char *v,
     if (strcmp(k, "run_as") == 0) {
         if (*v) {
             /* [A-Za-z_][A-Za-z0-9_-]* or all-digits */
-            int ok = 1, alldig = 1;
+            int ok = strlen(v) < sizeof(p->run_as), alldig = 1;
             for (const char *q = v; *q; q++) if (!isdigit((unsigned char)*q)) alldig = 0;
-            if (!alldig) {
+            if (!ok) {
+                /* too long to hold: invalid, never truncated */
+            } else if (!alldig) {
                 if (!(isalpha((unsigned char)v[0]) || v[0] == '_')) ok = 0;
                 for (const char *q = v + 1; ok && *q; q++)
                     if (!(isalnum((unsigned char)*q) || *q == '_' || *q == '-')) ok = 0;
@@ -178,8 +186,8 @@ static int set_profile_field(profile_t *p, const char *k, const char *v,
             snprintf(p->run_as, sizeof(p->run_as), "%s", v);
         }
     } else if (strcmp(k, "caps") == 0) {
-        if (split_into(v, ", \t", (char *)p->caps, sizeof(p->caps[0]), MAX_CAPS, &p->ncaps) != 0) {
-            fprintf(stderr, "Profile '%s': too many caps in '%s'\n", p->name, path);
+        if (split_into(v, ", \t\r\n\v\f", (char *)p->caps, sizeof(p->caps[0]), MAX_CAPS, &p->ncaps) != 0) {
+            fprintf(stderr, "Profile '%s': too many caps, or a name too long, in '%s'\n", p->name, path);
             return -1;
         }
         for (int i = 0; i < p->ncaps; i++) {
@@ -195,7 +203,7 @@ static int set_profile_field(profile_t *p, const char *k, const char *v,
         }
     } else if (strcmp(k, "writable") == 0) {
         if (split_into(v, ":", (char *)p->writable, sizeof(p->writable[0]), MAX_WRITABLE, &p->nwritable) != 0) {
-            fprintf(stderr, "Profile '%s': too many writable paths in '%s'\n", p->name, path);
+            fprintf(stderr, "Profile '%s': too many writable paths, or a path too long, in '%s'\n", p->name, path);
             return -1;
         }
         for (int i = 0; i < p->nwritable; i++)
@@ -213,6 +221,65 @@ static int set_profile_field(profile_t *p, const char *k, const char *v,
     return 0;
 }
 
+/* Character classes used by the Perl parser's regexes: \w is [A-Za-z0-9_]
+ * (ASCII only: the Perl source has no unicode_strings feature, and this binary
+ * never calls setlocale, so isalnum is the C locale's). */
+static int is_word(int ch) { return isalnum((unsigned char)ch) || ch == '_'; }
+
+/* Mirror of Perl's  /^\s*\[\s*(\w+)(?:\s+([\w.-]+))?\s*\]\s*$/  on a line
+ * already trimmed and starting with '['. On success fills *sect and *sub (NULL
+ * when absent) and returns 1; 0 means "not a header" (Perl then croaks). */
+static int parse_header(char *s, char **sect, char **sub) {
+    size_t n = strlen(s);
+    if (n < 2 || s[n - 1] != ']') return 0;
+    s[n - 1] = '\0';
+    char *p = s + 1;
+    while (isspace((unsigned char)*p)) p++;
+    if (!is_word(*p)) return 0;
+    *sect = p;
+    while (is_word(*p)) p++;
+    char *e = p;
+    *sub = NULL;
+    while (isspace((unsigned char)*p)) p++;
+    if (*p) {
+        if (p == e) return 0;                        /* \w+ then junk, no gap */
+        char *b = p;
+        while (is_word(*p) || *p == '.' || *p == '-') p++;
+        if (p == b) return 0;
+        char *se = p;
+        while (isspace((unsigned char)*p)) p++;
+        if (*p) return 0;
+        *se = '\0';
+        *sub = b;
+    }
+    *e = '\0';
+    return 1;
+}
+
+/* Mirror of Perl's  /^\s*(\w+[\w-]*)\s*=\s*(.+?)\s*$/  on a raw (newline-
+ * stripped) line. Fills *k and *v and returns 1, or 0 when the line does not
+ * match. Quirk kept on purpose: a value of nothing but whitespace is the last
+ * whitespace character (the regex's \s* backtracks one char to satisfy .+?),
+ * while an empty value does not match at all. */
+static int parse_kv(char *l, char **k, char **v) {
+    while (isspace((unsigned char)*l)) l++;
+    if (!is_word(*l)) return 0;
+    char *kb = l;
+    while (is_word(*l) || *l == '-') l++;
+    char *ke = l;
+    while (isspace((unsigned char)*l)) l++;
+    if (*l != '=') return 0;
+    char *rest = l + 1;
+    if (!*rest) return 0;                            /* empty value: no match */
+    *ke = '\0';
+    *k = kb;
+    char *r = rest;
+    while (isspace((unsigned char)*r)) r++;
+    if (!*r) { *v = rest + strlen(rest) - 1; return 1; }
+    *v = trim(rest);
+    return 1;
+}
+
 static int parse_agent_conf(const char *path, config_t *c) {
     FILE *f = fopen(path, "r");
     if (!f) { fprintf(stderr, "Cannot open config '%s'\n", path); return -1; }
@@ -222,31 +289,38 @@ static int parse_agent_conf(const char *path, config_t *c) {
     size_t cap = 0;
     ssize_t len;
     int section_profile = 0;
+    int toplevel = 1;          /* before the first [section] header */
     profile_t *cur = NULL;
     int rc = 0;
 
     while ((len = getline(&line, &cap, f)) != -1) {
-        if (len && line[len - 1] == '\n') line[len - 1] = '\0';
-        char *s = trim(line);
+        if (len && line[len - 1] == '\n') line[--len] = '\0';
+        if ((size_t)len != strlen(line)) {          /* NUL byte: Perl rejects too */
+            fprintf(stderr, "Malformed config line in '%s': contains a NUL byte\n", path);
+            rc = -1; break;
+        }
+        char *s = line;
+        while (isspace((unsigned char)*s)) s++;
         if (!*s || *s == '#') continue;            /* blank / full-line comment */
 
         if (*s == '[') {                           /* section header */
-            char *e = strchr(s, ']');
-            if (!e) { fprintf(stderr, "Malformed config line in '%s': %s\n", path, s); rc = -1; break; }
-            *e = '\0';
-            char *inner = trim(s + 1);
-            char *sp = inner;
-            while (*sp && !isspace((unsigned char)*sp)) sp++;
-            char *sub = NULL;
-            if (*sp) { *sp = '\0'; sub = trim(sp + 1); }
-            if (strcmp(inner, "profile") == 0) {
+            char *sect = NULL, *sub = NULL;
+            if (!parse_header(trim(s), &sect, &sub)) {
+                fprintf(stderr, "Malformed config line in '%s': %s\n", path, line);
+                rc = -1; break;
+            }
+            toplevel = 0;
+            if (strcasecmp(sect, "profile") == 0) {
                 if (!sub || !*sub) {
                     fprintf(stderr, "Profile section needs a name ([profile <name>]) in '%s'\n", path);
                     rc = -1; break;
                 }
                 section_profile = 1;
                 cur = intern_profile(c, sub);
-                if (!cur) { fprintf(stderr, "Too many profiles in '%s'\n", path); rc = -1; break; }
+                if (!cur) {
+                    fprintf(stderr, "Too many profiles, or a profile name too long, in '%s'\n", path);
+                    rc = -1; break;
+                }
             } else {
                 section_profile = 0;
                 cur = NULL;
@@ -254,20 +328,28 @@ static int parse_agent_conf(const char *path, config_t *c) {
             continue;
         }
 
-        char *eq = strchr(s, '=');
-        if (!eq) continue;                          /* tolerate; Perl croaks, but
-                                                       resolve only needs profiles */
-        *eq = '\0';
-        char *k = trim(s);
-        char *v = trim(eq + 1);
+        char *k, *v;
+        if (!parse_kv(line, &k, &v)) {
+            fprintf(stderr, "Malformed config line in '%s': %s\n", path, line);
+            rc = -1; break;
+        }
 
         if (section_profile && cur) {
             if (set_profile_field(cur, k, v, path) != 0) { rc = -1; break; }
-        } else if (strcmp(k, "script_dirs") == 0) {
-            if (split_into(v, ":", (char *)c->script_dirs, sizeof(c->script_dirs[0]), MAX_DIRS, &c->ndirs) != 0) {
-                fprintf(stderr, "Too many script_dirs in '%s'\n", path); rc = -1; break;
+        } else if (toplevel) {
+            if (strcmp(k, "profiles") == 0 || strcmp(k, "tags") == 0) {
+                /* names the Perl parser keeps its own tables under */
+                fprintf(stderr, "Reserved config key '%s' in '%s'\n", k, path);
+                rc = -1; break;
+            }
+            if (strcmp(k, "script_dirs") == 0) {
+                c->dirs_restrict = 1;                /* any value restricts, even ":" */
+                if (split_into(v, ":", (char *)c->script_dirs, sizeof(c->script_dirs[0]), MAX_DIRS, &c->ndirs) != 0) {
+                    fprintf(stderr, "Too many script_dirs, or one too long, in '%s'\n", path); rc = -1; break;
+                }
             }
         }
+        /* keys in any other section are ignored, as in the Perl parser */
     }
     free(line);
     fclose(f);
@@ -276,7 +358,9 @@ static int parse_agent_conf(const char *path, config_t *c) {
 
 /* ---- scripts.conf lookup ---------------------------------------------- */
 /* Find one script by name. Returns 1 found (out_path/out_profile set),
- * 0 not present / skipped (matches a Perl-skipped entry: not allowlisted). */
+ * 0 not present / skipped (matches a Perl-skipped entry: not allowlisted).
+ * Mirrors load_allowlist: a skipped line never replaces an earlier valid one
+ * and a later valid line replaces an earlier one (last valid entry wins). */
 
 static int find_script(const char *path, const char *want,
                        char *out_path, size_t plen,
@@ -286,22 +370,28 @@ static int find_script(const char *path, const char *want,
     char *line = NULL; size_t cap = 0; ssize_t len; int found = 0;
 
     while ((len = getline(&line, &cap, f)) != -1) {
-        if (len && line[len - 1] == '\n') line[len - 1] = '\0';
+        if (len && line[len - 1] == '\n') line[--len] = '\0';
+        if ((size_t)len != strlen(line)) continue;   /* NUL byte: skipped */
         char *s = trim(line);
         if (!*s || *s == '#') continue;
         char *eq = strchr(s, '=');
         if (!eq) continue;
         *eq = '\0';
         char *name = trim(s);
+        if (!*name) continue;
+        int namewell = 1;                            /* [\w-]+ */
+        for (char *q = name; *q; q++)
+            if (!(is_word(*q) || *q == '-')) namewell = 0;
+        if (!namewell) continue;
         if (strcmp(name, want) != 0) continue;
 
         /* Value: one bare path token + optional key=value annotations,
          * order-independent. Mirrors load_allowlist. */
         char *rest = trim(eq + 1);
         char scriptpath[VALLEN] = "", profile[NAMELEN] = "default";
-        int havepath = 0, twopaths = 0;
-        char *save = NULL, *tok = strtok_r(rest, " \t", &save);
-        for (; tok; tok = strtok_r(NULL, " \t", &save)) {
+        int havepath = 0, twopaths = 0, toolong = 0;
+        char *save = NULL, *tok = strtok_r(rest, " \t\r\n\v\f", &save);
+        for (; tok; tok = strtok_r(NULL, " \t\r\n\v\f", &save)) {
             char *te = strchr(tok, '=');
             if (te && te != tok) {           /* annotation key=value */
                 int isannot = 1;
@@ -309,20 +399,22 @@ static int find_script(const char *path, const char *want,
                     if (!(islower((unsigned char)*q) || *q == '_')) isannot = 0;
                 if (isannot) {
                     *te = '\0';
-                    if (strcmp(tok, "profile") == 0)
-                        snprintf(profile, sizeof(profile), "%s", te + 1);
+                    if (strcmp(tok, "profile") == 0) {
+                        if (strlen(te + 1) >= sizeof(profile)) toolong = 1;
+                        else snprintf(profile, sizeof(profile), "%s", te + 1);
+                    }
                     continue;
                 }
             }
             if (havepath) twopaths = 1;
+            else if (strlen(tok) >= sizeof(scriptpath)) { toolong = 1; havepath = 1; }
             else { snprintf(scriptpath, sizeof(scriptpath), "%s", tok); havepath = 1; }
         }
-        if (!havepath || twopaths) break;            /* skipped -> not allowlisted */
-        if (scriptpath[0] != '/') break;             /* relative -> skipped */
+        if (!havepath || twopaths || toolong) continue;   /* skipped entry */
+        if (scriptpath[0] != '/') continue;               /* relative -> skipped */
         snprintf(out_path, plen, "%s", scriptpath);
         snprintf(out_profile, prlen, "%s", profile);
-        found = 1;
-        break;
+        found = 1;                                        /* a later one may replace it */
     }
     free(line);
     fclose(f);
@@ -337,7 +429,7 @@ static void canon(const char *in, char *out, size_t n) {
 }
 
 static int path_in_dirs(const char *path, config_t *c) {
-    if (c->ndirs == 0) return 1;                     /* no restriction */
+    if (!c->dirs_restrict) return 1;                 /* no restriction */
     char rp[PATH_MAX]; canon(path, rp, sizeof(rp));
     for (int i = 0; i < c->ndirs; i++) {
         char rd[PATH_MAX]; canon(c->script_dirs[i], rd, sizeof(rd));

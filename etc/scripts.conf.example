@@ -12,6 +12,10 @@
 # script with no profile= uses the most-restrictive 'default'. A profile= naming
 # a profile not defined in agent.conf is a fatal config error (refuses to serve).
 #
+# A line with more than one path, a relative path, a name outside [A-Za-z0-9_-],
+# or a path of 4096 characters or more is skipped. If a name appears twice, the
+# last valid line wins; a skipped line never replaces an earlier valid one.
+#
 # Examples (with and without a profile):
 #   backup-mysql = /opt/ctrl-exec-scripts/backup-mysql.sh
 #   deploy-app   = /opt/ctrl-exec-scripts/deploy-app.sh

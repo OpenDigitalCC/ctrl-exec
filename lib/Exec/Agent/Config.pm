@@ -24,6 +24,20 @@ sub unreadable_path (@paths) {
     return undef;
 }
 
+# Storage limits of the C executor (src/ctrl-exec-exec.c: MAX_PROFILES, MAX_CAPS,
+# MAX_WRITABLE, MAX_DIRS, NAMELEN, VALLEN). The executor rejects a config that
+# exceeds them rather than truncating a name or path, so this parser rejects the
+# same configs - otherwise the front end would authorise a file the executor
+# refuses to load. KEEP IN SYNC WITH src/ctrl-exec-exec.c.
+use constant {
+    MAX_PROFILES => 64,
+    MAX_CAPS     => 32,
+    MAX_WRITABLE => 32,
+    MAX_DIRS     => 32,
+    NAMELEN      => 128,    # a value must be shorter than this
+    VALLEN       => 4096,   # a path must be shorter than this
+};
+
 # Load and validate agent.conf
 # Returns hashref of config values or dies with error
 sub load_config ($path = undef) {
@@ -38,6 +52,11 @@ sub load_config ($path = undef) {
 
     while (my $line = <$fh>) {
         chomp $line;
+        # The executor reads lines as C strings; a NUL would hide the rest of
+        # the line from it. Refuse rather than let the two parsers see
+        # different values.
+        croak "Malformed config line in '$path': contains a NUL byte"
+            if index($line, "\0") >= 0;
         next if $line =~ /^\s*#/;   # skip comments
         next if $line =~ /^\s*$/;   # skip blank lines
 
@@ -47,9 +66,13 @@ sub load_config ($path = undef) {
             if ($sect eq 'profile') {
                 croak "Profile section needs a name ([profile <name>]) in '$path'"
                     unless defined $sub && length $sub;
+                croak "Profile name too long in '$path': $sub"
+                    if length $sub >= NAMELEN;
                 $section     = 'profile';
                 $cur_profile = $sub;
                 $config{profiles}{$sub} //= {};
+                croak "Too many profiles in '$path' (max " . MAX_PROFILES . ")"
+                    if keys %{ $config{profiles} } > MAX_PROFILES;
             }
             else {
                 $section     = $sect;
@@ -68,6 +91,11 @@ sub load_config ($path = undef) {
                 $config{profiles}{$cur_profile}{$k} = $v;
             }
             elsif ($section eq '') {
+                # These names hold the parsed sections below; a plain top-level
+                # key of the same name would clobber them (and the executor
+                # rejects them too).
+                croak "Reserved config key '$k' in '$path'"
+                    if $k eq 'profiles' || $k eq 'tags';
                 $config{$k} = $v;
             }
             # silently ignore keys in unrecognised sections
@@ -96,6 +124,13 @@ sub _validate_config ($config, $path) {
         $config->{script_dirs} = [
             grep { length $_ } split /:/, $config->{script_dirs}
         ];
+        # NB: a value that yields no directories (":::") stays an empty list,
+        # which restricts every script out - the executor does the same.
+        croak "Too many script_dirs in '$path' (max " . MAX_DIRS . ")"
+            if @{ $config->{script_dirs} } > MAX_DIRS;
+        for my $d (@{ $config->{script_dirs} }) {
+            croak "script_dirs entry too long in '$path'" if length $d >= VALLEN;
+        }
     }
     else {
         delete $config->{script_dirs};   # absent = no restriction
@@ -133,16 +168,27 @@ sub _validate_config ($config, $path) {
                 croak "Profile '$pname': invalid capability '$c' (expected CAP_*) "
                     . "in '$path'$hint";
             }
+            croak "Profile '$pname': too many caps in '$path' (max " . MAX_CAPS . ")"
+                if @{ $p->{caps} } > MAX_CAPS;
+            for my $c (@{ $p->{caps} }) {
+                croak "Profile '$pname': capability name too long in '$path'"
+                    if length $c >= NAMELEN;
+            }
 
             $p->{writable} = [ grep { length } split /:/, ($p->{writable} // '') ];
             for my $w (@{ $p->{writable} }) {
                 croak "Profile '$pname': writable path must be absolute: '$w' in '$path'"
                     unless $w =~ m{^/};
+                croak "Profile '$pname': writable path too long in '$path'"
+                    if length $w >= VALLEN;
             }
+            croak "Profile '$pname': too many writable paths in '$path' (max " . MAX_WRITABLE . ")"
+                if @{ $p->{writable} } > MAX_WRITABLE;
 
             if (defined $p->{run_as} && length $p->{run_as}) {
                 croak "Profile '$pname': invalid run_as '$p->{run_as}' in '$path'"
-                    unless $p->{run_as} =~ /^(?:[A-Za-z_][A-Za-z0-9_-]*|\d+)$/;
+                    unless $p->{run_as} =~ /^(?:[A-Za-z_][A-Za-z0-9_-]*|\d+)\z/
+                        && length $p->{run_as} < NAMELEN;
                 # Bound a numeric uid/gid to 32 bits, matching the C executor
                 # (ctrl-exec-executor.c set_profile_field): a value that does not fit
                 # uid_t would be rejected by the executor at load, so reject it
@@ -264,6 +310,10 @@ sub load_allowlist ($path = undef, $script_dirs = undef) {
     my %allowlist;
     while (my $line = <$fh>) {
         chomp $line;
+        if (index($line, "\0") >= 0) {
+            warn "Allowlist: skipping line containing a NUL byte\n";
+            next;
+        }
         next if $line =~ /^\s*#/;
         next if $line =~ /^\s*$/;
         if ($line =~ /^\s*([\w-]+)\s*=\s*(.+?)\s*$/) {
@@ -292,6 +342,11 @@ sub load_allowlist ($path = undef, $script_dirs = undef) {
             }
             if (defined $extra_path) {
                 warn "Allowlist: skipping '$name' - more than one path on the line\n";
+                next;
+            }
+            if (length $script_path >= VALLEN
+                || length($annot{profile} // '') >= NAMELEN) {
+                warn "Allowlist: skipping '$name' - path or profile name too long\n";
                 next;
             }
             unless ($script_path =~ m{^/}) {
