@@ -16,6 +16,28 @@ case "$1" in
                 --shell /usr/sbin/nologin ctrl-exec
         fi
 
+        # Upgrade from before 0.13 (T-008): the config directory was /etc/ctrl-exec
+        # and is now /etc/ctrl-exec-dispatcher. If only the old one exists, move it,
+        # leave a symlink at the old name for one release (removed in 0.14), and
+        # point the paths inside ctrl-exec.conf at the new directory so nothing
+        # depends on the symlink (previous file kept as ctrl-exec.conf.pre-0.13).
+        # If both exist the new one is used and the old one left for the operator.
+        if [ -d /etc/ctrl-exec ] && [ ! -L /etc/ctrl-exec ]; then
+            if [ -e /etc/ctrl-exec-dispatcher ]; then
+                echo "ctrl-exec: both /etc/ctrl-exec and /etc/ctrl-exec-dispatcher exist;" >&2
+                echo "ctrl-exec: using the latter and leaving /etc/ctrl-exec alone." >&2
+            else
+                mv /etc/ctrl-exec /etc/ctrl-exec-dispatcher
+                ln -s /etc/ctrl-exec-dispatcher /etc/ctrl-exec
+                echo "ctrl-exec: moved /etc/ctrl-exec to /etc/ctrl-exec-dispatcher (symlink left until 0.14)."
+                conf=/etc/ctrl-exec-dispatcher/ctrl-exec.conf
+                if [ -f "$conf" ] && grep -q '=[[:space:]]*/etc/ctrl-exec/' "$conf"; then
+                    cp -p "$conf" "$conf.pre-0.13"
+                    sed -i 's|\(=[[:space:]]*\)/etc/ctrl-exec/|\1/etc/ctrl-exec-dispatcher/|' "$conf"
+                fi
+            fi
+        fi
+
         # Config directory.
         mkdir -p /etc/ctrl-exec-dispatcher
         chmod 750 /etc/ctrl-exec-dispatcher

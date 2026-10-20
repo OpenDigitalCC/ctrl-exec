@@ -80,14 +80,36 @@ esac
 # paired) but it also suppresses the restart-after-upgrade compat 13 would do,
 # leaving the old code running until a manual restart. Gate on is-active so a
 # stopped or never-paired service is left alone. Restart the executor first so
-# the agent reconnects to the new one. Runs after the debhelper-generated
+# the agent reconnects to the new one (an executor just started by the 0.13
+# migration below is not restarted again). Runs after the debhelper-generated
 # section, so its daemon-reload has loaded any changed units. (Do not write the
 # debhelper token in this comment - it would be substituted a second time and
 # splice shell code into the comment.)
+executor_started=
 case "$1" in
     configure)
+        # Upgrade from before 0.13 (T-008): ctrl-exec-exec became
+        # ctrl-exec-executor. The preinst stopped and disabled the old unit and
+        # left markers in /run; dpkg has removed its unit file and binary. Give
+        # the new unit the old one's state. (Not a restart: the old one is gone.)
+        marker=/run/ctrl-exec-executor-migrate
+        rm -f /usr/sbin/ctrl-exec-exec
+        if [ -d /run/systemd/system ]; then
+            if [ -e "$marker.enabled" ]; then
+                systemctl enable ctrl-exec-executor.service || true
+            fi
+            if [ -e "$marker.active" ]; then
+                deb-systemd-invoke start ctrl-exec-executor.service || true
+                executor_started=1
+                echo "ctrl-exec: ctrl-exec-executor started in place of ctrl-exec-exec."
+            fi
+        fi
+        rm -f "$marker.active" "$marker.enabled"
         if [ -n "$2" ] && [ -d /run/systemd/system ]; then
             for svc in ctrl-exec-executor ctrl-exec-agent; do
+                if [ "$svc" = ctrl-exec-executor ] && [ -n "$executor_started" ]; then
+                    continue
+                fi
                 if systemctl is-active --quiet "$svc.service"; then
                     deb-systemd-invoke restart "$svc.service" || true
                     echo "ctrl-exec: restarted $svc to apply the upgrade."

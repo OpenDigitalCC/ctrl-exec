@@ -1,0 +1,29 @@
+#!/bin/sh
+set -e
+
+# Upgrade from before 0.13 (T-008): the privileged executor was ctrl-exec-exec
+# (ctrl-exec-exec.service) and is now ctrl-exec-executor. Stop and disable the
+# old unit here, while its unit file still exists (dpkg removes the file when it
+# unpacks this version), and note whether it was enabled / running in /run so the
+# postinst can give the new unit the same state. A fresh install, or a host that
+# never ran the executor, does nothing.
+case "$1" in
+    upgrade)
+        if [ -d /run/systemd/system ]; then
+            marker=/run/ctrl-exec-executor-migrate
+            rm -f "$marker.active" "$marker.enabled"
+            if systemctl is-active --quiet ctrl-exec-exec.service 2>/dev/null; then
+                : > "$marker.active"
+                systemctl stop ctrl-exec-exec.service || true
+            fi
+            if systemctl is-enabled --quiet ctrl-exec-exec.service 2>/dev/null; then
+                : > "$marker.enabled"
+                systemctl disable ctrl-exec-exec.service || true
+            fi
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0
