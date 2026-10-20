@@ -47,6 +47,13 @@ subtest 'real HTTP statuses and unknowns pass through unchanged' => sub {
     is xlate("no response"),               "no response",               'unknown untouched';
 };
 
+subtest 'agent rate-limit reply (429) is explained' => sub {
+    my $m = xlate("429 Too Many Requests");
+    like $m, qr/rate-limited this dispatcher \(HTTP 429\)/, 'names the cause';
+    like $m, qr/trusted-dispatcher map/, 'points at pairing/trust';
+    like $m, qr/rate_limit_volume/,      'and at the agent knob';
+};
+
 subtest 'host name is interpolated' => sub {
     like Exec::Engine::_transport_error("Connection refused", 'db-7', 7443),
         qr/'db-7'/, 'uses the given host';

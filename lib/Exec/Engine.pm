@@ -85,7 +85,7 @@ sub dispatch_all (%opts) {
     for my $f (@$fanned) {
         my $result = $f->{result}
             // { script => $script, exit => -1,
-                 error => 'no response from child', reqid => $reqid };
+                 error => 'no response from child' . _lost($f), reqid => $reqid };
         _canonicalise($result, $f->{name});
         push @results, $result;
     }
@@ -138,7 +138,7 @@ sub result_all (%opts) {
     my @results;
     for my $f (@$fanned) {
         my $result = $f->{result}
-            // { status => 'error', error => 'no response from child', reqid => $reqid };
+            // { status => 'error', error => 'no response from child' . _lost($f), reqid => $reqid };
         _canonicalise($result, $f->{name});
         push @results, $result;
     }
@@ -191,7 +191,7 @@ sub ping_all (%opts) {
     my @results;
     for my $f (@$fanned) {
         my $result = $f->{result}
-            // { status => 'error', error => 'no response from child' };
+            // { status => 'error', error => 'no response from child' . _lost($f) };
 
         # Trigger cert renewal if the cert is past half-life. Renewal connects to
         # the resolved target, not the canonical name. Skip when the agent already
@@ -266,7 +266,7 @@ sub capabilities_all (%opts) {
     my @results;
     for my $f (@$fanned) {
         my $result = $f->{result}
-            // { status => 'error', error => 'no response from child' };
+            // { status => 'error', error => 'no response from child' . _lost($f) };
         _canonicalise($result, $f->{name});
         push @results, $result;
     }
@@ -352,7 +352,17 @@ sub _fan_out ($entries, $max, $worker) {
             die "fork: $!" unless defined $pid;
             if ($pid == 0) {
                 close $r;
-                my $result = $worker->($name, $target);
+                # The worker inherits the API server's INT/TERM handlers (which
+                # exit 0 silently) and Perl's default SIGPIPE (terminate). Either
+                # would end it with an empty pipe and no trace of why. Let a
+                # signal death show up in the wait status instead, and turn a
+                # die inside the worker into a message the parent can report.
+                local $SIG{PIPE} = 'IGNORE';
+                local $SIG{INT}  = 'DEFAULT';
+                local $SIG{TERM} = 'DEFAULT';
+                my $result = eval { $worker->($name, $target) };
+                $result = { _worker_died => "$@" } if $@;
+                $result //= { _worker_died => 'worker returned no result' };
                 print $w encode_json($result);
                 close $w;
                 exit 0;
@@ -362,20 +372,74 @@ sub _fan_out ($entries, $max, $worker) {
         }
 
         my $pid = waitpid -1, 0;
-        last if $pid <= 0;
+        if ($pid <= 0) {
+            # Nothing to collect although workers are outstanding (ECHILD: they
+            # were reaped elsewhere, e.g. by an inherited SIGCHLD reaper). Report
+            # each as lost, with the errno, instead of dropping them silently.
+            my $why = "waitpid: $!";
+            for my $p (sort keys %pipes) {
+                close $pipes{$p}{fh};
+                push @out, {
+                    name    => $pipes{$p}{name},
+                    target  => $pipes{$p}{target},
+                    result  => undef,
+                    failure => $why,
+                };
+            }
+            %pipes = ();
+            last;
+        }
         next unless exists $pipes{$pid};
+        my $status = $?;
         my $fh  = $pipes{$pid}{fh};
         my $raw = do { local $/; <$fh> };
         close $fh;
+        $raw //= '';
+        my $decoded = length $raw ? scalar eval { decode_json($raw) } : undef;
+        my ($result, $failure) = _worker_outcome($decoded, $status, length $raw);
         push @out, {
             name   => $pipes{$pid}{name},
             target => $pipes{$pid}{target},
-            result => scalar eval { decode_json($raw) },
+            result => $result,
+            (defined $failure ? (failure => $failure) : ()),
         };
         delete $pipes{$pid};
     }
 
     return \@out;
+}
+
+# Reduce a reaped worker's decoded pipe output and wait status to
+# (result, failure). result is the worker's hashref on success, else undef with
+# failure saying why - so the caller's "no response from child" carries the
+# reason ("worker killed by signal 13", "worker exited 1 with no output",
+# "worker died: ...") instead of leaving the next incident to guesswork.
+sub _worker_outcome ($decoded, $status, $len) {
+    if (ref $decoded eq 'HASH') {
+        return ($decoded, undef) unless exists $decoded->{_worker_died};
+        my $msg = $decoded->{_worker_died} // '';
+        $msg =~ s/\s+\z//;
+        return (undef, "worker died: $msg");
+    }
+    my $sig  = $status & 127;
+    return (undef, "worker killed by signal $sig") if $sig;
+    my $code = $status >> 8;
+    return (undef, "worker exited $code with no output") unless $len;
+    return (undef, "worker exited $code with unparseable output");
+}
+
+# Decode an agent response body, returning a hashref or undef. Agents always
+# answer with a JSON object; a scalar/array/invalid body must not become a
+# "Not a HASH reference" die inside a fan-out worker (which would surface as an
+# empty result), it becomes the ordinary 'invalid JSON response' error.
+sub _json_hash ($content) {
+    my $d = eval { decode_json($content // '') };
+    return ref $d eq 'HASH' ? $d : undef;
+}
+
+# The suffix a caller appends to its 'no response from child' fallback.
+sub _lost ($f) {
+    return defined $f->{failure} ? ": $f->{failure}" : '';
 }
 
 sub _dispatch_one (%opts) {
@@ -414,7 +478,7 @@ sub _dispatch_one (%opts) {
         # refusing because the same script is already running. Surface it as a
         # distinct 'busy' status rather than a generic error.
         if ($async && $resp && $resp->code == 409) {
-            my $body = eval { decode_json($resp->content) } // {};
+            my $body = _json_hash($resp->content) // {};
             Exec::Log::log_action('WARNING', {
                 ACTION => 'run-async',
                 SCRIPT => $opts{script},
@@ -435,7 +499,7 @@ sub _dispatch_one (%opts) {
 
         my $err;
         if ($resp && $resp->code == 403) {
-            my $body = eval { decode_json($resp->content) } // {};
+            my $body = _json_hash($resp->content) // {};
             $err = 'forbidden: ' . ($body->{error} // $resp->status_line);
         }
         elsif ($resp && $resp->code == 413) {
@@ -466,7 +530,7 @@ sub _dispatch_one (%opts) {
         };
     }
 
-    my $decoded = eval { decode_json($resp->content) };
+    my $decoded = _json_hash($resp->content);
 
     if ($async) {
         # The agent returns 202 { status => 'accepted', reqid } - the job is
@@ -553,7 +617,7 @@ sub _result_one (%opts) {
         };
     }
 
-    my $decoded = eval { decode_json($resp->content) };
+    my $decoded = _json_hash($resp->content);
     my $result  = $decoded // { status => 'error', error => 'invalid JSON' };
     $result->{rtt}    = $rtt;
     $result->{reqid} //= $reqid;
@@ -603,7 +667,7 @@ sub _ping_one (%opts) {
         return { host => $host, status => 'error', error => $err, rtt => $rtt };
     }
 
-    my $decoded = eval { decode_json($resp->content) };
+    my $decoded = _json_hash($resp->content);
     my $result  = $decoded // { status => 'error', error => 'invalid JSON' };
 
     $result->{reported_hostname} = $decoded->{host}
@@ -648,7 +712,7 @@ sub _capabilities_one (%opts) {
         return { host => $host, status => 'error', error => $err, rtt => $rtt };
     }
 
-    my $decoded = eval { decode_json($resp->content) };
+    my $decoded = _json_hash($resp->content);
     my $result  = $decoded // { status => 'error', error => 'invalid JSON' };
 
     $result->{reported_hostname} = $decoded->{host}
@@ -674,7 +738,7 @@ sub _capabilities_one (%opts) {
 # below can clobber it.
 sub _classify_error ($resp, $at, $host, $port) {
     if ($resp && $resp->code == 403) {
-        my $body = eval { decode_json($resp->content) } // {};
+        my $body = _json_hash($resp->content) // {};
         return 'forbidden: ' . ($body->{error} // $resp->status_line);
     }
     return _transport_error($at || ($resp ? $resp->status_line : 'no response'),
@@ -712,6 +776,11 @@ sub _transport_error ($raw, $host, $port) {
         if $raw =~ /ssl \s connect | \bssl\b | \btls\b | certificate | handshake |
                     verify \s failed/xi;
 
+    return "agent rate-limited this dispatcher (HTTP 429) - its certificate serial "
+         . "is not in the agent's trusted-dispatcher map (pair it), or raise "
+         . "rate_limit_volume on the agent"
+        if $raw =~ /^\s*429\b/;
+
     return $raw;   # unrecognised - leave as-is (may be a real HTTP status)
 }
 
@@ -743,7 +812,7 @@ sub rotate_all (%opts) {
     my @results;
     for my $f (@$fanned) {
         my $result = $f->{result}
-            // { status => 'error', exit => -1, error => 'no response from child' };
+            // { status => 'error', exit => -1, error => 'no response from child' . _lost($f) };
         $result->{host} = $f->{name};     # report by the registry name, not the resolved address
         push @results, $result;
     }
@@ -768,7 +837,7 @@ sub _rotate_one (%opts) {
         return { host => $host, status => 'error', exit => -1, error => $err, rtt => $rtt };
     }
 
-    my $decoded = eval { decode_json($resp->content) }
+    my $decoded = _json_hash($resp->content)
         // { status => 'error', error => 'invalid JSON' };
     $decoded->{rtt}  = $rtt;
     $decoded->{exit} //= (($decoded->{status} // '') eq 'ok') ? 0 : -1;
@@ -845,7 +914,7 @@ sub _renew_one (%opts) {
     );
     die "renew request failed: " . $resp->status_line unless $resp->is_success;
 
-    my $data = eval { decode_json($resp->content) }
+    my $data = _json_hash($resp->content)
         or die "invalid JSON in renew response";
     my $csr_pem = $data->{csr} or die "no CSR in renew response";
 
