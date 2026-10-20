@@ -749,7 +749,7 @@ install_ctrl_exec_dispatcher() {
 
     # ctrl-exec config
     if [[ ! -f "$EXEC_CONF_DIR/ctrl-exec.conf" ]]; then
-        safe_install 640 "$SOURCE_DIR/etc/ctrl-exec-dispatcher.conf.example" "$EXEC_CONF_DIR/ctrl-exec.conf"
+        safe_install 640 "$SOURCE_DIR/etc/ctrl-exec.conf.example" "$EXEC_CONF_DIR/ctrl-exec.conf"
         chown root:"$EXEC_GROUP" "$EXEC_CONF_DIR/ctrl-exec.conf"
         warn "ctrl-exec config written to $EXEC_CONF_DIR/ctrl-exec.conf - review before use."
     else

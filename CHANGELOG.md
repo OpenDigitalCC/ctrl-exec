@@ -151,6 +151,10 @@ task group, each adding its bullets to this entry.
   with their reasons. The agent now applies `script_dirs` when it loads
   `scripts.conf` (as the docs always said), so a script outside the approved
   directories is no longer advertised by `/capabilities`. (T-044)
+- **Fixed** `install.sh --dispatcher` / `--api` failing on a missing file: the
+  0.13 config-directory rename pointed it at `etc/ctrl-exec-dispatcher.conf.example`;
+  the example is still `etc/ctrl-exec.conf.example`. `t/install-sources.t` now
+  checks that every file install.sh copies from the source tree exists.
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 
