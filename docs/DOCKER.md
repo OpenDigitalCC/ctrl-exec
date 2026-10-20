@@ -172,12 +172,13 @@ account when it exists. A fixed number makes bind-mount ownership the same on
 every host, which matters under `userns-remap` (see *Volumes and layout*). Change
 `CE_UID` if 10001 clashes with something on your hosts.
 
-The postinst also seeds `ctrl-exec.conf` and an `auth-hook` into
-`/etc/ctrl-exec-dispatcher`. The packaged `ctrl-exec.conf` names that hook as
-active, and the hook is the example, which authorises every request. The
-Dockerfile removes both so that neither can end up on a volume (a named volume
-is filled from the image on first use) and take the place of the config the
-entrypoint writes. See *Auth hook*.
+The postinst also seeds `ctrl-exec.conf` and an example `auth-hook` into
+`/etc/ctrl-exec-dispatcher`. The packaged `ctrl-exec.conf` has `auth_hook`
+commented out, so it is fail-closed, and the example hook (which authorises
+every request) is inactive until named. The Dockerfile still removes both so
+that neither can end up on a volume (a named volume is filled from the image on
+first use) and take the place of the config the entrypoint writes. See
+*Auth hook*.
 
 `rsyslog`, `rsyslog-gnutls` and `ca-certificates` are for optional remote syslog
 forwarding (see *Remote syslog forwarding*); they are inert unless `SYSLOG_HOST`
@@ -514,13 +515,14 @@ The auth hook controls who is permitted to run scripts and ping agents.
 The setting `api_auth_default` applies **only when no `auth_hook` is configured**.
 Once `ctrl-exec.conf` names a hook, the hook decides every request and
 `api_auth_default` is ignored. The consequence to be careful of: the example
-hook (`auth-hook.example`) ends with `exit 0`, so it authorises everything. The
-bare-metal package installs it as the active hook with `auth_hook` pointing at
-it, which means a fresh package install permits every API request regardless of
-`api_auth_default`. Do not rely on `deny` as a safety net with the example hook
-in place.
+hook (`auth-hook.example`) ends with `exit 0`, so it authorises everything.
+Naming it as `auth_hook` makes `api_auth_default` irrelevant: do not rely on
+`deny` as a safety net with the example hook in place. The bare-metal package
+seeds the example hook but leaves `auth_hook` commented out in `ctrl-exec.conf`,
+so a fresh install denies API requests until the operator writes a hook and
+enables it.
 
-The container differs from that on purpose. The Dockerfile removes the packaged
+The container follows the same rule. The Dockerfile removes the packaged
 config and hook, and the entrypoint writes `auth_hook` into `ctrl-exec.conf` only
 if a hook file is already present on the data mount at first start. With no
 hook, `api_auth_default` governs, and the default is `deny`: the API refuses

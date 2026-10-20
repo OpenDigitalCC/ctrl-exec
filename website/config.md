@@ -15,7 +15,7 @@ current_page: /config
 | `cert` | — | Path to the dispatcher TLS certificate |
 | `key` | — | Path to the dispatcher private key |
 | `ca` | — | Path to the CA certificate |
-| `auth_hook` | — | Path to the auth hook executable. Optional. |
+| `auth_hook` | — | Path to the auth hook executable. Not set in the shipped conf, so the API denies requests until you set one (see `api_auth_default`). |
 | `api_port` | `7445` | HTTP port for `ctrl-exec-api` |
 | `api_cert` | — | TLS certificate for the API server. Enables TLS when set. |
 | `api_key` | — | TLS private key for the API server |

@@ -1593,8 +1593,10 @@ unpairing
 
 API security
 : Port 7445 has no mTLS. Auth is delegated entirely to the auth hook. The
-  default hook authorises everything; operators must replace it with real
-  token or credential checking for any internet-facing deployment.
+  shipped conf enables no hook, so API requests are denied until the
+  operator configures one (the seeded example hook allows everything and is
+  inactive until named). Use real token or credential checking for any
+  internet-facing deployment.
 
 auth hook token
 : The token is passed to the hook via `ENVEXEC_TOKEN` env var and as a JSON

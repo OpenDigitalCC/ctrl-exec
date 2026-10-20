@@ -224,15 +224,27 @@ port      = 7443
 cert      = /etc/ctrl-exec-dispatcher/dispatcher.crt
 key       = /etc/ctrl-exec-dispatcher/dispatcher.key
 ca        = /etc/ctrl-exec-dispatcher/ca.crt
-auth_hook = /etc/ctrl-exec-dispatcher/auth-hook
 
 # Cert lifetime for new and renewed agent certs (days)
 cert_days = 365
 ```
 
-`auth_hook` is optional. Remove or comment it out to authorise all requests
-unconditionally. Appropriate for isolated networks; not recommended for
-production deployments accessible from outside.
+`auth_hook` is not set in the shipped `ctrl-exec.conf` (it is commented out),
+so a fresh install fails closed: the API refuses every request
+(`api_auth_default = deny`) until you configure authorisation. CLI use (`ced`)
+is gated by system user and group permissions and needs no hook. The install
+seeds `/etc/ctrl-exec-dispatcher/auth-hook` as a starting point, but that file
+authorises everything (`exit 0`) and is inactive until named. To use the API,
+write a hook with real rules (see *Auth Hook* below), then add
+
+```ini
+auth_hook = /etc/ctrl-exec-dispatcher/auth-hook
+```
+
+to `ctrl-exec.conf` and restart `ctrl-exec-api`. On an isolated network you
+may instead set `api_auth_default = allow`. An existing `ctrl-exec.conf` is
+never overwritten on upgrade, so a host that already names the hook keeps it;
+check it (see *Auth Hook*).
 
 ### 3. Agent host - configure before pairing
 
@@ -650,6 +662,12 @@ ENVEXEC_TIMESTAMP   ISO 8601 UTC timestamp
 
 The hook must not produce output. Use syslog for audit logging.
 
+The shipped `ctrl-exec.conf` does not enable a hook, and the seeded
+`auth-hook` example allows everything, so edit it before naming it in
+`auth_hook`. Upgrading from an earlier release leaves an existing
+`ctrl-exec.conf` alone: if yours names the seeded hook and you never changed
+it, it still authorises every API request - replace it with real rules.
+
 ### Examples
 
 Static token check:
@@ -925,8 +943,10 @@ Script not found
   TROUBLESHOOTING.md.
 
 Auth denied unexpectedly
-: Confirm `auth_hook` is absent or commented out in `ctrl-exec.conf` if no
-  hook is intended. Restart the API service after config changes.
+: A fresh install has no `auth_hook` and `api_auth_default = deny`, so every API
+  request is refused (`REASON=no-hook-deny` in the log). Configure a hook, or
+  set `api_auth_default = allow` on an isolated network. Restart the API service
+  after config changes.
 
 Pairing request missing from `list-requests`
 : Agent may have failed mid-pairing (run `sudo ctrl-exec-agent request-pairing`

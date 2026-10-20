@@ -163,10 +163,12 @@ newgrp ctrl-exec           # apply the new group to this shell (or re-login)
 > (`setup-*`, `pairing-mode`, `rotate-cert`, `approve`/`deny`) use root-owned
 > keys and require `sudo`.
 
-> **Auth hook.** The install ships an auth hook that allows every `run`/`ping`,
-> so this works out of the box - fine for a localhost/isolated trial. To restrict
-> who may run what, edit `/etc/ctrl-exec-dispatcher/auth-hook` with real rules (the file has
-> commented examples); see *Auth Hook* in `INSTALL.md`.
+> **Auth hook.** `ced` is gated by system permissions and needs no hook. The
+> install seeds `/etc/ctrl-exec-dispatcher/auth-hook` as an example (it allows
+> everything) but does not enable it, so the API denies every request until you
+> write a hook and set `auth_hook` in `ctrl-exec.conf` (or deliberately set
+> `api_auth_default = allow` on an isolated network); see *Auth Hook* in
+> `INSTALL.md`.
 
 **2. Agent host - configure (do not start the service yet)**
 
@@ -236,12 +238,12 @@ The HTTP API exposes the same operations on `localhost:7445`.
 curl -s http://localhost:7445/health
 ```
 
-The API uses the same auth hook as the CLI, and the shipped hook allows every
-request (step 1), so this works out of the box on the localhost bind. Edit
-`/etc/ctrl-exec-dispatcher/auth-hook` to restrict it. If you remove the hook entirely, the
-API falls back to `api_auth_default` (default: `deny`) - set it to `allow` to
-permit requests without a hook. Either is read at startup, so restart the service
-after changing it.
+Every endpoint, `/health` included, is denied (403) on a fresh install: no
+`auth_hook` is enabled, so `api_auth_default` (default: `deny`) applies. Write a hook (copy the seeded
+`/etc/ctrl-exec-dispatcher/auth-hook` and add real rules) and uncomment
+`auth_hook` in `ctrl-exec.conf`, or set `api_auth_default = allow` on an
+isolated network. Either is read at startup, so restart the service after
+changing it.
 
 The API server runs as the unprivileged `ctrl-exec` user, not root.
 

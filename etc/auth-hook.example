@@ -81,10 +81,10 @@
 # fi
 # exit 0
 
-# Default: allow all, so ctrl-exec runs out of the box. The exposure is bounded -
-# the API binds 127.0.0.1 by default and agents require a CA-signed dispatcher
-# cert (mutual TLS) - so this suits a localhost / isolated-network deployment.
-# For production or a network-facing API, replace this with real rules: see the
-# commented examples above (deny-all, token check, per-script allowlist, arg
-# inspection).
+# As shipped this hook allows everything, and it is NOT enabled: the seeded
+# ctrl-exec.conf leaves auth_hook commented out, so the API denies requests
+# (api_auth_default = deny) until you copy this file, add real rules (see the
+# commented examples above: deny-all, token check, per-script allowlist, arg
+# inspection) and set auth_hook in ctrl-exec.conf. Naming it unchanged
+# authorises every request; only do that on a localhost / isolated network.
 exit 0

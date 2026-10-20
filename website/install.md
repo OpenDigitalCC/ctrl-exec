@@ -164,6 +164,8 @@ sudo systemctl start ctrl-exec-api
 sudo systemctl status ctrl-exec-api
 ```
 
+A fresh install enables no auth hook, so the API denies every request (`api_auth_default = deny`) until you write a hook and set `auth_hook` in `ctrl-exec.conf`, or deliberately set `api_auth_default = allow` on an isolated network. See [Auth Hooks](/auth).
+
 # OpenWrt / procd Service Setup
 
 Install dependencies:

@@ -67,6 +67,9 @@ case "$1" in
             chmod 640 /etc/ctrl-exec-dispatcher/ctrl-exec.conf
             chown root:ctrl-exec /etc/ctrl-exec-dispatcher/ctrl-exec.conf
         fi
+        # The seeded ctrl-exec.conf does not name this hook (T-046): it
+        # authorises everything, so it is a starting point to copy and edit,
+        # inactive until the operator sets auth_hook.
         if [ ! -f /etc/ctrl-exec-dispatcher/auth-hook ]; then
             cp /usr/share/ctrl-exec/examples/auth-hook.example \
                /etc/ctrl-exec-dispatcher/auth-hook

@@ -172,6 +172,10 @@ The hook must be executable by the user running the dispatcher or the agent:
 chmod 750 /etc/ctrl-exec-dispatcher/hooks/auth.sh
 ```
 
+# Fresh installs
+
+The shipped `ctrl-exec.conf` has `auth_hook` commented out, so a new install fails closed: the API denies every request until you configure authorisation. The install seeds `/etc/ctrl-exec-dispatcher/auth-hook` as an example to copy; it allows everything and is inactive until named in `auth_hook`. CLI use (`ced`) is gated by system permissions and needs no hook. An upgrade never overwrites an existing `ctrl-exec.conf`, so a host that already names the seeded hook keeps it - replace it with real rules.
+
 # API Auth Default
 
 When the API server has no hook configured, the `api_auth_default` setting governs behaviour:

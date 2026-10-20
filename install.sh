@@ -875,10 +875,13 @@ install_ctrl_exec_dispatcher() {
         info "ctrl-exec config already exists, not overwriting."
     fi
 
-    # Auth hook - install example only if not already present
+    # Auth hook - install example only if not already present. The seeded conf
+    # does not name it (T-046): it authorises everything, so it stays inactive
+    # until the operator sets auth_hook; with none, api_auth_default = deny.
     if [[ ! -f "$EXEC_CONF_DIR/auth-hook" ]]; then
         safe_install 755 "$SOURCE_DIR/etc/auth-hook.example" "$EXEC_CONF_DIR/auth-hook"
-        info "Auth hook installed at $EXEC_CONF_DIR/auth-hook (always-authorise default)."
+        info "Example auth hook installed at $EXEC_CONF_DIR/auth-hook (allows everything; NOT active)."
+        info "API requests are denied until you edit it and set auth_hook in ctrl-exec.conf."
     else
         info "Auth hook already exists, not overwriting."
     fi

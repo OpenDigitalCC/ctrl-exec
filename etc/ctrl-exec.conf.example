@@ -16,10 +16,19 @@ ca   = /etc/ctrl-exec-dispatcher/ca.crt
 # re-pair them to adopt the new one.
 # dispatcher_id = my-dispatcher
 
-# Auth hook - called before every run and ping request.
-# The default hook authorises everything. Replace with real logic for
-# production use. Comment out to disable auth entirely.
-auth_hook = /etc/ctrl-exec-dispatcher/auth-hook
+# Auth hook - called before every run and ping request, and for every API
+# request. Not enabled by default: with no auth_hook, API requests are governed
+# by api_auth_default (default: deny), so a fresh install refuses them until you
+# decide. To enable one, write a hook (auth-hook.example, installed beside this
+# file or under /usr/share/ctrl-exec/examples/, authorises EVERYTHING - copy it
+# and add real rules), make it executable by the ctrl-exec user, then uncomment
+# the line below and restart ctrl-exec-api. CLI use (ced) is gated by system
+# permissions and does not need a hook.
+# auth_hook = /etc/ctrl-exec-dispatcher/auth-hook
+
+# What the API does when no auth_hook is set: deny (default) or allow. Ignored
+# once a hook is configured. Set allow only on an isolated network.
+# api_auth_default = deny
 
 # Max seconds to wait for the auth hook to finish (default: 10). A hook that
 # exceeds this is killed and the request is denied (fail closed), so a hook that
