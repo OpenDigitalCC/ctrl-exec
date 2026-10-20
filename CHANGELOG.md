@@ -76,6 +76,14 @@ task group, each adding its bullets to this entry.
   ignored around the stdin write only, EPIPE is treated as "the script did not
   read its input", and the script always starts with SIGPIPE at its default even
   if the agent was started with it ignored. (T-038)
+- **Changed (security)** the CA now issues a random serial for every certificate
+  (CA, dispatcher, pairing and renewal): 16 bytes from `Exec::Random`, top bit
+  clear, 32 lowercase hex digits, already in the canonical form the
+  trusted-dispatcher map, revocation list and registry compare on. Serials were
+  sequential from `01` and predictable, and the serial is the trust identity.
+  Existing CA directories keep working; `ca.serial` is no longer read or
+  advanced (it remains as the signing lock file) and certificates already
+  issued keep their serials. (T-023)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 

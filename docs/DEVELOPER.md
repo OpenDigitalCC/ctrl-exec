@@ -107,7 +107,7 @@ dispatcher host (`/etc/ctrl-exec-dispatcher/`)
 ```
 ca.key          CA private key (0600, root only, never leaves this host)
 ca.crt          CA certificate (distributed to agents during pairing)
-ca.serial       Serial counter for issued certs
+ca.serial       Legacy serial counter (no longer the source of serials; kept as the signing lock file)
 dispatcher.key  the dispatcher's own private key (0600, owned by the ctrl-exec service user)
 dispatcher.crt  the dispatcher's own cert, signed by CA
 auth-hook       Auth hook executable (0755)
@@ -215,6 +215,14 @@ Functions:
   `openssl x509 -req` to sign it, returns the signed cert PEM. The `days`
   parameter controls cert lifetime and should be passed from `config->{cert_days}`
   (default 365). Options: `csr_pem` (required), `ca_dir`, `days`, `out_path`.
+  The certificate gets a random serial (`random_serial`), never a counter.
+
+`random_serial()`
+: A fresh certificate serial: 16 bytes from `/dev/urandom` (`Exec::Random`),
+  top bit clear (positive INTEGER) and second bit set, so it is always 32
+  lowercase hex digits (126 bits of entropy) with no leading zero - already in
+  the canonical form `serial_to_hex` produces. Used for the CA cert, the
+  dispatcher cert and every signed CSR (`openssl ... -set_serial`).
 
 `read_ca_cert(%opts)`
 : Returns the CA cert PEM from `ca_dir/ca.crt`. Used during pairing and renewal

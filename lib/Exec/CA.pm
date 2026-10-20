@@ -10,6 +10,7 @@ use Carp        qw(croak);
 use Exec::FileUtil qw(slurp);
 use Exec::Cmd      qw();
 use Exec::DispatcherConfig qw();
+use Exec::Random   qw(hex_bytes);
 
 
 # Default CA directory: the dispatcher config dir (see Exec::DispatcherConfig).
@@ -47,8 +48,13 @@ sub generate_ca (%opts) {
         '-out',     $ca_cert,
         '-days',    $days,
         '-subj',    "/CN=$cn",
+        '-set_serial', '0x' . random_serial(),
     );
 
+    # ca.serial is no longer the source of issued serials (every certificate
+    # gets a random one, see random_serial). The file is still created: the
+    # pairing path takes its flock on it to serialise signing, and existing
+    # CA directories carry one.
     _write_serial("$ca_dir/ca.serial", '01');
 
     return { ca_key => $ca_key, ca_cert => $ca_cert };
@@ -77,7 +83,6 @@ sub generate_dispatcher_cert (%opts) {
 
     my $ca_key   = "$ca_dir/ca.key";
     my $ca_cert  = "$ca_dir/ca.crt";
-    my $serial   = "$ca_dir/ca.serial";
 
     croak "CA key not found at '$ca_key' - run setup-ca first" unless -f $ca_key;
 
@@ -114,8 +119,7 @@ sub generate_dispatcher_cert (%opts) {
         '-in',           $disp_csr,
         '-CA',           $ca_cert,
         '-CAkey',        $ca_key,
-        '-CAserial',     $serial,
-        '-CAcreateserial',
+        '-set_serial',   '0x' . random_serial(),
         '-out',          $disp_crt,
         '-days',         $days,
     );
@@ -143,7 +147,6 @@ sub sign_csr (%opts) {
 
     my $ca_key   = "$ca_dir/ca.key";
     my $ca_cert  = "$ca_dir/ca.crt";
-    my $serial   = "$ca_dir/ca.serial";
 
     croak "CA key not found at '$ca_key'"   unless -f $ca_key;
     croak "CA cert not found at '$ca_cert'" unless -f $ca_cert;
@@ -183,8 +186,7 @@ sub sign_csr (%opts) {
         '-in',        $csr_path,
         '-CA',        $ca_cert,
         '-CAkey',     $ca_key,
-        '-CAserial',  $serial,
-        '-CAcreateserial',
+        '-set_serial', '0x' . random_serial(),
         '-out',       $cert_path,
         '-days',      $days,
     );
@@ -202,6 +204,19 @@ sub sign_csr (%opts) {
 sub read_ca_cert (%opts) {
     my $ca_dir = $opts{ca_dir} // _default_ca_dir();
     return slurp("$ca_dir/ca.crt");
+}
+
+# A fresh random certificate serial, as lowercase hex in the canonical form
+# Exec::CertInfo::serial_to_hex produces (no leading zero, no prefix). The
+# serial is the trust identity (trusted-dispatcher map, revoked-serials,
+# registry), so it must not be predictable: 16 bytes from /dev/urandom, top bit
+# cleared so the DER INTEGER stays positive (RFC 5280 allows up to 20 octets),
+# second bit set so the value always has exactly 32 hex digits and never needs
+# a leading zero. 126 bits of entropy.
+sub random_serial () {
+    my $hex = hex_bytes(16);
+    my $top = (hex(substr $hex, 0, 2) & 0x7f) | 0x40;
+    return sprintf('%02x', $top) . substr($hex, 2);
 }
 
 # --- private helpers ---

@@ -664,6 +664,10 @@ Key settings:
   - `serial=`-prefixed: `serial=DEADBEEF` (as output by `openssl x509 -serial`)
   - Decimal integer: `3735928559`
 
+  Serials the CA issues (since 0.13.0) are random 32-digit lowercase hex values
+  with no leading zero; certificates issued earlier keep their (short,
+  sequential) serials, and both forms match through the same normalisation.
+
   Lines beginning with `#` are treated as comments.
 
   Default: `/etc/ctrl-exec-agent/revoked-serials`. A missing or empty file

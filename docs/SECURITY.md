@@ -644,6 +644,17 @@ Built-in `/rotate-serial` operation
   trusted-dispatcher serial check as `/run`, plus the auth hook (which sees
   `ENVEXEC_ACTION=rotate`).
 
+## Certificate serials
+
+The certificate serial is the trust identity: the agent's trusted-dispatcher
+map, the revocation list and the registry all key on it. From 0.13.0 the CA
+gives every certificate it issues (its own, the dispatcher's, and each agent
+cert at pairing and renewal) a random serial - 16 bytes from `/dev/urandom`,
+top bit clear so the integer is positive, 126 bits of entropy, always 32
+lowercase hex digits - so a serial cannot be guessed or predicted from an
+earlier one. Earlier sequential serials (`01`, `02`, ...) remain valid and
+keep working; they are not re-issued. `ca.serial` is no longer a counter.
+
 ## Certificate Revocation
 
 The agent maintains a revocation list at `/etc/ctrl-exec-agent/revoked-serials`

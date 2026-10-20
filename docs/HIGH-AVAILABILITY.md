@@ -36,10 +36,10 @@ persistent connections that must be preserved across restarts.
   both the dispatcher and all agents to verify peer certificates.
 
 `/etc/ctrl-exec-dispatcher/ca.serial`
-: The serial counter for cert issuance. Incremented on every signing
-  operation (`sign_csr` in `CA.pm`). Must be consistent across all
-  dispatcher instances — concurrent signing operations against different
-  copies would produce duplicate serials.
+: Legacy serial counter file. Certificate serials are random (since 0.13.0)
+  and no longer read from or written to it, but the file is kept: pairing takes
+  its lock on it to serialise concurrent signing, and an existing CA directory
+  already has one. Copy it with the rest of the CA directory.
 
 `/etc/ctrl-exec-dispatcher/dispatcher.key`
 : The dispatcher's own private key.
@@ -102,9 +102,10 @@ mode) work. All instances read and write the same files.
 
 Considerations:
 
-- Serial counter consistency: `ca.serial` is read and written on every cert
-  signing. Under NFS, open-file locking is advisory and may not be
-  respected across clients. Use DRBD with OCFS2 or GFS2 for cluster-safe
+- Signing lock: `ca.serial` is locked (not written) on every pairing
+  approval. Serials themselves are random, so two dispatcher instances cannot
+  issue the same serial by racing on a counter. Under NFS, open-file locking is
+  advisory and may not be respected across clients. Use DRBD with OCFS2 or GFS2 for cluster-safe
   locking if pairing operations run concurrently across nodes.
 - Registry writes are atomic (rename), which is safe over NFS on the same
   subnet but not guaranteed over high-latency links.
