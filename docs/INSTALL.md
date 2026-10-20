@@ -240,13 +240,20 @@ backup-mysql  = /opt/ctrl-exec-scripts/backup-mysql.sh
 check-disk    = /opt/ctrl-exec-scripts/check-disk.sh
 ```
 
-Place scripts in the managed directory:
+Place scripts in the managed directory, owned by root:
 
 ```bash
-sudo cp your-script.sh /opt/ctrl-exec-scripts/
-sudo chmod 750 /opt/ctrl-exec-scripts/your-script.sh
-sudo chown root:ctrl-exec-agent /opt/ctrl-exec-scripts/your-script.sh
+sudo install -o root -g ctrl-exec-agent -m 750 your-script.sh /opt/ctrl-exec-scripts/
 ```
+
+Scripts must be owned by root and not writable by group or other, and so must
+every directory above them (`/opt` and `/opt/ctrl-exec-scripts` are, as
+installed). This is enforced: an entry that breaks it is skipped with a reason
+(`script not permitted: '<path>' is group-writable`, `... is owned by uid 1000,
+not root`) that `sudo ctrl-exec-agent self-check` lists, and the executor
+refuses it at run time. It applies whatever the script's profile. `install`
+sets owner, group and mode in one step and does not depend on your umask; see
+SECURITY.md, "Script ownership", and TROUBLESHOOTING.md, "script not permitted".
 
 ### 4. Pairing
 
@@ -720,9 +727,8 @@ check-disk    = /opt/ctrl-exec-scripts/check-disk.sh
 ## Adding Scripts to an Agent
 
 ```bash
-sudo cp check-disk.sh /opt/ctrl-exec-scripts/
-sudo chmod 750 /opt/ctrl-exec-scripts/check-disk.sh
-sudo chown root:ctrl-exec-agent /opt/ctrl-exec-scripts/check-disk.sh
+# root-owned, not group- or other-writable (enforced)
+sudo install -o root -g ctrl-exec-agent -m 750 check-disk.sh /opt/ctrl-exec-scripts/
 
 echo "check-disk = /opt/ctrl-exec-scripts/check-disk.sh" \
     | sudo tee -a /etc/ctrl-exec-agent/scripts.conf

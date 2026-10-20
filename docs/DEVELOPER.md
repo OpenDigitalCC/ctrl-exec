@@ -1536,6 +1536,23 @@ script_dirs restriction
   modifications between agent startup and execution. When not configured,
   behaviour is unchanged - any absolute path is permitted (opt-in hardening).
 
+script ownership (T-045)
+: `Exec::Agent::Config::script_owner_check` and the executor's
+  `script_trust_check` apply the same rule: the script and every directory from
+  `/` down to it owned by root and not group/other-writable, the script a
+  regular file, symlinks followed only out of checked directories. The front end
+  uses it at load (a skip reason) and in `handle_run`; the executor in the
+  action's child before `execve`, which then re-checks dev/ino by path. Keep the
+  walk, the check order and the reason texts identical:
+  `t/exec-ownership-parity.t` compares them over a corpus (`ctrl-exec-executor
+  check-path`). Test seams, never set in production: in Perl,
+  `@TRUSTED_OWNERS` (uids trusted like root) and `$TRUSTED_TOP` (a directory
+  whose ancestors are not checked); in C, only in a `-DCE_TEST_SEAM` build, the
+  environment variables `CE_TEST_TRUSTED_UID`, `CE_TEST_TRUSTED_TOP` and
+  `CE_TEST_PAUSE_FIFO` (pause between the check and the exec). Unprivileged
+  tests that run scripts through the executor build with `-DCE_TEST_SEAM`; root
+  tests keep their files under `/run`, not the world-writable `/var/tmp`.
+
 no shell execution
 : `exec { $path } $path, @args` passes the argument list directly to the OS.
   Shell metacharacters in arguments have no effect.

@@ -260,6 +260,15 @@ Cause
   | `its scripts.conf entry has more than one path` | One path per line; annotations such as `profile=` are `key=value`. |
   | `its scripts.conf entry has no script path` | The line has only `key=value` annotations; add the path. |
   | `its path is too long` / `its profile name is too long` | Shorten the path (under 4096 characters) or profile name (under 128). |
+  | `'<path>' is group-writable` / `'<path>' is world-writable` | The script, or a directory on its path (the one named), can be written by others. `sudo chmod go-w '<path>'`. A script under `/tmp`, `/var/tmp` or another world-writable directory must be moved. |
+  | `'<path>' is owned by uid N, not root` | The script, or the directory named, is not root's. `sudo chown root '<path>'` (keep the group, e.g. `root:ctrl-exec-agent`), or move the script under root-owned directories. A user's home directory never qualifies. |
+  | `'<path>' is not a regular file` / `'<path>' is not a directory` | The path names a directory, device or fifo, or a file sits where a directory should be. Correct the path in `scripts.conf`. |
+  | `'<path>' has too many levels of symbolic links` | A symlink loop on the path. |
+
+  The ownership reasons (T-045) apply whatever the script's profile and
+  `run_as`; see SECURITY.md, "Script ownership". They are checked when
+  `scripts.conf` is loaded and again before each run, so a `chmod` that makes a
+  loaded script group-writable takes effect at once; a fix needs a reload.
 
 Fix
 : Run `sudo ctrl-exec-agent self-check` on the agent: it lists every skipped
@@ -268,6 +277,32 @@ Fix
   recomputed on every reload, so edit the file and reload to clear one. A listed
   script that is not executable is not refused with this message; the agent
   does not check that when it loads `scripts.conf`.
+
+### Exit 126 with "executor: script not permitted"
+
+Symptom
+: With the executor enabled, a run returns exit 126 and stderr such as:
+
+  ```
+  executor: script not permitted: '/opt/ctrl-exec-scripts' is group-writable
+  executor: script not permitted: '/opt/ctrl-exec-scripts/x.sh' is owned by uid 1000, not root
+  executor: script not permitted: '/opt/ctrl-exec-scripts/x.sh' changed while it was being checked
+  ```
+
+Cause
+: The executor checks the ownership rule itself before every run (it is the
+  authority, and it runs as root). The reasons are the ones in the table above.
+  The front end normally refuses first with the same reason; the executor's
+  message appears when the front end could not see the script (a directory the
+  agent user cannot search, e.g. a `0700` script directory for a root profile)
+  or the script changed in between. `changed while it was being checked` means
+  the path named a different file at exec than the one just checked (it was
+  replaced during the run request); retry, and find out what replaced it.
+
+Fix
+: As in the table above. To check one path the way the executor does:
+  `sudo ctrl-exec-executor check-path /opt/ctrl-exec-scripts/x.sh` prints `OK` or
+  `DENY <reason>`.
 
 ### Agent exits 78 with "script(s) reference an undefined profile"
 

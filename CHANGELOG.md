@@ -155,6 +155,22 @@ task group, each adding its bullets to this entry.
   0.13 config-directory rename pointed it at `etc/ctrl-exec-dispatcher.conf.example`;
   the example is still `etc/ctrl-exec.conf.example`. `t/install-sources.t` now
   checks that every file install.sh copies from the source tree exists.
+- **Changed** (security) allowlisted scripts must now be root-owned, as
+  `scripts.conf.example` always said: the script and every directory from `/`
+  down to it must be owned by root and not group- or other-writable, and the
+  script a regular file, whatever the profile's `run_as`. The root executor
+  checks this before every run (walking the path with `O_NOFOLLOW` opens, then
+  exec'ing by path only if it still names the file checked) and refuses with
+  exit 126 and `executor: script not permitted: '<path>' is group-writable` (or
+  world-writable, owned by uid N, not root, ...); the agent applies the same rule
+  at load and before each run, so the reason appears as `script not permitted:
+  <reason>` and in `self-check`, and direct mode (no executor) is covered too.
+  New `ctrl-exec-executor check-path <path>`. Before, a user able to write a
+  script or a directory on its path could change what root runs. **Upgrading:**
+  a host with scripts that are not root-owned, are group-writable, or sit under
+  `/tmp`, `/var/tmp` or a home directory will see them refused after the
+  upgrade; run `sudo ctrl-exec-agent self-check` and fix them with `chown root`
+  / `chmod go-w` (installed layout `root:ctrl-exec-agent 0750` passes). (T-045)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 

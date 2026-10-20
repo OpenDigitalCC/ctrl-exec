@@ -240,6 +240,43 @@ Script directory restriction
   approved directory is rejected on the real, canonical path. When `script_dirs`
   is not set, any absolute path is accepted.
 
+Script ownership (enforced)
+: An allowlisted script runs only if it, and every directory from `/` down to
+  it, is owned by root (uid 0) and writable by neither group nor other, and the
+  script is a regular file. Otherwise anyone able to write the script, or any
+  directory on its path, could change what root (or a profile's `run_as` user)
+  runs. Group-writable is refused too, including the sticky world-writable
+  `/tmp` and `/var/tmp`; a group that may read and execute (`root:ctrl-exec-agent
+  0750`, as installed) is fine. A symbolic link on the path is followed only
+  after the directory holding it has passed (so only root can have made or
+  changed it), and its target is checked by the same rule. The rule holds
+  whatever the profile's `run_as`: `scripts.conf` is root's policy, so its
+  scripts are root's files.
+
+  The **executor** enforces it before every run (it is the authority). In the
+  action's own process, after the profile is applied, it walks the path with
+  `openat(O_PATH|O_NOFOLLOW)` from each checked directory, checks each component
+  with `fstat`, and refuses with exit 126 and `executor: script not permitted:
+  '<path>' is group-writable` (or `is world-writable`, `is owned by uid N, not
+  root`, `is not a regular file`, `is not a directory`, `has too many levels of
+  symbolic links`). It then execs the script by its path, after confirming the
+  path still names the file it checked (same device and inode), or refuses
+  with `'<path>' changed while it was being checked`. Between that check and
+  `execve` only root can change what the path names, since every directory on
+  it is root-owned and not writable by others. The script is exec'd by path,
+  not by file descriptor (`fexecve`), on purpose: for a `#!` script the kernel
+  would give the interpreter `/dev/fd/N` as the script's name, so `$0`,
+  `dirname "$0"` and `FindBin` would stop finding the script's own files.
+  `ctrl-exec-executor check-path <path>` prints the verdict for one path.
+
+  The **front end** applies the same rule (the parity is tested) at allowlist
+  load and again before each run. A breaking entry is skipped with the reason,
+  so a run answers `script not permitted: <reason>`, the reason is logged
+  (`ACTION=allowlist-skip`) and `cea self-check` lists it before any run.
+  Without an executor (direct mode) the front end is the enforcement. A script
+  that does not exist yet, or that the agent user cannot reach, gets no
+  front-end verdict; the executor decides when it runs.
+
 Allowlist is server-enforced
 : The allowlist is validated on the agent, not trusted from the dispatcher
   request. A dispatcher cannot request a script that is not in the agent's
@@ -427,6 +464,8 @@ Agent-side hook
 /opt/ctrl-exec-scripts/            0750  root:ctrl-exec-agent
 /opt/ctrl-exec-scripts/*.sh        0750  root:ctrl-exec-agent
 /opt/ctrl-exec-scripts/*.schema.json 0640 root:ctrl-exec-agent  schema sidecar (data, not executed)
+                                   scripts and every directory above them: owned by root,
+                                   not group- or other-writable (enforced; see above)
 
 /var/lib/ctrl-exec/                0770  root:ctrl-exec
 /var/lib/ctrl-exec/pairing/        0770  root:ctrl-exec
