@@ -45,4 +45,10 @@ unlike $r->{error}, qr/SECRET/, 'error carries no value';
 $r = $V->({ a => { SECRET => 1 } });
 unlike $r->{error}, qr/SECRET/, 'type error carries no value';
 
+is Exec::Input::max_bytes({}), 1048576, 'default limit';
+is Exec::Input::max_bytes({ max_input_bytes => 4096 }), 4096, 'configured limit';
+is Exec::Input::max_bytes({ max_input_bytes => 'lots' }), 1048576, 'bad value: default';
+is Exec::Input::max_bytes({ max_input_bytes => 0 }), 1048576, 'zero: default';
+is Exec::Input::max_body({ max_input_bytes => 4096 }), 1048576 + 4096, 'body limit';
+
 done_testing;

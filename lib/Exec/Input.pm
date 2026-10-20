@@ -16,6 +16,24 @@ use constant {
 
 my $NAME_RE = qr/\A[A-Za-z0-9_.-]{1,64}\z/;
 
+# Request bodies other than input stay well under this; a request that may carry
+# input is allowed this much plus the input limit. JSON escaping grows a value
+# (a PEM's newlines slightly; control characters up to six-fold), so this
+# headroom suits text such as keys and certificates.
+use constant BODY_OVERHEAD => 1048576;
+
+# The configured input limit: max_input_bytes when a positive integer, else the
+# default.
+sub max_bytes ($config) {
+    my $v = $config->{max_input_bytes};
+    return (defined $v && $v =~ /\A[1-9][0-9]*\z/) ? $v : DEFAULT_MAX_BYTES;
+}
+
+# The largest request body to read (API and agent alike).
+sub max_body ($config) {
+    return BODY_OVERHEAD + max_bytes($config);
+}
+
 # Validate a decoded 'input' value from a request body.
 #
 #   $input     - the value of the 'input' key (undef when absent)
