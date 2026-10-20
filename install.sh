@@ -506,20 +506,20 @@ install_agent() {
     # libcap-dev. If absent, the agent still works in its legacy direct-run mode.
     mkdir -p "$SBIN_DIR"
     if command -v gcc &>/dev/null; then
-        if gcc -O2 -o "$SBIN_DIR/ctrl-exec-exec" \
-               "$SOURCE_DIR/src/ctrl-exec-exec.c" -lcap; then
-            chmod 755 "$SBIN_DIR/ctrl-exec-exec"
-            info "Built ctrl-exec-exec -> $SBIN_DIR/ctrl-exec-exec"
+        if gcc -O2 -o "$SBIN_DIR/ctrl-exec-executor" \
+               "$SOURCE_DIR/src/ctrl-exec-executor.c" -lcap; then
+            chmod 755 "$SBIN_DIR/ctrl-exec-executor"
+            info "Built ctrl-exec-executor -> $SBIN_DIR/ctrl-exec-executor"
             if [[ "$HAS_SYSTEMD" == true ]]; then
-                install_unit ctrl-exec-exec.service
+                install_unit ctrl-exec-executor.service
                 systemctl daemon-reload
             fi
         else
-            warn "Could not compile ctrl-exec-exec (install libcap-dev). Privilege"
+            warn "Could not compile ctrl-exec-executor (install libcap-dev). Privilege"
             warn "separation will be unavailable until it is built."
         fi
     else
-        warn "gcc not found - skipping ctrl-exec-exec build. Install gcc + libcap-dev"
+        warn "gcc not found - skipping ctrl-exec-executor build. Install gcc + libcap-dev"
         warn "and re-run to enable privilege separation (executor_socket)."
     fi
 

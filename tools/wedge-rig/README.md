@@ -1,11 +1,11 @@
 # wedge-rig: reproduction rig for the executor wedge (T-001 / R-007)
 
 One Alpine 3.21 container holding `ctrl-exec-api`, `ctrl-exec-agent` and the
-`ctrl-exec-exec` executor, as on the affected host (the api plays the
+`ctrl-exec-executor` executor, as on the affected host (the api plays the
 dispatcher role). Built from the **worktree source**: `up.sh` runs
 `git archive HEAD` of the checkout and the Dockerfile runs the project's own
 `install.sh --agent`, `--dispatcher`, `--api` (so the install path, file
-layout and the compiled `ctrl-exec-exec` are what a real install produces;
+layout and the compiled `ctrl-exec-executor` are what a real install produces;
 commit your changes before `up.sh`, uncommitted edits are not in the image).
 
 ## What matches production, and what does not

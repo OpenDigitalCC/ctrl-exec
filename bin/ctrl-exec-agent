@@ -202,7 +202,7 @@ MSG
             warn "ctrl-exec-agent: " . scalar(@profiled) . " script(s) declare a "
                . "profile but executor_socket is not set - profiles are NOT "
                . "enforced; these scripts run as the unprivileged agent user. "
-               . "Set executor_socket (and run ctrl-exec-exec.service) to apply "
+               . "Set executor_socket (and run ctrl-exec-executor.service) to apply "
                . "profiles.\n";
         }
     }

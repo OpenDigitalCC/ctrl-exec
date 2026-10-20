@@ -17,6 +17,14 @@ task group, each adding its bullets to this entry.
   (the stale `yourorg` URL lived in both). The executor unit's `ExecStart` is now
   `@SBINDIR@` (it was hard-coded in each copy). No hardening directive changed;
   `t/units-render.t` checks both renderings. (T-014)
+- **Changed** the privileged executor `ctrl-exec-exec` to `ctrl-exec-executor`
+  (ctrl-exec is the package, its parts are `ctrl-exec-<part>`): the source
+  `src/ctrl-exec-executor.c`, the binary in `/usr/local/sbin` or `/usr/sbin`, the
+  unit `ctrl-exec-executor.service`, and every reference to them (the process list
+  no longer reads `ctrl-exec-exec`). The `executor_socket` key and the socket path
+  `/run/ctrl-exec-agent/exec.sock` are unchanged, so no `agent.conf` edit is
+  needed. Existing installs are switched over on upgrade (see the migration note
+  below). (T-008)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 

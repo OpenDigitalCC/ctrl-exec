@@ -45,7 +45,7 @@ my %expect = (
                                         'ExecStart=%B/ctrl-exec-agent serve'],
     'ctrl-exec-api.service'         => ['ExecStart=%B/ctrl-exec-api'],
     'ctrl-exec-maintenance.service' => ['ExecStart=%B/ctrl-exec-dispatcher maintain'],
-    'ctrl-exec-exec.service'        => ['ExecStart=%S/ctrl-exec-exec serve '],
+    'ctrl-exec-executor.service'        => ['ExecStart=%S/ctrl-exec-executor serve '],
 );
 
 for my $t (sort keys %targets) {
@@ -104,7 +104,7 @@ SKIP: {
     for my $b (qw(ctrl-exec-agent ctrl-exec-api ctrl-exec-dispatcher)) {
         open(my $fh, '>', "$w/bin/$b") or die; print $fh "#!/bin/sh\n"; close $fh; chmod 0755, "$w/bin/$b";
     }
-    open(my $fh, '>', "$w/sbin/ctrl-exec-exec") or die; print $fh "#!/bin/sh\n"; close $fh; chmod 0755, "$w/sbin/ctrl-exec-exec";
+    open(my $fh, '>', "$w/sbin/ctrl-exec-executor") or die; print $fh "#!/bin/sh\n"; close $fh; chmod 0755, "$w/sbin/ctrl-exec-executor";
     mkdir "$w/u";
     render("$w/bin", "$w/sbin", $_, "$w/u/$_") for @units;
     my $out = `$sa verify $w/u/*.service $w/u/*.timer 2>&1`;

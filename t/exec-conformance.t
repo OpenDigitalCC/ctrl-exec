@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-# Shared conformance test: the C executor (ctrl-exec-exec) and the Perl front-end
+# Shared conformance test: the C executor (ctrl-exec-executor) and the Perl front-end
 # (Exec::Agent::Config) must derive the IDENTICAL security decision for the same
 # agent.conf/scripts.conf - same allow/deny, same resolved profile fields. If
 # they ever diverge, the executor would apply a different privilege than the
@@ -17,9 +17,9 @@ my $cc = `command -v gcc 2>/dev/null`; chomp $cc;
 plan skip_all => 'gcc not available' unless $cc && -x $cc;
 
 my $TMP = tempdir(CLEANUP => 1);
-my $BIN = "$TMP/ctrl-exec-exec";
-system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-exec.c", '-lcap') == 0
-    or plan skip_all => 'could not compile src/ctrl-exec-exec.c';
+my $BIN = "$TMP/ctrl-exec-executor";
+system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-executor.c", '-lcap') == 0
+    or plan skip_all => 'could not compile src/ctrl-exec-executor.c';
 
 my $REQUIRED = "port = 7443\ncert = /x\nkey = /y\nca = /z\n";
 my $n = 0;

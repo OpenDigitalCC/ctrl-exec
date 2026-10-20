@@ -25,7 +25,7 @@ most often misunderstood on first contact, because whether they apply at all
 depends on one setting.
 
 ::: widebox
-Profiles are enforced **only** by the root executor (`ctrl-exec-exec`). With
+Profiles are enforced **only** by the root executor (`ctrl-exec-executor`). With
 `executor_socket` unset, the agent runs scripts directly in its own process and
 the `profile=` in `scripts.conf` is parsed but never applied.
 :::
@@ -66,7 +66,7 @@ can a script have more than one profile?
 
 is the executor required to activate profiles?
 : Yes - this is the single most important point. Set `executor_socket` and run
-  `ctrl-exec-exec.service`, or your `profile=` lines do nothing. The agent logs a
+  `ctrl-exec-executor.service`, or your `profile=` lines do nothing. The agent logs a
   startup warning if `scripts.conf` names profiles while `executor_socket` is
   unset.
 
@@ -227,7 +227,7 @@ upgrade can change either the Perl front-end or the compiled executor binary, an
 a stale executor must not keep serving after an upgrade.
 
 ```text
-ctrl-exec: restarted ctrl-exec-exec to apply the upgrade.
+ctrl-exec: restarted ctrl-exec-executor to apply the upgrade.
 ctrl-exec: restarted ctrl-exec-agent to apply the upgrade.
 ```
 
@@ -239,14 +239,14 @@ entry).
 
 ### "Failed to stop ... Unit not loaded" during install
 
-If you see a message like `Failed to stop ctrl-exec-exec.service: Unit
-ctrl-exec-exec.service not loaded` during an install on a host where the agent
+If you see a message like `Failed to stop ctrl-exec-executor.service: Unit
+ctrl-exec-executor.service not loaded` during an install on a host where the agent
 was not running, it is benign. The install still succeeds.
 
 The agent package now reports the situation plainly instead:
 
 ```text
-ctrl-exec: ctrl-exec-exec is not running - no restart needed.
+ctrl-exec: ctrl-exec-executor is not running - no restart needed.
 ```
 
 There is nothing to fix. The message simply reflects that there was no running
@@ -298,7 +298,7 @@ Framed "configuration error", exit 78 | A fault in agent.conf or scripts.conf (i
 255/EXCEPTION, restart counter climbing | On current releases this should be a config error caught as exit 78. If it is not, the start is failing after config load. | journalctl for the exception text; confirm cert, key and CA paths exist and are readable.
 Port 7443 not listening | Service not running, or bound elsewhere. | systemctl status; the port setting in agent.conf; self-ping.
 mTLS handshake error on self-ping | Cert/CA paths wrong or unreadable by the service. | self-ping output; cert file ownership and mode.
-Profiles set but never applied | executor_socket unset, so the executor is not in the path. | Startup warning in the log; confirm executor_socket is set and ctrl-exec-exec.service is running.
+Profiles set but never applied | executor_socket unset, so the executor is not in the path. | Startup warning in the log; confirm executor_socket is set and ctrl-exec-executor.service is running.
 ```
 
 The two first-line tools both run on the agent host with no dispatcher access:

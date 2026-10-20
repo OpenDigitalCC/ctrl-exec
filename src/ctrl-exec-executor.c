@@ -1,5 +1,5 @@
 /*
- * ctrl-exec-exec - the privileged executor for ctrl-exec-agent.
+ * ctrl-exec-executor - the privileged executor for ctrl-exec-agent.
  *
  * This is the small, root, no-network half of the privilege-separated agent.
  * The unprivileged front-end (ctrl-exec-agent, Perl) does the network, mTLS,
@@ -812,11 +812,11 @@ static int cmd_serve(const char *sockpath, const char *agent_conf,
                      const char *scripts_conf, const char *peer_user) {
     int allow_unpriv = (getenv("CTRL_EXEC_EXEC_ALLOW_UNPRIV") != NULL);
     if (geteuid() != 0 && !allow_unpriv) {
-        fprintf(stderr, "ctrl-exec-exec: serve must run as root\n");
+        fprintf(stderr, "ctrl-exec-executor: serve must run as root\n");
         return 1;
     }
     struct passwd *pw = getpwnam(peer_user);
-    if (!pw) { fprintf(stderr, "ctrl-exec-exec: unknown peer user '%s'\n", peer_user); return 1; }
+    if (!pw) { fprintf(stderr, "ctrl-exec-executor: unknown peer user '%s'\n", peer_user); return 1; }
     uid_t peer_uid = pw->pw_uid;
 
     int sfd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -838,7 +838,7 @@ static int cmd_serve(const char *sockpath, const char *agent_conf,
      * agent.conf's mtime changes, so an admin edit still takes effect. */
     config_t *cfg = calloc(1, sizeof(*cfg));
     if (!cfg || parse_agent_conf(agent_conf, cfg) != 0) {
-        fprintf(stderr, "ctrl-exec-exec: cannot parse '%s'\n", agent_conf);
+        fprintf(stderr, "ctrl-exec-executor: cannot parse '%s'\n", agent_conf);
         free(cfg); close(sfd); return 1;
     }
     struct stat cst;
@@ -884,8 +884,8 @@ int main(int argc, char **argv) {
         return cmd_serve(argv[2], argv[3], argv[4], argv[5]);
 
     fprintf(stderr,
-        "ctrl-exec-exec - privileged executor for ctrl-exec-agent\n"
-        "usage: ctrl-exec-exec resolve <agent.conf> <scripts.conf> <script-name>\n"
-        "       ctrl-exec-exec serve   <socket> <agent.conf> <scripts.conf> <peer-user>\n");
+        "ctrl-exec-executor - privileged executor for ctrl-exec-agent\n"
+        "usage: ctrl-exec-executor resolve <agent.conf> <scripts.conf> <script-name>\n"
+        "       ctrl-exec-executor serve   <socket> <agent.conf> <scripts.conf> <peer-user>\n");
     return 1;
 }

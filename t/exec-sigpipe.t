@@ -32,9 +32,9 @@ plan skip_all => 'gcc not available' unless $cc && -x $cc;
 plan skip_all => '/proc/self/status not readable' unless -r '/proc/self/status';
 
 my $TMP = tempdir(CLEANUP => 1);
-my $BIN = "$TMP/ctrl-exec-exec";
-system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-exec.c", '-lcap') == 0
-    or plan skip_all => 'could not compile src/ctrl-exec-exec.c';
+my $BIN = "$TMP/ctrl-exec-executor";
+system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-executor.c", '-lcap') == 0
+    or plan skip_all => 'could not compile src/ctrl-exec-executor.c';
 
 # Prints a line and exits 0 without reading stdin.
 my $early = "$TMP/early.sh";

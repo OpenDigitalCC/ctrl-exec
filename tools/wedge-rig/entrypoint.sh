@@ -45,8 +45,8 @@ syslogd -n -O /var/log/rig-syslog &
 echo $! > "$PIDS/syslog.pid"
 sleep 1
 
-# executor first: root, same arguments as etc/systemd/ctrl-exec-exec.service
-/usr/local/sbin/ctrl-exec-exec serve /run/ctrl-exec-agent/exec.sock \
+# executor first: root, same arguments as etc/systemd/ctrl-exec-executor.service
+/usr/local/sbin/ctrl-exec-executor serve /run/ctrl-exec-agent/exec.sock \
     /etc/ctrl-exec-agent/agent.conf /etc/ctrl-exec-agent/scripts.conf ctrl-exec-agent \
     >> /var/log/rig-exec.log 2>&1 &
 echo $! > "$PIDS/exec.pid"

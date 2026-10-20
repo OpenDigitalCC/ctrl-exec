@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build and start the wedge rig: one Alpine container holding ctrl-exec-api,
-# ctrl-exec-agent and ctrl-exec-exec, constrained to 1 CPU / 512 MB, with the
+# ctrl-exec-agent and ctrl-exec-executor, constrained to 1 CPU / 512 MB, with the
 # affected host's default open-files limit (1024 soft / 4096 hard) on all three
 # daemons. The API is published on 127.0.0.1:17445 only.
 #

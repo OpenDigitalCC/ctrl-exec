@@ -246,7 +246,7 @@ if [[ -n "$BRAND" ]]; then
         ["etc/systemd/ctrl-exec-agent-renew.service"]="etc/systemd/${BRAND}-exec-agent-renew.service"
         ["etc/systemd/ctrl-exec-agent-renew.timer"]="etc/systemd/${BRAND}-exec-agent-renew.timer"
         ["etc/systemd/ctrl-exec-api.service"]="etc/systemd/${BRAND}-exec-api.service"
-        ["etc/systemd/ctrl-exec-exec.service"]="etc/systemd/${BRAND}-exec-exec.service"
+        ["etc/systemd/ctrl-exec-executor.service"]="etc/systemd/${BRAND}-exec-executor.service"
         ["etc/systemd/ctrl-exec-maintenance.service"]="etc/systemd/${BRAND}-exec-maintenance.service"
         ["etc/systemd/ctrl-exec-maintenance.timer"]="etc/systemd/${BRAND}-exec-maintenance.timer"
         ["etc/ctrl-exec-agent.init"]="etc/${BRAND}-exec-agent.init"

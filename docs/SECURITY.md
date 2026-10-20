@@ -209,7 +209,7 @@ Allowlist is server-enforced
 Privilege separation and per-script profiles (optional, recommended)
 : With `executor_socket` set in `agent.conf`, the network-facing agent runs
   unprivileged and hands each authorised run to a small, root, no-network
-  **executor** (`ctrl-exec-exec`) over a unix socket. The socket is owned by the
+  **executor** (`ctrl-exec-executor`) over a unix socket. The socket is owned by the
   agent user, mode `0600`, and the executor rejects any connection whose
   `SO_PEERCRED` uid is not the agent (a defence-in-depth check on top of the
   permissions). The executor **re-derives** the script path and its security
@@ -423,7 +423,7 @@ hands the run to the executor - so this tight sandbox costs nothing and shrinks
 the blast radius of an RCE in the network-facing code. Write-bearing or
 privileged scripts run via the executor, not the front-end (see below).
 
-The executor unit (`ctrl-exec-exec`) is deliberately **not** sandboxed: it is
+The executor unit (`ctrl-exec-executor`) is deliberately **not** sandboxed: it is
 root and needs `CAP_SYS_ADMIN` (to build each action's mount namespace),
 `setuid`, and full filesystem reach to do its job. Its protection is its small,
 audited surface, the peer-cred check on its socket, and the fact that it runs

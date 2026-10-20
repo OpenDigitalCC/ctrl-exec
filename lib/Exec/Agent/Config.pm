@@ -87,7 +87,7 @@ sub _validate_config ($config, $path) {
         delete $config->{script_dirs};   # absent = no restriction
     }
 
-    # KEEP IN SYNC WITH src/ctrl-exec-exec.c (set_profile_field / parse_agent_conf).
+    # KEEP IN SYNC WITH src/ctrl-exec-executor.c (set_profile_field / parse_agent_conf).
     # The executor re-derives the same security decision from this same config; if
     # the two parsers diverge, the executor applies a different privilege than this
     # front-end authorised. t/exec-conformance.t gates that they agree.
@@ -130,7 +130,7 @@ sub _validate_config ($config, $path) {
                 croak "Profile '$pname': invalid run_as '$p->{run_as}' in '$path'"
                     unless $p->{run_as} =~ /^(?:[A-Za-z_][A-Za-z0-9_-]*|\d+)$/;
                 # Bound a numeric uid/gid to 32 bits, matching the C executor
-                # (ctrl-exec-exec.c set_profile_field): a value that does not fit
+                # (ctrl-exec-executor.c set_profile_field): a value that does not fit
                 # uid_t would be rejected by the executor at load, so reject it
                 # here too rather than let the two parsers disagree.
                 croak "Profile '$pname': run_as '$p->{run_as}' out of range in '$path'"

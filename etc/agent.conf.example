@@ -42,7 +42,7 @@ ca   = /etc/ctrl-exec-agent/ca.crt
 
 # Privilege separation (optional, recommended).
 # When set, the agent hands each synchronous run to the privileged executor
-# (ctrl-exec-exec.service) over this unix socket; the executor re-derives the
+# (ctrl-exec-executor.service) over this unix socket; the executor re-derives the
 # path and profile from its own root-owned config and applies the profile
 # (run_as, capabilities, control/state dirs read-only) before exec.
 #
@@ -55,7 +55,7 @@ ca   = /etc/ctrl-exec-agent/ca.crt
 # refused (the executor does not yet handle detached jobs). Use synchronous runs
 # with the executor, or leave executor_socket unset to use --async.
 #
-# DEFAULT: on. The executor (ctrl-exec-exec.service) is installed and enabled by
+# DEFAULT: on. The executor (ctrl-exec-executor.service) is installed and enabled by
 # the package, and the standard, recommended posture is to run through it so
 # per-script profiles are enforced. Comment this out only if you specifically
 # need --async runs on this host (the two are mutually exclusive, above).
@@ -139,7 +139,7 @@ executor_socket = /run/ctrl-exec-agent/exec.sock
 # an action can never tamper with the agent's controls.
 #
 # PROFILES REQUIRE THE EXECUTOR. They are applied only when executor_socket is
-# set (above) and ctrl-exec-exec.service is running. WITHOUT the executor the
+# set (above) and ctrl-exec-executor.service is running. WITHOUT the executor the
 # profile= in scripts.conf is parsed but NOT applied: every script instead runs
 # directly in the agent process - as the unprivileged 'ctrl-exec-agent' user,
 # with no added capabilities and the agent unit's filesystem sandbox (it can

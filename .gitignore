@@ -26,7 +26,7 @@ scripts/
 
 
 # Compiled C executor (built from src/, shipped via packaging)
-/src/ctrl-exec-exec
+/src/ctrl-exec-executor
 
 # Systemd units rendered from etc/systemd/ by debian/rules at build time
 debian/*.service

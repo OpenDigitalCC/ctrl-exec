@@ -1038,7 +1038,7 @@ TTL. A second async run of the same script is refused via a per-script flock.
 ### `Exec::Agent::ExecClient`
 
 Front-end -> executor client. `run(%opts)` hands an authorised run to the
-privileged executor (`ctrl-exec-exec`) over its unix socket using the
+privileged executor (`ctrl-exec-executor`) over its unix socket using the
 length-prefixed wire framing and parses the captured result back.
 
 

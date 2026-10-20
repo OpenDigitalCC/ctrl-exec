@@ -1,12 +1,12 @@
 package Exec::Agent::ExecClient;
 
 # Front-end -> executor client. The unprivileged agent serve loop uses this to
-# hand an authorised run to the privileged executor (ctrl-exec-exec) over its
+# hand an authorised run to the privileged executor (ctrl-exec-executor) over its
 # unix socket, and to read back the captured result. The executor re-derives the
 # script path and profile from its own root-owned config and applies the profile
 # before exec; this side only frames the request and parses the response.
 #
-# Wire framing (big-endian, length-prefixed throughout; see src/ctrl-exec-exec.c):
+# Wire framing (big-endian, length-prefixed throughout; see src/ctrl-exec-executor.c):
 #   request:  [u32 total][field reqid][field disp][field script][field stdin]
 #             [u32 argc] argc*[field arg]      where field = [u32 len][bytes]
 #   response: [i32 exit][field stdout][field stderr]

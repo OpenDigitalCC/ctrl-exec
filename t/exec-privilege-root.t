@@ -43,8 +43,8 @@ my $CAP_NONE    = '0000000000000000';
 # A tempdir nobody can traverse+exec under (default tempdir mode is 0700).
 my $TMP = tempdir(DIR => '/var/tmp', CLEANUP => 1);
 chmod 0755, $TMP;
-my $BIN = "$TMP/ctrl-exec-exec";
-system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-exec.c", '-lcap') == 0
+my $BIN = "$TMP/ctrl-exec-executor";
+system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-executor.c", '-lcap') == 0
     or plan skip_all => 'could not compile the executor';
 
 # Probe: report the identity and capability state the action actually runs with.

@@ -25,9 +25,9 @@ my $cc = `command -v gcc 2>/dev/null`; chomp $cc;
 plan skip_all => 'gcc not available' unless $cc && -x $cc;
 
 my $TMP = tempdir(CLEANUP => 1);
-my $BIN = "$TMP/ctrl-exec-exec";
-system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-exec.c", '-lcap') == 0
-    or plan skip_all => 'could not compile src/ctrl-exec-exec.c';
+my $BIN = "$TMP/ctrl-exec-executor";
+system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-executor.c", '-lcap') == 0
+    or plan skip_all => 'could not compile src/ctrl-exec-executor.c';
 
 my $script = "$TMP/ok.sh";
 open my $sf, '>', $script or die $!;

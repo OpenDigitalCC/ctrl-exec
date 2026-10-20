@@ -160,7 +160,7 @@ script** (the allowlist), **who** invoked it (mTLS + the auth hook), and **its
 security profile** - not by a filesystem wall the operator has to fight.
 
 With privilege separation enabled (`executor_socket` in `agent.conf`, plus the
-`ctrl-exec-exec.service` running), each synchronous run goes to the privileged
+`ctrl-exec-executor.service` running), each synchronous run goes to the privileged
 executor, which runs the script under the profile named in `scripts.conf`:
 
 - `run_as` - the user the script runs as (ordinary Unix DAC governs its writes).

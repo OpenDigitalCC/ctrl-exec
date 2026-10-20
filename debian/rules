@@ -9,7 +9,7 @@ UNITS := \
   ctrl-exec-agent.service=ctrl-exec-agent.service \
   ctrl-exec-agent.ctrl-exec-agent-renew.service=ctrl-exec-agent-renew.service \
   ctrl-exec-agent.ctrl-exec-agent-renew.timer=ctrl-exec-agent-renew.timer \
-  ctrl-exec-agent.ctrl-exec-exec.service=ctrl-exec-exec.service \
+  ctrl-exec-agent.ctrl-exec-executor.service=ctrl-exec-executor.service \
   ctrl-exec-dispatcher.ctrl-exec-api.service=ctrl-exec-api.service \
   ctrl-exec-dispatcher.ctrl-exec-maintenance.service=ctrl-exec-maintenance.service \
   ctrl-exec-dispatcher.ctrl-exec-maintenance.timer=ctrl-exec-maintenance.timer
@@ -47,7 +47,7 @@ override_dh_auto_install:
 	# Privileged executor (C). dh_auto_build compiled it from src/ via the
 	# Makefile; install the root daemon to /usr/sbin.
 	install -d debian/tmp/usr/sbin
-	install -m755 src/ctrl-exec-exec debian/tmp/usr/sbin/ctrl-exec-exec
+	install -m755 src/ctrl-exec-executor debian/tmp/usr/sbin/ctrl-exec-executor
 	# Example configs -> /usr/share/ctrl-exec/examples (postinst seeds /etc).
 	install -d debian/tmp/usr/share/ctrl-exec/examples
 	install -m644 etc/agent.conf.example        debian/tmp/usr/share/ctrl-exec/examples/
@@ -83,14 +83,14 @@ override_dh_installsystemd:
 	# --no-stop-on-upgrade: leave running services alone during an upgrade; our
 	# postinst restarts the active ones itself. Without it, --no-start makes
 	# debhelper use the stop-on-upgrade model, whose preinst tries to stop every
-	# unit - including one never loaded on this host (e.g. ctrl-exec-exec when
+	# unit - including one never loaded on this host (e.g. ctrl-exec-executor when
 	# upgrading from a pre-privsep version), emitting a spurious "Failed to stop".
 	dh_installsystemd --no-enable --no-start --no-stop-on-upgrade
 	dh_installsystemd --no-enable --no-start --no-stop-on-upgrade --name=ctrl-exec-api
 	# The privileged executor unit (agent package). Like the API unit, the named
-	# file debian/ctrl-exec-agent.ctrl-exec-exec.service needs --name to be picked
+	# file debian/ctrl-exec-agent.ctrl-exec-executor.service needs --name to be picked
 	# up. Not enabled/started by default - the operator opts into privsep.
-	dh_installsystemd --no-enable --no-start --no-stop-on-upgrade --name=ctrl-exec-exec
+	dh_installsystemd --no-enable --no-start --no-stop-on-upgrade --name=ctrl-exec-executor
 	# Cert-lifecycle timers, enabled by default so renewal/rotation is hands-free.
 	# Each needs --name (same reason as above) to be picked up, and the timer is
 	# the activation unit dh_installsystemd enables. Both degrade to a harmless

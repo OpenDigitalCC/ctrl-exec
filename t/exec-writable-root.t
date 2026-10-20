@@ -19,8 +19,8 @@ plan skip_all => 'gcc not available' unless $cc && -x $cc;
 # /var/tmp, not /tmp: the profile mounts a private tmpfs on /tmp which would
 # shadow files placed under it.
 my $TMP = tempdir(DIR => '/var/tmp', CLEANUP => 1);
-my $BIN = "$TMP/ctrl-exec-exec";
-system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-exec.c", '-lcap') == 0
+my $BIN = "$TMP/ctrl-exec-executor";
+system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-executor.c", '-lcap') == 0
     or plan skip_all => 'could not compile the executor';
 
 my $WOK     = "$TMP/writable";  mkdir $WOK;
