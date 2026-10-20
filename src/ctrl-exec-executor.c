@@ -910,10 +910,46 @@ static int apply_profile(const profile_t *p, int allow_unpriv, user_env_t *ue) {
         return 0;
     }
 
+    /* Every capability the profile keeps must be one this executor holds:
+     * cap_set_proc below cannot grant a capability that is not in the permitted
+     * set, so say which one is missing instead of a bare EPERM. A container
+     * that did not add the capability to its own set is the usual cause. */
+    if (p->ncaps > 0) {
+        cap_t cur = cap_get_proc();
+        if (!cur) { perror("executor: cap_get_proc"); return -1; }
+        for (int i = 0; i < p->ncaps; i++) {
+            cap_value_t cv;
+            cap_flag_value_t have = CAP_CLEAR;
+            if (cap_from_name(p->caps[i], &cv) != 0 ||
+                cap_get_flag(cur, cv, CAP_PERMITTED, &have) != 0 || have != CAP_SET) {
+                fprintf(stderr, "executor: profile '%s' keeps %s, which the executor "
+                                "does not hold (in a container, add it to the "
+                                "container's capabilities: see DOCKER.md)\n",
+                        p->name, p->caps[i]);
+                cap_free(cur);
+                return -1;
+            }
+        }
+        cap_free(cur);
+    }
+
     /* Control-plane integrity: control/state dirs read-only in this action's
-     * mount namespace. CAP_SYS_ADMIN required - we have it as root. */
-    if (unshare(CLONE_NEWNS) != 0) { perror("unshare"); return -1; }
-    if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0) { perror("mount private"); return -1; }
+     * mount namespace. CAP_SYS_ADMIN required - we have it as root on a host;
+     * a container must be given it (and an AppArmor profile that allows mount),
+     * or every run fails here, closed. */
+    if (unshare(CLONE_NEWNS) != 0) {
+        fprintf(stderr, "executor: cannot create the action's mount namespace: "
+                        "unshare: %s (the executor needs CAP_SYS_ADMIN; in a "
+                        "container see DOCKER.md)\n", strerror(errno));
+        return -1;
+    }
+    if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0) {
+        fprintf(stderr, "executor: cannot set up the action's mount namespace: "
+                        "mount private: %s (in a container the security profile "
+                        "must allow mount, e.g. apparmor=unconfined: see "
+                        "DOCKER.md)\n", strerror(errno));
+        return -1;
+    }
     for (int i = 0; i < N_CONTROL_DIRS; i++) {
         const char *d = CONTROL_DIRS[i];
         if (access(d, F_OK) != 0) continue;
@@ -960,14 +996,29 @@ static int apply_profile(const profile_t *p, int allow_unpriv, user_env_t *ue) {
         }
     }
 
-    /* Drop the bounding set to exactly the profile's caps. */
+    /* Drop the bounding set to exactly the profile's caps. Fail closed if a
+     * capability that is in the set cannot be dropped (no CAP_SETPCAP, as in a
+     * container started with cap_drop ALL): a root action that execs with
+     * no_new_privileges off would otherwise regain every capability left in
+     * the bounding set, beyond what its profile declares. A capability this
+     * kernel does not know (PR_CAPBSET_READ fails) is not in the set. */
     for (int cap = 0; cap <= CAP_LAST_CAP; cap++) {
         int keep = 0;
         for (int i = 0; i < p->ncaps; i++) {
             cap_value_t cv;
             if (cap_from_name(p->caps[i], &cv) == 0 && (int)cv == cap) { keep = 1; break; }
         }
-        if (!keep) prctl(PR_CAPBSET_DROP, cap, 0, 0, 0);
+        if (keep || prctl(PR_CAPBSET_READ, cap, 0, 0, 0) != 1) continue;
+        if (prctl(PR_CAPBSET_DROP, cap, 0, 0, 0) != 0) {
+            int e = errno;
+            char *cn = cap_to_name((cap_value_t)cap);   /* "cap_chown": shown as in agent.conf */
+            for (char *q = cn; q && *q; q++) *q = (char)toupper((unsigned char)*q);
+            fprintf(stderr, "executor: cannot drop %s from the capability bounding "
+                            "set: %s (the executor needs CAP_SETPCAP; in a container "
+                            "see DOCKER.md)\n", cn ? cn : "a capability", strerror(e));
+            if (cn) cap_free(cn);
+            return -1;
+        }
     }
 
     /* run_as: switch gid/uid, keeping caps across the transition. */
@@ -1010,8 +1061,8 @@ static int apply_profile(const profile_t *p, int allow_unpriv, user_env_t *ue) {
              * run_as are unchanged (none). */
             if (user_env_from(getpwuid(uid), ue) != 0) return -1;
         }
-        if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) != 0) return -1;
-        if (setgroups(0, NULL) != 0) return -1;
+        if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) != 0) { perror("executor: keepcaps"); return -1; }
+        if (setgroups(0, NULL) != 0) { perror("executor: setgroups"); return -1; }
         /* Set the run_as user's supplementary groups. Fail closed if this fails:
          * running with no supplementary groups (the setgroups(0) result) instead
          * of the user's would be a privilege-correctness gap, not a safe default. */
