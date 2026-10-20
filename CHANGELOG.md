@@ -42,6 +42,7 @@ task group, each adding its bullets to this entry.
   `/usr/local/sbin` binary removed; `ctrl-exec-executor.service` is enabled and
   started if the old unit was. A fresh install gets only the new names.
   `install.sh --uninstall` now also stops and removes the executor. (T-008)
+- **Fixed** docs/SECURITY.md claimed the agent enforces "schema validation (constrained arguments)" and that the surface is "argument-constrained"; core never validates argument values (the schema sidecar is advertised data only). SECURITY.md now says so everywhere and points to the auth hooks (dispatcher hook and the agent's `auth_hook`, both given `ENVEXEC_ARGS_JSON`) as the place to constrain arguments. (T-010)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 

@@ -18,15 +18,18 @@ ctrl-exec is built around one guarantee:
 > profile.
 
 Security is enforced at ctrl-exec's own layer - the **allowlist**, **mTLS
-identity**, **argument schemas**, the **auth hook** policy engine, **per-script
-profiles**, and the **audit** - not by crippling the agent's ability to do its
+identity**, the **auth hook** policy engine, **per-script profiles**, and the
+**audit** - not by crippling the agent's ability to do its
 job. A managed script runs with the privilege its work needs; what is controlled
-is *which* script, invoked by *whom*, with *what arguments*, and recorded.
+is *which* script, invoked by *whom*, and recorded. *What arguments* it may be
+given is constrained by the auth hooks, where a site chooses to write that
+policy - core itself never validates argument values (see *Argument validation
+scope*).
 
 This is what makes ctrl-exec a sound replacement for `ssh + sudo`: it does the
 same operational work, but the surface is a fixed set of named, reviewed,
-argument-constrained, cryptographically-authenticated, audited operations - and
-there is no shell.
+cryptographically-authenticated, audited operations (with argument policy
+available through the auth hooks) - and there is no shell.
 
 
 ## Enforcement model: two boundaries
@@ -43,7 +46,9 @@ attacker who bypasses the dispatcher entirely and speaks the mTLS protocol
 directly to an agent still needs a CA-signed dispatcher certificate, and **even
 with one** is bound by the agent to exactly the approved action set: the
 allowlist (only named scripts), per-script profiles (the privilege each runs
-with), schema validation (constrained arguments), and the auth hook. It cannot
+with), and the auth hook. Arguments are constrained only if the agent's
+`auth_hook` checks them: the agent passes the arguments to that hook, and core
+itself does not validate argument values. It cannot
 extend the allowlist, edit the hook/config, change trust, or erase audit - the
 executor runs every action with the agent's control and state directories
 read-only (see *Allowlist and Execution Security*).
@@ -63,7 +68,7 @@ actor - with API access, and even read access to the source.
   do - bounded by the auth hook and rate limits, and every call is attributed
   and logged.
 - If it bypasses the API and speaks mTLS protocol straight to agents, it is held
-  to the **same** bound by each agent: the approved, profiled, schema-checked,
+  to the **same** bound by each agent: the approved, profiled and
   audited action set, at the declared privilege - and it cannot touch the
   agents' controls or audit.
 
@@ -747,8 +752,13 @@ HTTP header count limit
 
 Argument validation scope
 : The dispatcher does not validate script argument values. Validation of arguments
-  is the responsibility of the allowlisted script itself and the auth hook.
-  The hook receives arguments as a JSON array via `ENVEXEC_ARGS_JSON` and
+  is the responsibility of the allowlisted script itself and the auth hooks.
+  This includes the agent: it does not validate arguments against a script's
+  schema sidecar (the sidecar is advertised data only). To constrain arguments
+  on an agent, set `auth_hook` there; the agent calls it after allowlist
+  validation with the arguments, and a non-zero exit refuses the run. The
+  dispatcher's own hook can do the same before any connection is made. A hook
+  receives arguments as a JSON array via `ENVEXEC_ARGS_JSON` and
   on stdin; the script receives them directly as `@ARGV`. Neither path involves
   shell interpretation.
 
@@ -789,7 +799,7 @@ limitations, Docker-specific notes), see SECURITY-OPERATIONS.md.
 | Lateral reconnaissance via capabilities | `/capabilities` restricted to the trusted-dispatcher map (per-dispatcher serial); hard deny on unknown serial; re-pair to activate |
 | Script execution by non-current dispatcher cert | `/run`, `/ping`, and `/result` restricted to the trusted-dispatcher map (per-dispatcher serial); hard deny on unknown serial |
 | Cross-dispatcher result disclosure | Runs partitioned per owner; `GET /result/<reqid>` owner-gated, `404 unknown` to other dispatchers (`result-deny`, REASON=not-owner) |
-| Compromised dispatcher (or AI driving its API) | Bounded by each agent to the allowlisted, profiled, schema-checked, audited action set; cannot extend the allowlist, edit hook/config/trust, or erase audit |
+| Compromised dispatcher (or AI driving its API) | Bounded by each agent to the allowlisted, profiled and audited action set; cannot extend the allowlist, edit hook/config/trust, or erase audit |
 | RCE in the agent front-end (network-facing code) | Privilege separation: the front-end is unprivileged; only the small executor can act, and it runs only allowlisted scripts under their pinned profiles (re-derived from its own root-owned config) |
 | Action tampering with agent controls or audit | Executor runs every action with `/etc/ctrl-exec-agent` and `/var/lib/ctrl-exec-agent` read-only - including `run_as=root` profiles |
 | Arbitrary script execution via run | Agent-side allowlist, name pattern validation |
