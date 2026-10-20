@@ -28,6 +28,13 @@ my @logs;
 }
 
 my $dir = tempdir(CLEANUP => 1);
+
+# The scripts live in a tempdir owned by the test user under a world-writable
+# /tmp; trust that user and that directory's ancestors (test seam, T-045) so the
+# ownership rule does not skip them. t/agent-script-ownership.t tests the rule.
+@Exec::Agent::Config::TRUSTED_OWNERS = (0, $>);
+$Exec::Agent::Config::TRUSTED_TOP    = $dir;
+umask 022;   # and create nothing group-writable (the host umask may be 002)
 mkdir "$dir/good" or die;
 sub write_file { my ($p, $c) = @_; open my $fh, '>', $p or die "$p: $!"; print $fh $c; close $fh }
 
@@ -143,7 +150,12 @@ subtest 'reload_plan carries the reasons' => sub {
 subtest 'self-check lists skipped entries with their reasons' => sub {
     my $conf = "$dir/agent.conf";
     my $agent = "$Bin/../bin/ctrl-exec-agent";
-    my $cmd = join ' ', map { "'$_'" } $^X, "-I$Bin/../lib", $agent, '--config', $conf,
+    # Load the modulino with the same ownership seam as above, then run it.
+    my $seam = '@Exec::Agent::Config::TRUSTED_OWNERS = (0, $>);'
+             . '$Exec::Agent::Config::TRUSTED_TOP = shift;'
+             . 'my $a = shift; do $a or die $@ || $!; main()';
+    my $cmd = join ' ', map { "'$_'" } $^X, "-I$Bin/../lib", '-MExec::Agent::Config',
+                                        '-e', $seam, $dir, $agent, '--config', $conf,
                                         '--allowlist', $allow, 'self-check';
     my $out = `$cmd 2>&1`;
     like $out, qr{Script 'outside': SKIPPED - '/srv/scripts/agent-cert-deploy\.sh' is not under script_dirs \(\Q$dir\E/good\)}, 'outside listed';

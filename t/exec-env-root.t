@@ -40,7 +40,9 @@ my $orphan = 54321;
 $orphan++ while defined getpwuid($orphan) && $orphan < 54400;
 plan skip_all => 'no free uid for the numeric run_as case' if defined getpwuid($orphan);
 
-my $TMP = tempdir(DIR => '/var/tmp', CLEANUP => 1);
+# Under /run (root-owned, 0755): the executor refuses a script under a directory
+# others can write (T-045), and /var/tmp is world-writable.
+my $TMP = tempdir(DIR => '/run', CLEANUP => 1);
 chmod 0755, $TMP;
 my $BIN = "$TMP/ctrl-exec-executor";
 system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-executor.c", '-lcap') == 0

@@ -12,7 +12,8 @@
  *
  * THIS FILE contains the config parser plus three subcommands: `resolve` (the
  * security decision, exercised by the shared conformance test), the socket
- * server (`serve`), and the privileged exec path that runs under a profile.
+ * server (`serve`), and `check-path` (the script ownership rule, T-045); and
+ * the privileged exec path that runs under a profile.
  * The `resolve` mode must produce exactly the security decision the Perl
  * front-end (Exec::Agent::Config) makes for the same files, or the executor
  * would apply a different privilege than the front-end believes; the socket
@@ -441,6 +442,210 @@ static int path_in_dirs(const char *path, config_t *c) {
     return 0;
 }
 
+/* ---- script ownership (T-045) ------------------------------------------ */
+/* An allowlisted script, and every directory from / down to it, must be owned
+ * by root and writable by neither group nor other, and the script must be a
+ * regular file. Otherwise a user who can write any of them can change what this
+ * root process runs. This holds whatever the profile's run_as: scripts.conf is
+ * root's policy, so its scripts are root's files.
+ *
+ * The walk opens each component with openat(O_PATH|O_NOFOLLOW) relative to the
+ * already-checked directory fd and checks it with fstat, so what is checked is
+ * what was opened. A symbolic link is followed only after the directory holding
+ * it has passed (so only root can have made or changed the link); its target is
+ * walked by the same rule. More than MAX_SYMLINKS links is refused.
+ *
+ * Why the script is then exec'd by path (with a dev/ino re-check) rather than by
+ * fd: see run_with_profile.
+ *
+ * The Perl front end applies the same rule (Exec::Agent::Config::
+ * script_owner_check) to report a refusal early. KEEP IN SYNC: the same walk,
+ * the same check order, the same reason texts (t/exec-ownership-parity.t). */
+
+#define MAX_SYMLINKS 40
+#define MAX_EXEMPT   64
+
+typedef struct {
+    int    have_extra;             /* test seam only: a uid trusted like root */
+    uid_t  extra_uid;
+    int    nexempt;                /* test seam only: unchecked ancestors */
+    dev_t  ex_dev[MAX_EXEMPT];
+    ino_t  ex_ino[MAX_EXEMPT];
+} trust_t;
+
+/* The production rule trusts root alone. A test build (cc -DCE_TEST_SEAM, never
+ * the installed binary) may also trust CE_TEST_TRUSTED_UID and skip the checks
+ * on the strict ancestors of CE_TEST_TRUSTED_TOP, because an unprivileged test
+ * cannot create a root-owned directory chain. */
+static void trust_init(trust_t *t) {
+    memset(t, 0, sizeof(*t));
+#ifdef CE_TEST_SEAM
+    const char *u = getenv("CE_TEST_TRUSTED_UID");
+    if (u && *u) {
+        unsigned long v = 0;
+        for (const char *q = u; *q >= '0' && *q <= '9'; q++) v = v * 10 + (unsigned long)(*q - '0');
+        t->extra_uid = (uid_t)v; t->have_extra = 1;
+    }
+    const char *top = getenv("CE_TEST_TRUSTED_TOP");
+    char rp[PATH_MAX];
+    if (top && *top && realpath(top, rp)) {
+        char *last = strrchr(rp, '/');
+        for (char *p = rp; p && p <= last && t->nexempt < MAX_EXEMPT; p = strchr(p + 1, '/')) {
+            char pre[PATH_MAX];
+            size_t n = (p == rp) ? 1 : (size_t)(p - rp);
+            memcpy(pre, rp, n); pre[n] = '\0';
+            struct stat st;
+            if (stat(pre, &st) != 0) break;
+            t->ex_dev[t->nexempt] = st.st_dev; t->ex_ino[t->nexempt] = st.st_ino; t->nexempt++;
+            if (p == last) break;
+        }
+    }
+#endif
+}
+
+/* Writes the reason one node breaks the rule into why and returns 1, or 0 when
+ * it passes. Order of checks: type, owner, world-writable, group-writable. */
+static int node_problem(const trust_t *t, const char *shown, const struct stat *st,
+                        int want_file, char *why, size_t wl) {
+    if (want_file) {
+        if (!S_ISREG(st->st_mode)) { snprintf(why, wl, "'%s' is not a regular file", shown); return 1; }
+    } else {
+        if (!S_ISDIR(st->st_mode)) { snprintf(why, wl, "'%s' is not a directory", shown); return 1; }
+        for (int i = 0; i < t->nexempt; i++)
+            if (t->ex_dev[i] == st->st_dev && t->ex_ino[i] == st->st_ino) return 0;
+    }
+    if (st->st_uid != 0 && !(t->have_extra && st->st_uid == t->extra_uid)) {
+        snprintf(why, wl, "'%s' is owned by uid %lu, not root", shown, (unsigned long)st->st_uid);
+        return 1;
+    }
+    if (st->st_mode & S_IWOTH) { snprintf(why, wl, "'%s' is world-writable", shown); return 1; }
+    if (st->st_mode & S_IWGRP) { snprintf(why, wl, "'%s' is group-writable", shown); return 1; }
+    return 0;
+}
+
+/* Walk `path` from / and apply the rule. Returns 0 when it passes (*final_st is
+ * the script's stat), 1 when it is refused (why: the path and the rule), or -1
+ * when it cannot be examined (why: the path and the error; e.g. it does not
+ * exist, or the caller cannot search a directory on the way). */
+static int script_trust_check(const char *path, char *why, size_t wl, struct stat *final_st) {
+    trust_t t;
+    trust_init(&t);
+    if (path[0] != '/') { snprintf(why, wl, "'%s' is not an absolute path", path); return -1; }
+
+    char rest[2 * PATH_MAX];               /* what is left to walk */
+    char cur[PATH_MAX] = "/";              /* the checked directory, symlink-free */
+    if (strlen(path) >= sizeof(rest)) { snprintf(why, wl, "'%.200s...' is too long", path); return -1; }
+    snprintf(rest, sizeof(rest), "%s", path);
+
+    struct stat st;
+    int dfd = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
+    if (dfd < 0 || fstat(dfd, &st) != 0) {
+        snprintf(why, wl, "'/': %s", strerror(errno));
+        if (dfd >= 0) close(dfd);
+        return -1;
+    }
+    if (node_problem(&t, "/", &st, 0, why, wl)) { close(dfd); return 1; }
+
+    int links = 0, have_final = 0, rc = 0;
+    size_t pos = 0;
+    for (;;) {
+        const char *r = rest + pos;
+        while (*r == '/') r++;
+        if (!*r) break;
+        size_t n = 0;
+        while (r[n] && r[n] != '/') n++;
+        char comp[NAME_MAX + 1];
+        if (n > NAME_MAX) { snprintf(why, wl, "a component of '%s' is too long", path); rc = -1; break; }
+        memcpy(comp, r, n); comp[n] = '\0';
+        r += n;
+        const char *q = r;
+        while (*q == '/') q++;
+        int more = (*q != '\0');
+        pos = (size_t)(r - rest);
+
+        if (strcmp(comp, ".") == 0) continue;
+
+        char next[PATH_MAX];
+        int nfd;
+        if (strcmp(comp, "..") == 0) {
+            snprintf(next, sizeof(next), "%s", cur);
+            char *s = strrchr(next, '/');
+            if (s == next) next[1] = '\0'; else if (s) *s = '\0';
+            nfd = openat(dfd, "..", O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        } else {
+            int w = snprintf(next, sizeof(next), "%s%s%s", cur, strcmp(cur, "/") ? "/" : "", comp);
+            if (w < 0 || (size_t)w >= sizeof(next)) { snprintf(why, wl, "'%s' is too long", path); rc = -1; break; }
+            nfd = openat(dfd, comp, O_PATH | O_NOFOLLOW | O_CLOEXEC);
+        }
+        if (nfd < 0 || fstat(nfd, &st) != 0) {
+            snprintf(why, wl, "'%s': %s", next, strerror(errno));
+            if (nfd >= 0) close(nfd);
+            rc = -1; break;
+        }
+
+        if (S_ISLNK(st.st_mode)) {
+            close(nfd);
+            if (++links > MAX_SYMLINKS) {
+                snprintf(why, wl, "'%s' has too many levels of symbolic links", next);
+                rc = 1; break;
+            }
+            /* The link's directory (dfd) has passed: only root can change it. */
+            char tgt[PATH_MAX];
+            ssize_t tl = readlinkat(dfd, comp, tgt, sizeof(tgt) - 1);
+            if (tl < 0) { snprintf(why, wl, "'%s': %s", next, strerror(errno)); rc = -1; break; }
+            tgt[tl] = '\0';
+            if (tgt[0] == '/') {
+                close(dfd);
+                dfd = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
+                if (dfd < 0 || fstat(dfd, &st) != 0) {
+                    snprintf(why, wl, "'/': %s", strerror(errno)); rc = -1; break;
+                }
+                snprintf(cur, sizeof(cur), "/");
+                if (node_problem(&t, "/", &st, 0, why, wl)) { rc = 1; break; }
+            }
+            char nr[sizeof(rest)];
+            int w = snprintf(nr, sizeof(nr), "%s/%s", tgt, rest + pos);
+            if (w < 0 || (size_t)w >= sizeof(nr)) { snprintf(why, wl, "'%s' is too long", path); rc = -1; break; }
+            memcpy(rest, nr, (size_t)w + 1);
+            pos = 0;
+            continue;
+        }
+
+        if (S_ISDIR(st.st_mode) || more) {
+            /* A directory to descend into; a non-directory with more to come
+             * is refused here as "not a directory". */
+            if (node_problem(&t, next, &st, 0, why, wl)) { close(nfd); rc = 1; break; }
+            close(dfd);
+            dfd = nfd;
+            snprintf(cur, sizeof(cur), "%s", next);
+            continue;
+        }
+        close(nfd);
+        if (node_problem(&t, next, &st, 1, why, wl)) { rc = 1; break; }
+        *final_st = st;
+        have_final = 1;
+    }
+    if (dfd >= 0) close(dfd);
+    if (rc != 0) return rc;
+    if (!have_final) {                       /* "/", "dir/", "dir/.", "dir/.." */
+        snprintf(why, wl, "'%s' is not a regular file", cur);
+        return 1;
+    }
+    return 0;
+}
+
+/* check-path: print the ownership verdict for one path (OK / DENY <reason> /
+ * UNKNOWN <reason>). Exit 0 for OK, 1 otherwise. For operators and the parity
+ * test; the serve path applies the same check before every run. */
+static int cmd_check_path(const char *path) {
+    char why[PATH_MAX + 256];
+    struct stat st;
+    int rc = script_trust_check(path, why, sizeof(why), &st);
+    if (rc == 0) { printf("OK\n"); return 0; }
+    printf("%s %s\n", rc == 1 ? "DENY" : "UNKNOWN", why);
+    return 1;
+}
+
 /* ---- resolve: print the canonical security decision -------------------- */
 
 static int cmd_resolve(const char *agent_conf, const char *scripts_conf,
@@ -788,6 +993,17 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
         close(in[0]); close(in[1]); close(o[0]); close(o[1]); close(e[0]); close(e[1]);
         user_env_t ue;
         if (apply_profile(p, allow_unpriv, &ue) != 0) _exit(126);
+        /* Ownership rule (T-045): the script and every directory on its path
+         * owned by root and not group/other-writable. Checked here, after the
+         * profile is applied, so it sees the mount namespace and identity the
+         * exec will use. */
+        char why[PATH_MAX + 256];
+        struct stat fst;
+        int tc = script_trust_check(path, why, sizeof(why), &fst);
+        if (tc == 1) {
+            dprintf(2, "executor: script not permitted: %s\n", why);
+            _exit(126);
+        }
         /* Clear diagnostic instead of a silent exit-127: a run_as user that
          * cannot read+exec the script is the most common cause. The script's
          * permissions must allow the profile's run_as user (e.g. a script owned
@@ -796,6 +1012,42 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
             dprintf(2, "executor: '%s' is not executable by the profile's run_as "
                        "user (%s) - check the script's owner/group/mode\n",
                     path, strerror(errno));
+            _exit(126);
+        }
+        if (tc != 0) {
+            dprintf(2, "executor: script not permitted: cannot check %s\n", why);
+            _exit(126);
+        }
+#ifdef CE_TEST_SEAM
+        /* Test build only: block between the check and the exec until the test
+         * has written a byte to this fifo (the swap-after-check test). */
+        const char *pf = getenv("CE_TEST_PAUSE_FIFO");
+        if (pf && *pf) {
+            int ffd = open(pf, O_RDONLY);
+            char b;
+            if (ffd >= 0) { if (read(ffd, &b, 1) < 0) { /* proceed */ } close(ffd); }
+        }
+#endif
+        /* Exec by path, bound to the file just checked. The checked file is the
+         * one the walk opened (fstat on its fd); the path must still name that
+         * same file (dev/ino) or nothing runs. Between this stat and execve only
+         * root can change what the path names: every directory on it has just
+         * been shown to be root-owned and not group/other-writable.
+         *
+         * Not fexecve/execveat(AT_EMPTY_PATH): for a '#!' script the kernel then
+         * hands the interpreter "/dev/fd/N" as the script name instead of the
+         * path, so $0, dirname "$0", BASH_SOURCE and FindBin all change (and it
+         * needs the fd left open across exec and /proc mounted in the action's
+         * namespace). Scripts here are mostly bash or perl, and scripts commonly
+         * find their own files with dirname "$0" or re-run themselves via "$0"
+         * (the agent-file-transfer plugin does), so fd-exec would break them.
+         * The ownership rule is what keeps a non-root user from swapping the
+         * file; exec-by-fd would add protection only against root, which
+         * writes scripts.conf anyway. */
+        struct stat pst;
+        if (stat(path, &pst) != 0 || pst.st_dev != fst.st_dev || pst.st_ino != fst.st_ino) {
+            dprintf(2, "executor: script not permitted: '%s' changed while it was "
+                       "being checked\n", path);
             _exit(126);
         }
         /* Sanitised environment: the executor never trusts its own inherited
@@ -934,12 +1186,11 @@ static void handle_conn(int cfd, config_t *cfg, const char *scripts_conf,
     if (bad) { buf_add(&err, "executor: malformed request\n", 28); ecode = -1; }
     else {
         /* Re-derive path + profile from our OWN cached root-owned config; never
-         * trust the message. There is a check-then-exec window between
-         * path_in_dirs() (realpath) below and the later execve, but it is not
-         * reachable: scripts.conf, script_dirs and the script directories are all
-         * root-owned (per docs/SECURITY.md), so the unprivileged front-end cannot
-         * swap a symlink in that window. (Hardening option: open O_PATH|O_NOFOLLOW
-         * once and fexecve the same fd.) */
+         * trust the message. The window between path_in_dirs() (realpath) below
+         * and the later execve is not reachable by a non-root user: before the
+         * exec, run_with_profile checks that the script and every directory on
+         * its path are root-owned and not group/other-writable (T-045), and
+         * that the path still names the file it checked. */
         char spath[VALLEN], pname[NAMELEN];
         profile_t *p = NULL;
         if (!find_script(scripts_conf, script, spath, sizeof(spath), pname, sizeof(pname))) {
@@ -1043,10 +1294,13 @@ int main(int argc, char **argv) {
         return cmd_resolve(argv[2], argv[3], argv[4]);
     if (argc == 6 && strcmp(argv[1], "serve") == 0)
         return cmd_serve(argv[2], argv[3], argv[4], argv[5]);
+    if (argc == 3 && strcmp(argv[1], "check-path") == 0)
+        return cmd_check_path(argv[2]);
 
     fprintf(stderr,
         "ctrl-exec-executor - privileged executor for ctrl-exec-agent\n"
         "usage: ctrl-exec-executor resolve <agent.conf> <scripts.conf> <script-name>\n"
-        "       ctrl-exec-executor serve   <socket> <agent.conf> <scripts.conf> <peer-user>\n");
+        "       ctrl-exec-executor serve   <socket> <agent.conf> <scripts.conf> <peer-user>\n"
+        "       ctrl-exec-executor check-path <script-path>\n");
     return 1;
 }

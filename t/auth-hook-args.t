@@ -25,6 +25,12 @@ my $HOOK = "$Bin/../etc/auth-hook-args.example";
 plan skip_all => 'hook not present' unless -x $HOOK;
 
 my $DIR = tempdir(CLEANUP => 1);
+# Scripts in a tempdir owned by the test user under a world-writable /tmp: trust
+# that user and the tempdir's ancestors (test seam, T-045), and create nothing
+# group-writable, so the ownership rule lets the run through.
+@Exec::Agent::Config::TRUSTED_OWNERS = (0, $>);
+$Exec::Agent::Config::TRUSTED_TOP    = $DIR;
+umask 022;
 my $LOG = "$DIR/hook.log";
 mkdir "$DIR/scripts" or die;
 mkdir "$DIR/allowed" or die;

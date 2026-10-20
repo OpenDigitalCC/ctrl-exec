@@ -44,6 +44,11 @@ sub c_resolve {
 sub perl_resolve {
     my ($a, $s, $name) = @_;
     local $SIG{__WARN__} = sub {};
+    # resolve compares the path/profile decision only; the ownership rule (T-045)
+    # is outside it (fixture paths such as /var/tmp/a.sh would fail it) and has
+    # its own parity test, t/exec-ownership-parity.t.
+    no warnings 'redefine';
+    local *Exec::Agent::Config::script_owner_problem = sub { undef };
     my $config = eval { Exec::Agent::Config::load_config($a) };
     return 'CONFIG-ERROR' if $@;
     # No script_dirs here so out-of-dir entries are still present; validate_script

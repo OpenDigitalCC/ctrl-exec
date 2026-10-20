@@ -27,8 +27,9 @@ my $cc = `command -v gcc 2>/dev/null`; chomp $cc;
 plan skip_all => 'gcc not available' unless $cc && -x $cc;
 
 my $TMP = tempdir(CLEANUP => 1);
+umask 022;   # nothing group-writable: the executor refuses it (T-045)
 my $BIN = "$TMP/ctrl-exec-executor";
-system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-executor.c", '-lcap') == 0
+system($cc, '-O2', '-DCE_TEST_SEAM', '-o', $BIN, "$Bin/../src/ctrl-exec-executor.c", '-lcap') == 0
     or plan skip_all => 'could not compile src/ctrl-exec-executor.c';
 
 my $OUT = 256 * 1024;              # more output than a pipe buffer holds
@@ -81,6 +82,10 @@ die "fork: $!" unless defined $pid;
 if ($pid == 0) {
     POSIX::setpgid(0, 0);
     $ENV{CTRL_EXEC_EXEC_ALLOW_UNPRIV} = 1;
+    # Test build (CE_TEST_SEAM): trust the test user and $TMP's ancestors in the
+    # script ownership rule (T-045), which otherwise wants a root-owned path.
+    $ENV{CE_TEST_TRUSTED_UID} = $>;
+    $ENV{CE_TEST_TRUSTED_TOP} = $TMP;
     exec($BIN, 'serve', $sock, $agent_conf, $scripts_conf, $user)
         or POSIX::_exit(127);
 }

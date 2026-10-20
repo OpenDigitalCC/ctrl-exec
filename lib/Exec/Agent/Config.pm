@@ -6,6 +6,7 @@ use feature qw(signatures);
 no warnings qw(experimental::signatures);
 use Carp qw(croak);
 use Cwd  qw(abs_path);
+use Fcntl qw();
 use Exec::Log qw();
 use Exec::RateLimit qw();
 
@@ -379,6 +380,11 @@ sub load_allowlist_full ($path = undef, $script_dirs = undef) {
                 warn "Allowlist: skipping '$name' - path not in approved script_dirs: $script_path\n";
                 next;
             }
+            if (defined(my $why = script_owner_problem($script_path))) {
+                $skipped{$name} = $why;
+                warn "Allowlist: skipping '$name' - $why\n";
+                next;
+            }
             $allowlist{$name} = {
                 path    => $script_path,
                 profile => ($annot{profile} // 'default'),
@@ -411,7 +417,146 @@ sub not_permitted_reason ($name, $allowlist, $skipped = undef, $script_dirs = un
     if (defined $path && $script_dirs && !_path_in_dirs($path, $script_dirs)) {
         return not_in_dirs_reason($path, $script_dirs);
     }
+    if (defined $path && defined(my $why = script_owner_problem($path))) {
+        return $why;
+    }
     return 'not in scripts.conf';
+}
+
+# ---- script ownership (T-045) ------------------------------------------------
+#
+# An allowlisted script, and every directory from / down to it, must be owned by
+# root and writable by neither group nor other, and the script must be a regular
+# file - otherwise a user who can write any of them can change what root (or a
+# run_as profile) runs. This holds whatever the profile's run_as: scripts.conf
+# is root's policy, so its scripts are root's files.
+#
+# The privileged executor enforces this rule before every run (it is the
+# authority; src/ctrl-exec-executor.c script_trust_check). The front end applies
+# the SAME rule at allowlist load and before each run, so a refused script is
+# reported early ("script not permitted: <reason>", self-check) and, without an
+# executor (direct mode), is never run. KEEP IN SYNC WITH the C walk: the same
+# path walk, the same check order, the same reason texts
+# (t/exec-ownership-parity.t compares the two).
+#
+# Symbolic links on the path are followed, but only once the directory holding
+# the link has passed the rule (so only root can have made or changed the link);
+# the link's target is then walked with the same rule. More than MAX_SYMLINKS
+# links is refused, as the kernel does.
+
+use constant MAX_SYMLINKS => 40;
+
+# Test seams - never set outside tests. Owners trusted in place of root, and a
+# directory whose ancestors are not checked (tests cannot create a root-owned
+# directory chain without root).
+our @TRUSTED_OWNERS = (0);
+our $TRUSTED_TOP;
+
+# The reason text when one node on the path breaks the rule, or undef. $want is
+# 'dir' or 'file'. Order of checks: type, owner, world-writable, group-writable.
+sub _owner_node_problem ($shown, $st, $want, $exempt) {
+    my ($dev, $ino, $mode, $uid) = @{$st}[0, 1, 2, 4];
+    if ($want eq 'file') {
+        return "'$shown' is not a regular file" unless Fcntl::S_ISREG($mode);
+    }
+    else {
+        return "'$shown' is not a directory" unless Fcntl::S_ISDIR($mode);
+        return undef if $exempt->{"$dev:$ino"};
+    }
+    return "'$shown' is owned by uid $uid, not root"
+        unless grep { $_ == $uid } @TRUSTED_OWNERS;
+    return "'$shown' is world-writable" if $mode & 0002;
+    return "'$shown' is group-writable" if $mode & 0020;
+    return undef;
+}
+
+# dev:ino of each strict ancestor of $TRUSTED_TOP (test seam), else empty.
+sub _owner_exempt_dirs () {
+    return {} unless defined $TRUSTED_TOP;
+    my $top = abs_path($TRUSTED_TOP) // return {};
+    my %ex;
+    my @parts = grep { length } split m{/}, $top;
+    pop @parts;
+    my $p = '';
+    for my $d ('', @parts) {
+        $p .= "/$d" if length $d;
+        my @st = stat(length $p ? $p : '/') or last;
+        $ex{"$st[0]:$st[1]"} = 1;
+    }
+    return \%ex;
+}
+
+# The full verdict on a script path:
+#   ('ok')               the path passes the rule
+#   ('deny', $reason)    it breaks the rule; $reason names the path and the rule
+#   ('unknown', $error)  it cannot be examined (missing, or a directory this
+#                        process cannot search) - the front end gives no verdict
+#                        and leaves the decision to the executor (or to the
+#                        exec, which fails for the same reason)
+sub script_owner_check ($path) {
+    return ('unknown', "'$path' is not an absolute path") unless $path =~ m{^/};
+    my $exempt = _owner_exempt_dirs();
+    my @todo   = grep { length } split m{/}, $path;
+    my $cur    = '/';
+    my $links  = 0;
+
+    my @st = lstat '/' or return ('unknown', "'/': $!");
+    if (defined(my $p = _owner_node_problem('/', \@st, 'dir', $exempt))) {
+        return ('deny', $p);
+    }
+    my $final;
+    while (@todo) {
+        my $c = shift @todo;
+        my $want = @todo ? 'dir' : 'file';
+        next if $c eq '.';
+        my $next;
+        if ($c eq '..') {
+            ($next = $cur) =~ s{/[^/]*$}{};
+            $next = '/' unless length $next;
+        }
+        else {
+            $next = $cur eq '/' ? "/$c" : "$cur/$c";
+        }
+        @st = lstat $next or return ('unknown', "'$next': $!");
+        if (Fcntl::S_ISLNK($st[2])) {
+            return ('deny', "'$next' has too many levels of symbolic links")
+                if ++$links > MAX_SYMLINKS;
+            my $t = readlink $next;
+            return ('unknown', "'$next': $!") unless defined $t;
+            if ($t =~ m{^/}) {
+                $cur = '/';
+                @st = lstat '/' or return ('unknown', "'/': $!");
+                if (defined(my $p = _owner_node_problem('/', \@st, 'dir', $exempt))) {
+                    return ('deny', $p);
+                }
+            }
+            unshift @todo, grep { length } split m{/}, $t;
+            next;
+        }
+        if (Fcntl::S_ISDIR($st[2]) || $want eq 'dir') {
+            # A directory to descend into; a non-directory with more to come is
+            # refused here as "not a directory".
+            if (defined(my $p = _owner_node_problem($next, \@st, 'dir', $exempt))) {
+                return ('deny', $p);
+            }
+            $cur = $next;
+            next;
+        }
+        if (defined(my $p = _owner_node_problem($next, \@st, 'file', $exempt))) {
+            return ('deny', $p);
+        }
+        $final = $next;
+    }
+    # The walk ended on a directory ("/", "dir/", "dir/.", "dir/..").
+    return ('deny', "'$cur' is not a regular file") unless defined $final;
+    return ('ok');
+}
+
+# The reason a script path breaks the ownership rule, or undef when it passes
+# or cannot be examined here (see script_owner_check).
+sub script_owner_problem ($path) {
+    my ($verdict, $why) = script_owner_check($path);
+    return $verdict eq 'deny' ? $why : undef;
 }
 
 # Log each skipped scripts.conf entry once (the caller calls this once per load:
