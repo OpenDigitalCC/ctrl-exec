@@ -651,6 +651,32 @@ Fields
 ACTION=api-request METHOD=POST PATH=/run PEER=127.0.0.1 LEN=87
 ```
 
+### status-read
+
+Emitted by `ctrl-exec-api` once for every `GET /status/{reqid}` read, after the
+`status` auth check, so each read of a run's output is attributable. The caller
+sees `200` for `served` and the same generic `404` for `denied` and `not-found`;
+the log distinguishes them for the operator. The auth token and the run's output
+are never logged.
+
+Priority
+: INFO (`served`, `not-found`), WARNING (`denied`), ERR (`error`)
+
+Fields
+
+| Field | Type | Description |
+| --- | --- | --- |
+| ACTION | string | `status-read` |
+| RESULT | string | `served`, `denied` (auth hook refused), `not-found` (no such reqid) or `error` (run store unreadable) |
+| USER | string | Username given to the auth hook; a GET carries none, so normally `(none)` |
+| IP | string | Source IP of the caller |
+| REQID | hex | The run being read |
+| SUBMITTER | string | Username recorded when the run was submitted, or `(none)` (unknown reqid, or a run recorded without one) |
+
+```
+ACTION=status-read IP=192.0.2.9 REQID=a1b2c3d4e5f60001 RESULT=denied SUBMITTER=alice USER=(none)
+```
+
 ### run-store-fail
 
 Emitted when the result of a `/run` operation cannot be written to the
@@ -1477,6 +1503,7 @@ ACTION=rotation-state-corrupt PATH=/var/lib/ctrl-exec/rotation.json ERROR="..." 
 | SCRIPTS | integer | Count of scripts in a capabilities response |
 | SERIAL | string | Lowercase hex cert serial (used in `revoked-cert`, `serial-broadcast`, `serial-retire`) |
 | STATUS | string | State indicator: `ok`, `starting`, `approved`, `pending`, etc. |
+| SUBMITTER | string | Username recorded as the submitter of a run (used in `status-read`) |
 | TARGET | string | `host:port` of the agent as addressed by the dispatcher |
 | THRESHOLD | integer | `cert_renewal_days` value from config (used in `cert-check`) |
 | TLS | string | `yes` or `no` indicating TLS state of the API listener |
@@ -1487,9 +1514,9 @@ ACTION=rotation-state-corrupt PATH=/var/lib/ctrl-exec/rotation.json ERROR="..." 
 
 | Priority | Syslog level | Used for |
 | --- | --- | --- |
-| INFO | `daemon.info` | Normal operations: `start`, `run`, `ping`, `dispatch`, `lock-acquire`, `lock-release`, `renew`, `renew-complete`, `auth` pass, `pair-complete`, `pair-approve`, `pair-deny`, `pair-request`, `pair-reject`, `pairing-mode-start`, `pairing-mode-stop`, `capabilities` success, `rate-evict`, `unpair`, `api-start`, `api-stop`, `api-request`, `cert-check`, `cert-renewal-start`, `cert-rotated`, `serial-broadcast`, `serial-retire`, `serial-confirmed`, `revoked-serials-absent` |
-| WARNING | `daemon.warning` | Security and access events requiring attention: `deny`, `serial-reject`, `result-deny`, `revoked-cert`, `tls-failure`, `ip-block`, `rate-block`, `capabilities-deny`, `capabilities-no-serial`, `pair-denied`, `pair-timeout`, `lock-conflict`, `config-warn`, `stdin-timeout`, `auth` deny, `serial-broadcast-fail`, `serial-stale` |
-| ERR | `daemon.err` | Failures requiring investigation: `accept-fatal`, `renew` failure, `capabilities` error, `ping` error, `run` error, `auth` error (hook not executable), `cert-rotation-fail`, `rotation-state-corrupt`, `run-store-fail` |
+| INFO | `daemon.info` | Normal operations: `start`, `run`, `ping`, `dispatch`, `lock-acquire`, `lock-release`, `renew`, `renew-complete`, `auth` pass, `pair-complete`, `pair-approve`, `pair-deny`, `pair-request`, `pair-reject`, `pairing-mode-start`, `pairing-mode-stop`, `capabilities` success, `rate-evict`, `unpair`, `api-start`, `api-stop`, `api-request`, `status-read` (served, not-found), `cert-check`, `cert-renewal-start`, `cert-rotated`, `serial-broadcast`, `serial-retire`, `serial-confirmed`, `revoked-serials-absent` |
+| WARNING | `daemon.warning` | Security and access events requiring attention: `deny`, `serial-reject`, `result-deny`, `status-read` (denied), `revoked-cert`, `tls-failure`, `ip-block`, `rate-block`, `capabilities-deny`, `capabilities-no-serial`, `pair-denied`, `pair-timeout`, `lock-conflict`, `config-warn`, `stdin-timeout`, `auth` deny, `serial-broadcast-fail`, `serial-stale` |
+| ERR | `daemon.err` | Failures requiring investigation: `accept-fatal`, `renew` failure, `capabilities` error, `ping` error, `run` error, `auth` error (hook not executable), `cert-rotation-fail`, `rotation-state-corrupt`, `run-store-fail`, `status-read` (error) |
 
 
 ## Alert Pattern Reference

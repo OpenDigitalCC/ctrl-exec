@@ -379,8 +379,8 @@ Request result access
   request receives `404` - it cannot distinguish "not yours" from "no such run".
   With NO hook configured, the unguessable 64-bit reqid is the capability:
   possession authorises (the `api_auth_default` applies, as for every route).
-  This mirrors the agent's owner-gated `GET /result/<reqid>`. Caveats: result
-  access is still not logged with the caller's identity, and runs recorded before
+  This mirrors the agent's owner-gated `GET /result/<reqid>`. Every read is audited with a `status-read` log line (caller IP, reqid,
+  recorded submitter, and served / denied / not-found; see LOGGING.md). Caveats: runs recorded before
   this change carry no submitter - a hook that requires one should treat an empty
   `ENVEXEC_SUBMITTER` as legacy and decide accordingly. Sensitive results should
   still be minimised in script stdout if they will be stored.

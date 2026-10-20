@@ -649,10 +649,12 @@ sub _handle_status ($conn, $reqid, $peer, $auth_token, $config) {
         Exec::RunStore::aggregate(reqid => $reqid, config => $config);
     };
     if ($@) {
+        _log_status_read('ERR', 'error', $reqid, $peer, undef);
         _send_error($conn, 500, 'server error', 'cannot read result');
         return;
     }
     unless ($record) {
+        _log_status_read('INFO', 'not-found', $reqid, $peer, undef);
         _send_error($conn, 404, 'not found', "no result for reqid $reqid");
         return;
     }
@@ -675,14 +677,36 @@ sub _handle_status ($conn, $reqid, $peer, $auth_token, $config) {
     unless ($auth->{ok}) {
         # Deny as 404, not 403: do not reveal to an unauthorised caller that the
         # reqid exists (no distinction between "not yours" and "no such run").
+        # The log (the operator's) does distinguish them.
+        _log_status_read('WARNING', 'denied', $reqid, $peer, $record->{submitter});
         _send_error($conn, 404, 'not found', "no result for reqid $reqid");
         return;
     }
+
+    _log_status_read('INFO', 'served', $reqid, $peer, $record->{submitter});
 
     # Never echo the internal submitter record back to the caller.
     my %public = %$record;
     delete $public{submitter};
     _send_json($conn, 200, { ok => JSON::true, %public });
+}
+
+# Audit line for every GET /status read: who read which run, and the outcome
+# (served / denied / not-found / error). USER is the username the auth hook was
+# given - a GET carries none, so it is normally (none); IP identifies the caller.
+# SUBMITTER is the recorded submitter, for comparison. Never the token and never
+# any of the run's output.
+sub _log_status_read ($level, $result, $reqid, $peer, $submitter) {
+    my $sub = ref $submitter eq 'HASH' ? ($submitter->{username} // '') : '';
+    $sub =~ s/[[:cntrl:]]/?/g;    # submitter is caller-supplied: keep the line one line
+    Exec::Log::log_action($level, {
+        ACTION    => 'status-read',
+        RESULT    => $result,
+        USER      => '(none)',
+        IP        => $peer,
+        REQID     => $reqid,
+        SUBMITTER => length $sub ? $sub : '(none)',
+    });
 }
 
 sub _parse_body ($conn, $body) {
