@@ -231,23 +231,11 @@ The complete entrypoint, Dockerfile and compose file are in the Docker deploymen
 
 ## Agent container
 
-The agent uses a two-phase entrypoint: pair on first start, then serve as the unprivileged `ctrl-exec-agent` user. Set `DISPATCHER_HOST` to the hostname or address of the dispatcher container. The pairing request waits for approval on the dispatcher, 30 seconds by default.
+The agent container runs two processes, as a host runs two services: the agent as the unprivileged `ctrl-exec-agent` user, and the privileged executor as root, which applies each script's profile (`run_as`, `caps`, `writable`). The entrypoint pairs on first start, starts the executor, starts the agent with `setpriv`, and then stays as a small supervisor. Set `DISPATCHER_HOST` to the hostname or address of the dispatcher container. The pairing request waits for approval on the dispatcher, 30 seconds by default.
 
-```bash
-#!/bin/sh
-set -eu
-CONF_DIR=/etc/ctrl-exec-agent
-if [ -z "${DISPATCHER_HOST:-}" ]; then
-    echo "ERROR: DISPATCHER_HOST not set" >&2; exit 1
-fi
-if [ ! -f "$CONF_DIR/agent.crt" ]; then
-    ctrl-exec-agent request-pairing --dispatcher "$DISPATCHER_HOST"
-fi
-exec setpriv --reuid=ctrl-exec-agent --regid=ctrl-exec-agent --init-groups \
-             ctrl-exec-agent serve
-```
+The executor needs `SETPCAP` and `SYS_ADMIN` on top of the dispatcher's five capabilities, and `apparmor=unconfined` on a host that uses AppArmor: it builds a mount namespace for every run. Without them every run fails with an error naming what is missing; no script runs without its profile. The deployment guide has the full entrypoint and a table of what each capability is for.
 
-The privileged executor is a separate root service and is not part of the container, so per-script profiles are not enforced there. The guide gives the full entrypoint, which also turns `executor_socket` off in `agent.conf`.
+To reload the agent after editing `scripts.conf` or `agent.conf`, send the container a `HUP` (`docker compose kill -s HUP agent`); the entrypoint passes it to the agent.
 
 ## docker-compose
 
@@ -282,8 +270,8 @@ services:
     read_only: true
     tmpfs: [/tmp, /run]
     cap_drop: [ALL]
-    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]
-    security_opt: [no-new-privileges:true]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID, SETPCAP, SYS_ADMIN]
+    security_opt: [no-new-privileges:true, apparmor=unconfined]
     environment:
       DISPATCHER_HOST: dispatcher
     ports:

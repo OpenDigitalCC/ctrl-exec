@@ -30,10 +30,12 @@ dispatcher container
   fixes ownership, creates the CA on first start, and renews certificates.
 
 agent container
-: Runs `ctrl-exec-agent serve` in the foreground as the unprivileged
-  `ctrl-exec-agent` user. Exposes port 7443. Agent cert, config, and state are
-  stored on named volumes. The container pairs with the dispatcher on first
-  start and then serves normally on subsequent starts.
+: Runs `ctrl-exec-agent serve` as the unprivileged `ctrl-exec-agent` user and
+  the privileged executor, `ctrl-exec-executor`, as root beside it, so
+  per-script profiles are enforced as on a host. Exposes port 7443. Agent
+  cert, config, and state are stored on named volumes. The container pairs
+  with the dispatcher on first start and then serves normally on subsequent
+  starts.
 
 Volumes hold all state. Containers are otherwise stateless and can be rebuilt
 from the image without loss of pairing or configuration.
@@ -129,6 +131,11 @@ Pairing and approval run as root with `docker compose exec dispatcher ced ...`,
 so the operator commands in *Pairing Workflow in Docker* are the same as on a
 bare-metal host. The difference is that the API process is not root while they
 run. See also the Trust Model section of `SECURITY.md`.
+
+The agent container keeps the agent package's split the same way: the agent
+runs as `ctrl-exec-agent` with no capabilities, and the executor runs as root
+and applies each script's profile. The executor needs more than the five
+capabilities above; see *Executor capabilities* under *Agent Container*.
 
 
 ## Dispatcher Container
@@ -626,7 +633,9 @@ Container flags
   five capabilities back; `security_opt: [no-new-privileges:true]`; and a limit
   on process count, memory and CPU (`pids_limit`, `mem_limit`, `cpus`). The
   numbers in the sample suit a small fleet - set your own. `init: true` goes with
-  these flags, as described under the entrypoint.
+  these flags, as described under the entrypoint. The agent container adds
+  `SETPCAP` and `SYS_ADMIN` and `apparmor=unconfined` for the executor; see
+  *Executor capabilities*.
 
 Rootless Docker
 : Not recommended. The settings above give the same practical isolation without
@@ -656,6 +665,13 @@ x-hardened: &hardened
   mem_limit: 256m
   cpus: "1.0"
 
+# The agent container also runs the privileged executor, which needs three
+# more settings. See "Executor capabilities".
+x-hardened-agent: &hardened-agent
+  <<: *hardened
+  cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID, SETPCAP, SYS_ADMIN]
+  security_opt: [no-new-privileges:true, apparmor=unconfined]
+
 services:
   dispatcher:
     <<: *hardened
@@ -677,7 +693,7 @@ services:
     networks: [ctrl-exec-net]
 
   agent:
-    <<: *hardened
+    <<: *hardened-agent
     build: ./agent
     image: ctrl-exec-agent:local
     hostname: agent
@@ -705,8 +721,10 @@ networks:
 To run the dispatcher alone, delete the `agent` service and the three agent
 volumes. To run an agent alone against a dispatcher elsewhere, delete the
 `dispatcher` service and set `DISPATCHER_HOST` to the dispatcher's hostname or
-address. The extension field `x-hardened` and the YAML merge (`<<: *hardened`)
-are plain compose features; copy the settings inline if you prefer.
+address. The extension fields `x-hardened` and `x-hardened-agent` and the YAML
+merge (`<<: *hardened`) are plain compose features; copy the settings inline if
+you prefer. A merge replaces a list rather than adding to it, which is why
+`x-hardened-agent` repeats the whole `cap_add` and `security_opt` lists.
 
 Port 7444 is the pairing port. If agents are on the same Docker network and
 pairing is done container-to-container, 7444 does not need to be published to
@@ -760,33 +778,28 @@ ENTRYPOINT ["/entrypoint.sh"]
 The agent needs no fixed UID: nothing of the agent's is bind-mounted, and its state lives
 on named volumes.
 
-### No executor in a container
-
-The agent package turns the privileged executor on in `agent.conf`
-(`executor_socket`), and on a host systemd runs `ctrl-exec-executor` as a second,
-root service. The executor needs `CAP_SYS_ADMIN` and full filesystem reach, and
-a container runs one process tree, so this deployment runs the agent alone. The
-entrypoint comments `executor_socket` out; an agent that is pointed at an
-executor that is not running fails every run.
-
-Without the executor, per-script profiles (`run_as`, capabilities, writable
-paths) are not enforced, and the agent warns about it at start if the allowlist
-names a profile. Scripts run as the agent's unprivileged user. Asynchronous runs, which
-the executor does not support, work. If you need profiles, run the agent on the
-host rather than in a container.
+The Dockerfile and the entrypoint below are also in the source tree, under
+`tools/agent-container/`, with the container test that exercises them
+(`tools/agent-container/test.sh`).
 
 ### Entrypoint script
 
 `agent/entrypoint.sh`:
 
 ```bash
-#!/bin/sh
-# Runs as root to pair (the certificates are written into a root-owned
-# directory), then drops to the ctrl-exec-agent user to serve.
+#!/bin/bash
+# Runs as root: pairs on first start (the certificates are written into a
+# root-owned directory), starts the privileged executor as root, and runs the
+# agent as the unprivileged ctrl-exec-agent user. It then stays as a small
+# supervisor: a HUP is passed to the agent as a reload, a stop reaches both,
+# and if either daemon exits the container exits.
 set -eu
 
 CONF_DIR=/etc/ctrl-exec-agent
 CONF="$CONF_DIR/agent.conf"
+RUN_DIR=/run/ctrl-exec-agent
+SOCK="$RUN_DIR/exec.sock"
+AGENT_USER=ctrl-exec-agent
 
 log() { echo "[entrypoint] $*"; }
 
@@ -795,11 +808,6 @@ if [ -z "${DISPATCHER_HOST:-}" ]; then
     log "ERROR: DISPATCHER_HOST environment variable not set." >&2
     exit 1
 fi
-
-# The package's agent.conf turns on the privileged executor, which is a
-# separate root service. A container runs the agent alone, so turn it off;
-# an agent pointed at an executor that is not there fails every run.
-sed -i 's/^executor_socket/# executor_socket/' "$CONF"
 
 # First start: no cert means we have not paired yet. request-pairing blocks
 # until the operator approves on the dispatcher (30 seconds by default), stores
@@ -836,20 +844,84 @@ EOC
     rsyslogd -f /run/rsyslog.conf -i /run/rsyslogd.pid
 fi
 
+# The privileged executor, as root, with the arguments of the package's
+# ctrl-exec-executor.service. It makes the socket, owned by the agent user and
+# mode 0600; the agent hands it every run.
+mkdir -p "$RUN_DIR"
+chmod 755 "$RUN_DIR"
+log "Starting ctrl-exec-executor as root"
+ctrl-exec-executor serve "$SOCK" "$CONF" "$CONF_DIR/scripts.conf" "$AGENT_USER" &
+executor_pid=$!
+for _ in $(seq 1 50); do
+    [ -S "$SOCK" ] && break
+    sleep 0.1
+done
+if [ ! -S "$SOCK" ]; then
+    log "ERROR: ctrl-exec-executor did not create $SOCK." >&2
+    exit 1
+fi
+
 # Adopt a renewed certificate staged while the agent was running (the deb's
 # unit does this as ExecStartPre), then serve as the unprivileged user.
 ctrl-exec-agent promote-cert || true
-log "Starting ctrl-exec-agent serve as ctrl-exec-agent"
-exec setpriv --reuid=ctrl-exec-agent --regid=ctrl-exec-agent --init-groups \
-             ctrl-exec-agent serve
+log "Starting ctrl-exec-agent serve as $AGENT_USER"
+setpriv --reuid="$AGENT_USER" --regid="$AGENT_USER" --init-groups \
+        ctrl-exec-agent serve &
+agent_pid=$!
+
+# Signal the agent as its own user. Root here holds no CAP_KILL, and without it
+# may not signal a process of another user; a process of the same user may.
+signal_agent() {
+    setpriv --reuid="$AGENT_USER" --regid="$AGENT_USER" --clear-groups \
+            sh -c 'kill -s "$1" "$2"' sh "$1" "$agent_pid" || true
+}
+stopping=
+trap 'log "HUP: reloading the agent"; signal_agent HUP' HUP
+trap 'stopping=1; signal_agent TERM; kill -TERM "$executor_pid" 2>/dev/null || true' TERM INT
+
+# Wait for either daemon to exit. A trapped signal interrupts the wait; carry
+# on while both are still running.
+set +e
+while :; do
+    wait -n "$executor_pid" "$agent_pid"
+    rc=$?
+    [ -d "/proc/$agent_pid" ] && [ -d "/proc/$executor_pid" ] && continue
+    break
+done
+if [ -z "$stopping" ]; then
+    if [ -d "/proc/$agent_pid" ]; then
+        log "ctrl-exec-executor exited ($rc); stopping the agent" >&2
+        signal_agent TERM
+    else
+        log "ctrl-exec-agent exited ($rc); stopping the executor" >&2
+        kill -TERM "$executor_pid" 2>/dev/null
+    fi
+fi
+wait
+[ -n "$stopping" ] && exit 0
+exit "$rc"
 ```
 
-The entrypoint runs as root only to pair, because the certificates are written
-into a root-owned directory, and then drops to `ctrl-exec-agent` for `serve`.
-`request-pairing` blocks until the operator approves on the dispatcher, 30
-seconds by default. If that time passes, or the request is denied, it exits
-non-zero and the restart policy (`on-failure`) starts the container again with a
-fresh request, so start `pairing-mode` first and approve promptly.
+The entrypoint does the work of the package's two systemd units, and stays
+running as a small supervisor:
+
+1. On first start (no `agent.crt`), it pairs as root, because the certificates
+   are written into a root-owned directory. `request-pairing` blocks until the
+   operator approves on the dispatcher, 30 seconds by default. If that time
+   passes, or the request is denied, it exits non-zero and the restart policy
+   (`on-failure`) starts the container again with a fresh request, so start
+   `pairing-mode` first and approve promptly.
+2. It starts `ctrl-exec-executor` as root, with the arguments of the package's
+   `ctrl-exec-executor.service`. The executor makes its socket, owned by
+   `ctrl-exec-agent` and mode 0600, and accepts connections only from that
+   user.
+3. It starts `ctrl-exec-agent serve` as `ctrl-exec-agent` with `setpriv`. The
+   packaged `agent.conf` sets `executor_socket`, so the agent hands every run to
+   the executor, which applies the script's profile.
+4. It waits. A `HUP` is passed on to the agent as a reload (see *Reloading the
+   agent*), `TERM` stops both daemons, and if either daemon exits the other is
+   stopped and the container exits with that status, so the restart policy
+   applies.
 
 For automated or orchestrated deployments, `--background` mode can be used
 instead. This prints the `reqid` to stdout and exits immediately, leaving a
@@ -862,6 +934,64 @@ ctrl-exec-agent request-pairing --dispatcher "$DISPATCHER_HOST" --background
 The `reqid` can be captured by the orchestration layer and passed to
 `ced approve <reqid>` on the dispatcher. See REFERENCE.md
 `### Orchestrated pairing` for the full flow.
+
+### Executor capabilities
+
+The executor applies a profile to each run by creating a mount namespace for
+it (the agent's control and state directories read-only; with `writable`, the
+whole filesystem read-only except the listed paths), dropping the capability
+bounding set to the profile's `caps`, and changing to the profile's `run_as`
+user. Inside a container it can only do that with the capabilities and
+security profile the container gives it. Docker's defaults are not enough: they
+leave out `CAP_SYS_ADMIN`, and AppArmor's `docker-default` profile refuses
+`mount`. So every agent container needs `cap_add: [SYS_ADMIN]` and
+`security_opt: [apparmor=unconfined]` on a host that uses AppArmor. The sample
+compose drops all capabilities and adds back the full list.
+
+Measured on Docker with the default seccomp profile, the executor as root in
+the container:
+
+| Container setting | What the executor uses it for | Without it |
+| --- | --- | --- |
+| `SYS_ADMIN` | the per-run mount namespace, for every run; `writable` | every run fails: `cannot create the action's mount namespace` |
+| `apparmor=unconfined` (AppArmor hosts) | the same, `mount` | every run fails: `cannot set up the action's mount namespace` |
+| `SETPCAP` | dropping the bounding set, for every run | every run fails: `cannot drop CAP_... from the capability bounding set` |
+| `SETUID` | `run_as` a non-root user; `setpriv` for the agent | those runs fail: `setuid: Operation not permitted`; the agent does not start |
+| `SETGID` | every profile with `run_as`, `run_as = root` included | those runs fail: `setgroups: Operation not permitted`; the agent does not start |
+| `CHOWN` | handing the socket to the agent user; `input=fields` files | every run fails: the agent reports permission denied on the socket |
+| `FOWNER` | setting the socket's mode to 0600 | runs work, the socket keeps its default mode (only its owner can connect, and the executor checks the peer's user); `chmod: Operation not permitted` in the log |
+| `DAC_OVERRIDE` | removing an `input=fields` run's directory afterwards | runs work, but the directory holding the run's input is left in `/run`; `could not remove input directory` in the log |
+| each capability a profile lists in `caps` | giving it to the script | that profile's runs fail: `profile '<name>' keeps CAP_..., which the executor does not hold` |
+
+What a container enforces, with the settings above:
+
+- `run_as`, `caps`, `writable`, the read-only control and state directories,
+  and `input=fields` work as on a host.
+- A capability in a profile's `caps` must also be in the container's `cap_add`.
+  The sample adds none beyond the executor's own, so add, for example, `KILL`
+  for a profile with `caps = CAP_KILL`. A profile whose capability the container
+  does not have fails every run, naming the capability; it never runs with less.
+- `no_new_privileges = no` is not available: `no-new-privileges:true` on the
+  container sets it for every process in it, the executor's actions included.
+  A script that needs a setuid program such as `sudo` cannot run in the sample
+  container. Remove `no-new-privileges:true` from the agent's `security_opt` if
+  you need that; the executor still drops the bounding set to the profile's
+  `caps`, so a root action regains nothing at exec.
+
+None of these failures runs the script with less confinement than its profile
+states: the executor stops before the script starts, exit status 126, and the
+reason is in the run's error output.
+
+Who holds the added capabilities: the executor, and the entrypoint's shell
+(both root, neither on the network). The agent drops to `ctrl-exec-agent` with
+an empty capability set, and a script holds only the capabilities its profile
+lists. `CAP_SYS_ADMIN` and an unconfined AppArmor profile still widen what root
+in the container can do, so run the agent container under `userns-remap` (see
+*Host and container hardening*), where container root is an unprivileged user
+on the host.
+
+Asynchronous runs (`--async`) are not available while `executor_socket` is set,
+on a host or in a container: the executor does not handle detached jobs.
 
 ### Agent state
 
@@ -1009,8 +1139,8 @@ script to a running agent container:
 ```bash
 # Copy script into the volume via the running container
 docker compose cp check-disk.sh agent:/opt/ctrl-exec-scripts/
-docker compose exec agent chmod 750 /opt/ctrl-exec-scripts/check-disk.sh
-docker compose exec agent chown root:ctrl-exec-agent /opt/ctrl-exec-scripts/check-disk.sh
+docker compose exec agent chown root:root /opt/ctrl-exec-scripts/check-disk.sh
+docker compose exec agent chmod 755 /opt/ctrl-exec-scripts/check-disk.sh
 
 # Add to allowlist
 docker compose exec agent sh -c \
@@ -1018,16 +1148,47 @@ docker compose exec agent sh -c \
     >> /etc/ctrl-exec-agent/scripts.conf'
 
 # Pick up the new allowlist
-docker compose restart agent
+docker compose kill -s HUP agent
 ```
 
-The group `ctrl-exec-agent` is the one the agent package creates, so the agent
-user can execute the script but not change it. Restart the container to reload
-the allowlist: the usual `kill -HUP 1` does not work here. PID 1 is Docker's init
-process, which runs as root without `CAP_KILL` and so cannot signal the agent,
-which runs as another user; the attempt makes the init process exit and the
-container restart. Pairing and state are on the volumes, so a restart loses
-nothing.
+The executor runs the script as its profile's `run_as` user, so that user must
+be able to read and execute it, and to reach it. A script with no `profile=`
+uses `[profile default]`, which the packaged `agent.conf` sets to
+`run_as = nobody`, and the packaged scripts directory is mode 750
+`root:ctrl-exec-agent`, which `nobody` cannot enter. For scripts that run as
+`nobody`, open the directory once:
+
+```bash
+docker compose exec agent chmod 755 /opt/ctrl-exec-scripts
+```
+
+Otherwise give the script a profile whose `run_as` user can reach it, for
+example a group the user is in (see the run_as note in `agent.conf`). Either
+way the script and every directory above it must be owned by root and not
+writable by group or other, or the agent skips it and the executor refuses it
+(see `INSTALL.md`). A run_as user that cannot execute the script gets the error
+`'<path>' is not executable by the profile's run_as user`.
+
+### Reloading the agent
+
+Send the container a `HUP`:
+
+```bash
+docker compose kill -s HUP agent
+```
+
+The agent reloads `agent.conf`, the allowlist, schemas, the revocation list and
+the trusted-dispatcher map, as `systemctl reload ctrl-exec-agent` does on a
+host, without a restart. `docker kill -s HUP <container>` is the same thing, and
+`docker compose exec agent sh -c 'kill -HUP 1'` works too.
+
+The signal reaches Docker's init process (PID 1), which passes it to the
+entrypoint, which sends it on to the agent. The entrypoint sends it as the
+agent's own user: it runs as root without `CAP_KILL`, and without that
+capability root may not signal a process of another user. The executor needs no
+signal: it reads `scripts.conf` on every run and rereads `agent.conf` when the
+file changes. Settings that need a restart are named in the agent's log when it
+reloads, as on a host.
 
 Alternatively, pre-populate scripts in the Dockerfile or bake them into the
 image for immutable deployments. For mutable agent fleets, maintain scripts
@@ -1101,7 +1262,7 @@ To run multiple agent containers, give each a unique name and its own volumes:
 ```yaml
 services:
   agent-db:
-    <<: *hardened
+    <<: *hardened-agent
     build: ./agent
     image: ctrl-exec-agent:local
     hostname: agent-db
@@ -1115,7 +1276,7 @@ services:
     networks: [ctrl-exec-net]
 
   agent-web:
-    <<: *hardened
+    <<: *hardened-agent
     build: ./agent
     image: ctrl-exec-agent:local
     hostname: agent-web
@@ -1150,7 +1311,7 @@ For container deployments, add a `[tags]` section to `agent.conf` on the
 config volume, or inject it via the entrypoint before starting the agent:
 
 ```bash
-# In agent/entrypoint.sh, before the exec of ctrl-exec-agent serve
+# In agent/entrypoint.sh, before the executor and the agent are started
 grep -q '^\[tags\]' "$CONF" || cat >> "$CONF" <<EOF
 
 [tags]

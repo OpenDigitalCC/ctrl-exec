@@ -495,6 +495,17 @@ Stale pairing request
   deployments, consider setting `DISPATCHER_HOST` in a compose file under
   version control rather than passing it as a runtime variable.
 
+Agent container privilege
+: The agent container runs the privileged executor as root, and the executor
+  needs `CAP_SYS_ADMIN`, `CAP_SETPCAP` and an unconfined AppArmor profile to
+  build each run's mount namespace and drop the capability bounding set. The
+  agent itself runs unprivileged with no capabilities, and a script holds only
+  what its profile lists, but root in that container can do more than in a
+  default container. Run agent containers under `userns-remap`, so container
+  root is an unprivileged user on the host. If a capability or the namespace
+  cannot be set up, runs fail rather than run with less confinement than the
+  profile states. See `DOCKER.md`, *Executor capabilities*.
+
 `allowed_ips` in containerised deployments
 : In a Docker network, all containers on the same network can reach port 7443
   on the agent container. Set `allowed_ips` in `agent.conf` to the dispatcher
