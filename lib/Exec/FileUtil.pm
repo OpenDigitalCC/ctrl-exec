@@ -17,7 +17,7 @@ use File::Temp     qw(tempfile);
 use Fcntl          qw(O_CREAT O_RDWR O_NOFOLLOW LOCK_EX LOCK_NB LOCK_UN);
 use Exporter       qw(import);
 
-our @EXPORT_OK = qw(slurp slurp_maybe write_atomic open_lock flock_path_nb);
+our @EXPORT_OK = qw(slurp slurp_maybe write_atomic open_lock flock_path_nb sweep_lock_files);
 
 # Read a whole file and return its contents. Croaks if it cannot be opened.
 sub slurp ($path) {
@@ -79,15 +79,50 @@ sub open_lock ($path) {
     return $fh;
 }
 
+# True if $fh is still the file at $path (it has not been swept away or replaced).
+sub _same_file ($fh, $path) {
+    my @a = stat $fh   or return 0;
+    my @b = lstat $path or return 0;
+    return $a[0] == $b[0] && $a[1] == $b[1];
+}
+
 # Try, without blocking, to take an exclusive flock on the lock file at $path.
 # Returns ($fh, 1) when taken, ($fh, 0) when another process holds it, and
-# (undef) when the file cannot be opened ($! set).
+# (undef) when the file cannot be opened ($! set). Stale lock files are removed
+# by sweep_lock_files, so after a successful flock the path is re-checked: if the
+# file was unlinked between our open and our flock we hold a dead inode and must
+# retry on the fresh one, or two processes could each "hold" the same lock.
 sub flock_path_nb ($path) {
-    {
+    for (1 .. 5) {
         my $fh = open_lock($path) or return undef;
         my $got = flock($fh, LOCK_EX | LOCK_NB) ? 1 : 0;
-        return ($fh, $got);
+        return ($fh, $got) if _same_file($fh, $path) || ($got == 0 && -e $path);
+        close $fh;   # swept under us - retry on the current file
     }
+    $! = 0;
+    return undef;
+}
+
+# Remove lock files in $dir whose name matches $re and which nobody holds. Safe
+# against concurrent lockers: a file is unlinked only while we hold its flock,
+# and flock_path_nb re-checks the path after locking. Symlinks and non-regular
+# files are left alone. Returns the number removed.
+sub sweep_lock_files ($dir, $re) {
+    opendir my $dh, $dir or return 0;
+    my @names = grep { $_ =~ $re } readdir $dh;
+    closedir $dh;
+    my $removed = 0;
+    for my $n (@names) {
+        my $path = "$dir/$n";
+        next if -l $path || !-f _;
+        sysopen(my $fh, $path, O_RDWR | O_NOFOLLOW) or next;
+        if (flock($fh, LOCK_EX | LOCK_NB)) {
+            $removed++ if _same_file($fh, $path) && unlink $path;
+            flock $fh, LOCK_UN;
+        }
+        close $fh;
+    }
+    return $removed;
 }
 
 1;

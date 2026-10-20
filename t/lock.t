@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
-use Test::More tests => 29;
+use Test::More tests => 35;
 use File::Temp qw(tempdir);
 use IPC::Open2  qw(open2);
 use FindBin    qw($Bin);
@@ -156,6 +156,41 @@ sub stop_holder {
     my $held = Exec::Lock::list_held(lock_dir => $dir);
     ok !(grep { $_->{host} eq 'ln' } @$held), 'list_held: skips the symlink';
     unlink "$dir/ln--ln.lock";
+}
+
+# --- lock files do not accumulate (T-024) ---
+# Release never unlinks (unlinking a flock'd file lets a second process lock a
+# fresh inode while the first still holds the old one), so repeated cycles on the
+# same pair must reuse one file, and sweep_stale removes files nobody holds.
+{
+    my $count = sub { scalar(() = glob "$dir/*.lock") };
+    my $r1 = Exec::Lock::acquire(hosts => ['cyc'], script => 'cyc', lock_dir => $dir);
+    Exec::Lock::release(handles => $r1->{handles});
+    my $after_one = $count->();
+    for (1 .. 5) {
+        my $r = Exec::Lock::acquire(hosts => ['cyc'], script => 'cyc', lock_dir => $dir);
+        Exec::Lock::release(handles => $r->{handles});
+    }
+    is $count->(), $after_one, 'repeated lock/unlock does not grow the directory';
+
+    # Many distinct pairs, each used once: files for pairs no longer in use are
+    # swept, so the directory stays bounded instead of gaining one per pair.
+    for my $n (1 .. 8) {
+        my $r = Exec::Lock::acquire(hosts => ["churn$n"], script => 'churn', lock_dir => $dir);
+        Exec::Lock::release(handles => $r->{handles});
+    }
+    cmp_ok $count->(), '<=', $after_one + 1,
+        'distinct short-lived pairs do not accumulate lock files';
+
+    # A held file must survive the sweep, an idle one must go.
+    my $held = Exec::Lock::acquire(hosts => ['keep'], script => 'keep', lock_dir => $dir);
+    Exec::Lock::check_available(hosts => ['idle'], script => 'idle', lock_dir => $dir);
+    ok -e "$dir/idle--idle.lock", 'check_available leaves an idle lock file behind';
+    my $removed = Exec::Lock::sweep_stale(lock_dir => $dir);
+    is $removed, 1, 'sweep_stale: removes exactly the idle file';
+    ok !-e "$dir/idle--idle.lock", 'sweep_stale: removes an unheld lock file';
+    ok -e "$dir/keep--keep.lock", 'sweep_stale: keeps a held lock file';
+    Exec::Lock::release(handles => $held->{handles});
 }
 
 # --- conflict detection ---

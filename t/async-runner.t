@@ -244,4 +244,16 @@ subtest 'script lock: a symlink at the lock path is refused, target untouched' =
     is scalar(<$r>), "keep\n", 'symlink target untouched';
 };
 
+subtest 'purge_expired sweeps idle script lock files, keeps held ones' => sub {
+    my $dir = tempdir(CLEANUP => 1);
+    my $held = Exec::Agent::AsyncRunner::_acquire_script_lock($dir, 'held');
+    ok $held, 'took the held lock';
+    my $idle = Exec::Agent::AsyncRunner::_acquire_script_lock($dir, 'idle');
+    close $idle;   # released; file left behind
+    ok -e "$dir/.locks/idle.lock", 'idle lock file lingers after release';
+    Exec::Agent::AsyncRunner::purge_expired($dir);
+    ok !-e "$dir/.locks/idle.lock", 'idle lock file swept';
+    ok -e "$dir/.locks/held.lock", 'held lock file kept';
+};
+
 done_testing;

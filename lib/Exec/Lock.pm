@@ -9,7 +9,7 @@ use File::Path qw(make_path);
 use Carp   qw(croak);
 
 use Exec::Log qw();
-use Exec::FileUtil qw(flock_path_nb);
+use Exec::FileUtil qw(flock_path_nb sweep_lock_files);
 
 
 my $LOCK_DIR = '/var/lib/ctrl-exec/locks';
@@ -83,6 +83,10 @@ sub acquire (%opts) {
     croak "hosts must be an arrayref" unless ref $hosts eq 'ARRAY';
 
     _ensure_dir($dir);
+
+    # Opportunistic sweep so lock files for hosts/scripts no longer in use do not
+    # accumulate (release never unlinks - see sweep_stale).
+    sweep_stale(lock_dir => $dir);
 
     my @handles;
     my @conflicts;
@@ -176,6 +180,19 @@ sub list_held (%opts) {
     closedir $dh;
 
     return [ sort { "$a->{host}:$a->{script}" cmp "$b->{host}:$b->{script}" } @held ];
+}
+
+# Remove lock files nobody holds, so they do not accumulate for hosts/scripts no
+# longer in use. Release deliberately does NOT unlink: a holder that unlinked on
+# release could race a locker that had already opened the old inode, leaving two
+# processes each holding "the" lock on different inodes. Instead the sweep only
+# unlinks a file while holding its flock, and lockers re-check the path after
+# locking (Exec::FileUtil::flock_path_nb), so a swept file is simply re-created.
+# Run opportunistically from acquire(); returns the number removed.
+sub sweep_stale (%opts) {
+    my $dir = $opts{lock_dir} // $LOCK_DIR;
+    return 0 unless -d $dir;
+    return sweep_lock_files($dir, qr/^.+--.+\.lock\z/);
 }
 
 # --- private ---

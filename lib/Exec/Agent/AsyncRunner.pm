@@ -11,7 +11,7 @@ use File::Basename qw(dirname);
 use Fcntl      qw(LOCK_EX LOCK_NB);
 use POSIX      qw(setsid strftime);
 use Carp       qw(croak);
-use Exec::FileUtil qw(slurp_maybe flock_path_nb);
+use Exec::FileUtil qw(slurp_maybe flock_path_nb sweep_lock_files);
 
 use Exec::Agent::Runner qw();
 use Exec::Log qw();
@@ -180,7 +180,7 @@ sub purge_expired ($runs_dir = undef, $ttl = undef) {
     }
 
     # Idle per-script lock files are swept here too (release never unlinks).
-   ("$runs_dir/.locks", qr/\.lock\z/) if -d "$runs_dir/.locks";
+    sweep_lock_files("$runs_dir/.locks", qr/\.lock\z/) if -d "$runs_dir/.locks";
 
     my $removed = 0;
     for my $dir (@dirs) {
