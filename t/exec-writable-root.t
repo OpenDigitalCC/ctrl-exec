@@ -16,9 +16,10 @@ plan skip_all => 'must run as root (the executor mount-namespace path)' unless $
 my $cc = `command -v gcc 2>/dev/null`; chomp $cc;
 plan skip_all => 'gcc not available' unless $cc && -x $cc;
 
-# /var/tmp, not /tmp: the profile mounts a private tmpfs on /tmp which would
-# shadow files placed under it.
-my $TMP = tempdir(DIR => '/var/tmp', CLEANUP => 1);
+# /run, not /tmp: the profile mounts a private tmpfs on /tmp which would shadow
+# files placed under it. Not /var/tmp either: the executor refuses a script under
+# a directory others can write (T-045), and /var/tmp is world-writable.
+my $TMP = tempdir(DIR => '/run', CLEANUP => 1);
 my $BIN = "$TMP/ctrl-exec-executor";
 system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-executor.c", '-lcap') == 0
     or plan skip_all => 'could not compile the executor';
@@ -51,7 +52,7 @@ my $sock = "$TMP/exec.sock";
 my $pid  = fork();
 die "fork: $!" unless defined $pid;
 if ($pid == 0) {
-    exec($BIN, 'serve', $sock, $agent_conf, $scripts_conf, getpwuid($>)) or POSIX::_exit(127);
+    exec($BIN, 'serve', $sock, $agent_conf, $scripts_conf, scalar getpwuid($>)) or POSIX::_exit(127);
 }
 my $ready = 0;
 for (1 .. 100) { if (-S $sock) { $ready = 1; last } select undef, undef, undef, 0.05 }
