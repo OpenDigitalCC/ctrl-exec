@@ -5,7 +5,7 @@ use warnings;
 use feature qw(signatures);
 no warnings qw(experimental::signatures);
 use JSON   qw(encode_json);
-use POSIX  qw(WIFEXITED WEXITSTATUS EINTR EAGAIN);
+use POSIX  qw(WIFEXITED WEXITSTATUS EINTR EAGAIN EPIPE);
 use Fcntl  qw(F_GETFL F_SETFL O_NONBLOCK);
 use Exec::Log qw();   # _write_stdin logs a stdin-timeout; load it directly rather
                       # than relying on a caller having pulled it in first.
@@ -54,6 +54,11 @@ sub run_script ($script_path, $args = undef, $context = undef, $timeout = undef)
 
         _sanitise_env();
 
+        # An ignored SIGPIPE survives exec. If the agent was started with it
+        # ignored (systemd does), put the default back so the script sees
+        # ordinary pipe semantics.
+        $SIG{PIPE} = 'DEFAULT';
+
         # exec without shell - args passed as list
         exec { $script_path } $script_path, @$args
             or POSIX::_exit(127);
@@ -90,8 +95,14 @@ sub run_script ($script_path, $args = undef, $context = undef, $timeout = undef)
 # does not read stdin. On timeout or unrecoverable error, closes the write
 # end and returns — the script receives EOF and may exit normally or with
 # a JSON parse error. Either is preferable to the agent child hanging.
+#
+# A script that exits (or closes stdin) without reading its context leaves the
+# write with no reader: EPIPE, and SIGPIPE at its default would kill this
+# process. SIGPIPE is ignored for the duration of the write only, and EPIPE is
+# taken to mean "the script did not read its input" - not an error (T-038).
 sub _write_stdin ($fh, $data, $timeout = undef) {
     $timeout //= 10;
+    local $SIG{PIPE} = 'IGNORE';
 
     my $flags = fcntl($fh, F_GETFL, 0) or return;
     fcntl($fh, F_SETFL, $flags | O_NONBLOCK) or return;
@@ -118,6 +129,7 @@ sub _write_stdin ($fh, $data, $timeout = undef) {
         my $n = syswrite $fh, $data, $len - $offset, $offset;
         if (!defined $n) {
             next if $! == EAGAIN || $! == EINTR;
+            last if $! == EPIPE;    # script did not read its input; not an error
             last;    # real error — close and let script see EOF
         }
         $offset += $n;

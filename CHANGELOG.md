@@ -69,6 +69,13 @@ task group, each adding its bullets to this entry.
   without `run_as` are unchanged; `PATH` stays fixed and nothing from the
   request or the executor's own environment is passed. The home is not
   created, and a `writable` profile must list it. (T-004)
+- **Fixed** an agent without an executor could be killed by SIGPIPE when a script
+  exited without reading its stdin: the Perl runner wrote the request context
+  with no SIGPIPE guard (the same race T-034 fixed in the C executor), so the
+  per-connection handler died and the run got no response. SIGPIPE is now
+  ignored around the stdin write only, EPIPE is treated as "the script did not
+  read its input", and the script always starts with SIGPIPE at its default even
+  if the agent was started with it ignored. (T-038)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 
