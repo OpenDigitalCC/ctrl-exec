@@ -1,7 +1,7 @@
 ---
 title: Security Model
 subtitle: mTLS trust, the pairing protocol, dispatcher identity, and the auth hook system.
-updated: 2026-03-16
+updated: 2026-10-20
 github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/SECURITY.md
 current_page: /security
 ---
@@ -28,7 +28,7 @@ Pairing is the ceremony by which a new agent joins the fleet. It runs on a separ
 
 1. The operator starts `ced pairing-mode` on the dispatcher host. This opens a listener on port 7444.
 2. On the agent host, the operator runs `ctrl-exec-agent request-pairing --dispatcher <hostname>`. The agent generates a key pair, creates a CSR, and connects to the pairing port.
-3. Both sides independently compute a 6-digit verification code from the CSR content. The operator verifies that the codes match on both terminals before approving. This prevents CSR substitution or misrouting attacks.
+3. Both sides independently compute a 6-digit verification code from the CSR and the dispatcher certificate on the pairing connection. The operator verifies that the codes match on both terminals before approving. This catches CSR substitution and misrouting, and a relay in the middle: it has to show the agent its own certificate, which changes the agent's code. Agents older than 0.13 use a code from the CSR alone, marked `v1` on the dispatcher, which does not catch a relay.
 4. On approval, the dispatcher signs the CSR with the CA and returns the signed certificate along with the CA certificate, the current dispatcher certificate serial, and the dispatcher's stable identity. The agent stores the certificate and CA, and appends the dispatcher's serial and identity to its trusted-dispatcher map — existing entries are left in place, so an additional dispatcher can be enrolled without disturbing the agent's existing trust.
 5. The dispatcher records the agent in the registry with certificate expiry and serial tracking state.
 

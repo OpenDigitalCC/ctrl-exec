@@ -1,7 +1,7 @@
 ---
 title: cea — CLI Reference
 subtitle: Complete command reference for ctrl-exec-agent.
-updated: 2026-06-10
+updated: 2026-10-20
 github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/CLI-AGENT.md
 current_page: /cli-agent
 ---
@@ -56,7 +56,7 @@ sudo ctrl-exec-agent request-pairing --dispatcher ctrl-exec.example.com --backgr
 sudo ctrl-exec-agent request-pairing --dispatcher ctrl-exec.example.com --background --timeout 300
 ```
 
-Both terminals display a 6-digit verification code derived from the CSR content. Verify the codes match before approving on the dispatcher side. A mismatch indicates the CSR was substituted or the request was misrouted.
+Both terminals display a 6-digit verification code derived from the CSR and the dispatcher certificate the agent saw on the pairing connection. Verify the codes match before approving on the dispatcher side. A mismatch indicates the CSR was substituted, the request was misrouted, or something between agent and dispatcher presented its own certificate.
 
 # self-ping
 

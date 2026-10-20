@@ -195,7 +195,9 @@ dispatcher's hostname or IP **as reachable from the agent**:
 sudo ctrl-exec-agent request-pairing --dispatcher <dispatcher-host>
 ```
 
-Both hosts display the same 6-digit code. Confirm they match, then type `a`
+Both hosts display the same 6-digit code, bound to the dispatcher's
+certificate so that a relay in between would show two different codes.
+Confirm they match, then type `a`
 and Enter in the pairing-mode terminal to approve. The agent stores its signed
 certificate and is ready.
 

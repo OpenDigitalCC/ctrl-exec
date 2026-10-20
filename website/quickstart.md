@@ -1,7 +1,7 @@
 ---
 title: Quickstart
 subtitle: Dispatcher and agent running, PKI configured, first remote execution in under ten minutes.
-updated: 2026-03-16
+updated: 2026-10-20
 github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/QUICKSTART.md
 current_page: /quickstart
 ---
@@ -85,22 +85,23 @@ On the agent host, submit a pairing request. Replace `ctrl-exec.example.com` wit
 sudo ctrl-exec-agent request-pairing --dispatcher ctrl-exec.example.com
 ```
 
-The agent generates a key pair, submits a CSR, and prints a 6-digit verification code:
+The agent generates a key pair, connects, submits a CSR, and prints a 6-digit verification code:
 
 ```
-Pairing code: 482 917
-Waiting for approval...
+Pairing code: 482917 (v2)
+  Verify this code matches the ctrl-exec display before approving.
 ```
 
 Back on the dispatcher host, the pairing-mode terminal displays the same code:
 
 ```
-New request from agent-host.example.com (192.168.1.42)
-Pairing code: 482 917
-Approve? [a/d]:
+Pairing request from agent-host.example.com (192.168.1.42) - ID: 3f9c2a7e1b04d5c6
+  Code:     482917 (v2)   (verify this matches the agent display)
+  Received: 2026-10-20T09:14:03Z
+Accept, Deny, or Skip? [a/d/s]:
 ```
 
-Verify the codes match. Type `a` and press Enter to approve.
+Verify the codes match. The code covers the dispatcher's certificate as the agent saw it, so a match also tells you nothing sat in between. Type `a` and press Enter to approve.
 
 The agent stores its signed certificate and the CA certificate, and records the approving dispatcher — its certificate serial and stable id — in its trusted-dispatcher map. Pairing is complete.
 

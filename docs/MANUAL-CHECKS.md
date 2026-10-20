@@ -216,7 +216,7 @@ sudo ctrl-exec-agent request-pairing --dispatcher <dispatcher-host>
 # On the dispatcher host (in a separate terminal)
 sudo ced list-requests
 # Verify the hostname, source IP, and 6-digit pairing code match
-# what the agent displayed, then approve:
+# what the agent displayed, and that the code is marked (v2), then approve:
 sudo ced approve <agent-hostname>
 
 # Confirm the agent accepted the cert
@@ -227,7 +227,8 @@ Pass
 : `ACTION=pair-complete` appears in the agent log. `ced ping` returns ok.
 
 Fail
-: Pairing code mismatch - reject and investigate. Nonce mismatch - check for
+: Pairing code mismatch - reject and investigate: something between agent
+  and dispatcher presented a different certificate. Nonce mismatch - check for
   clock skew or concurrent pairing requests. Writability failure - check
   `/etc/ctrl-exec-agent` permissions.
 

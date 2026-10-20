@@ -1,7 +1,7 @@
 ---
 title: Pairing
 subtitle: How a new agent is introduced to the fleet and what the protocol guarantees.
-updated: 2026-06-10
+updated: 2026-10-20
 github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/PAIRING.md
 current_page: /pairing
 ---
@@ -10,7 +10,7 @@ current_page: /pairing
 
 Pairing is the ceremony by which a new agent joins the fleet. It establishes mutual trust between an agent and a dispatcher instance: the agent receives a CA-signed certificate, and the dispatcher records the agent in the registry.
 
-Pairing runs on a separate port (7444 by default) using server-TLS only. The agent does not yet have a certificate to present, so only the dispatcher's identity is verified during the pairing exchange itself.
+Pairing runs on a separate port (7444 by default) using server-TLS only. The agent does not yet have a certificate to present, and does not yet hold the CA that would let it check the dispatcher's certificate. That is what the verification code is for: it ties the request to the certificate the agent actually saw.
 
 # The Protocol
 
@@ -18,9 +18,9 @@ Pairing runs on a separate port (7444 by default) using server-TLS only. The age
 
 2. On the agent host, the operator runs `ctrl-exec-agent request-pairing --dispatcher <hostname>`. The agent generates a new RSA key pair, constructs a CSR, and connects to the pairing port.
 
-3. Both sides independently compute a 6-digit verification code derived from the CSR content. The code is displayed on both terminals.
+3. Both sides independently compute a 6-digit verification code from the CSR and the dispatcher certificate on the pairing connection. The code is displayed on both terminals.
 
-4. The operator compares the codes. If they match, the operator approves the request. If they do not match, the request should be denied — a mismatch indicates the CSR was substituted or the request was routed to a different agent.
+4. The operator compares the codes. If they match, the operator approves the request. If they do not match, the request should be denied — a mismatch indicates the CSR was substituted, the request was routed to a different agent, or something between the two presented its own certificate to the agent.
 
 5. On approval, the dispatcher signs the CSR with the CA and returns to the agent:
    - The signed agent certificate
@@ -34,7 +34,12 @@ Pairing runs on a separate port (7444 by default) using server-TLS only. The age
 # Security Properties
 
 Verification code
-: The 6-digit code is derived from the CSR content on both sides independently. An attacker who intercepts the connection and substitutes a different CSR would produce a different code. The operator's comparison step catches this. The code is not transmitted over the network — it is computed locally from what each side received or generated.
+: The 6-digit code is derived on both sides independently from the CSR and the fingerprint of the dispatcher's pairing certificate: the agent uses the certificate it was shown, the dispatcher the one it presents. A matching code shows the dispatcher has this agent's CSR and the agent was talking to this dispatcher. An attacker who intercepts the connection must present its own certificate to the agent, so even if it passes the CSR on unchanged the two codes differ, and the operator's comparison catches it. The code is not transmitted over the network — it is computed locally from what each side received or generated.
+
+: It is a six-digit check: an attacker in the path with time and computing power to try around a million certificate requests of its own could still produce a match, so pair over a network you trust and treat any mismatch as an attack.
+
+Agents older than 0.13
+: Older agents compute the code from the CSR alone. The dispatcher still accepts them and shows their code marked `v1, pre-0.13 agent`; a relay can reproduce that code, so upgrade the agent before pairing where it matters. Codes from 0.13 agents are marked `v2`. Pair 0.13 agents with a 0.13 dispatcher: an older dispatcher shows a code they will not match.
 
 Serial pinning
 : After pairing, the agent records the dispatcher's certificate serial and stable id in its trusted-dispatcher map. Every subsequent connection is checked against the map. A valid CA-signed certificate whose serial is not in the map is rejected. Dispatcher certificate rotation updates the map automatically over the run channel, with no re-pairing, via add-then-remove: the dispatcher broadcasts the new serial under its stable `dispatcher_id` and each agent adds it; the old serial stays trusted through the overlap window, so the dispatcher's live certificate is accepted throughout, and the old serial is removed once the window closes. Because `dispatcher_id` is stable across rotation, trust and attribution carry over.
@@ -59,9 +64,10 @@ sudo ced pairing-mode
 Pairing mode is interactive when run in a terminal. As requests arrive they are displayed with a prompt:
 
 ```
-New request from agent-host.example.com (192.168.1.42)
-Pairing code: 482 917
-Approve? [a/d]:
+Pairing request from agent-host.example.com (192.168.1.42) - ID: 3f9c2a7e1b04d5c6
+  Code:     482917 (v2)   (verify this matches the agent display)
+  Received: 2026-10-20T09:14:03Z
+Accept, Deny, or Skip? [a/d/s]:
 ```
 
 Commands:

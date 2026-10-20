@@ -257,8 +257,12 @@ ced pairing-mode
 ```
 
 The prompt shows the requesting agent's hostname, IP, request ID, and a
-6-digit confirmation code. The agent displays the same code at submission
-time. Verify both match before approving.
+6-digit confirmation code with its version, e.g. `482917 (v2)`. The agent
+displays its code once connected. Verify both match before approving. A v2
+code is bound to the certificate the agent saw on the pairing connection, so a
+relay in between shows a different code on each side. An agent older than 0.13
+gets the older v1 code, labelled `(v1, pre-0.13 agent)`, which a relay can
+reproduce; see SECURITY.md, *Pairing Security*.
 Enter `a` to approve, `d` to deny, or `s` to skip and leave the request
 pending. Press Ctrl-C to stop pairing mode.
 
@@ -298,9 +302,10 @@ List pending pairing requests that have not yet been approved or denied.
 ced list-requests
 ```
 
-Output columns: request ID, hostname, IP, confirmation code, received timestamp.
-Verify the confirmation code matches the 6-digit code displayed on the agent
-before approving.
+Output columns: request ID, hostname, source IP, reverse DNS, confirmation
+code with its version (`v2`, or `v1, pre-0.13 agent`). Verify the
+confirmation code matches the 6-digit code displayed on the agent before
+approving. `approve` repeats the code and its version.
 
 ---
 

@@ -270,11 +270,12 @@ The agent connects and waits. A prompt appears in the pairing mode terminal:
 
 ```
 Pairing request from agent-host-01 (192.0.2.10) - ID: 00c9845e0001
+  Code:     482917 (v2)   (verify this matches the agent display)
   Received: 2026-03-05T18:38:09Z
 Accept, Deny, or Skip? [a/d/s]:
 ```
 
-Type `a` to approve. The agent stores its cert and exits. Press Ctrl-C to
+Check the code matches the one the agent printed. Type `a` to approve. The agent stores its cert and exits. Press Ctrl-C to
 stop pairing mode.
 
 If multiple requests arrive simultaneously they are numbered:

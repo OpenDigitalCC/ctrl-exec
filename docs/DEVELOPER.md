@@ -776,8 +776,13 @@ name), `serial_from_path`, `expiry_from_path`, `expiry_from_pem`, `expiry_epoch`
 
 ### `Exec::Digest`
 
-SHA-256 helpers. `pairing_code` derives the short human-comparable pairing
-confirmation code; `sha256_hex` returns the hex digest of a string.
+SHA-256 helpers. `pairing_code` (v1, CSR only) and `pairing_code_v2` (CSR plus
+the dispatcher certificate fingerprint) derive the short human-comparable
+pairing confirmation code, `pairing_code_for` picks one by version, and
+`canonical_csr` returns a CSR in openssl's own PEM form (the dispatcher refuses
+any other form); `sha256_hex` returns the hex digest of a string. Both sides of
+pairing call these, so the agent and dispatcher codes cannot drift apart;
+`t/digest.t` holds known-answer vectors.
 
 
 ### `Exec::Cmd`
