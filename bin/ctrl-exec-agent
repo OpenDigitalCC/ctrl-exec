@@ -14,6 +14,7 @@ use Exec::Agent::Server         qw();
 use Exec::Digest                qw();
 use Exec::Random                qw();
 use Exec::RateLimit qw();
+use Exec::Http           qw();
 use Exec::Log            qw();
 use JSON                       qw(encode_json decode_json);
 use POSIX                      qw(SIGTERM WNOHANG strftime);
@@ -298,37 +299,51 @@ MSG
     # kept exact - reaped synchronously in this loop (no async SIGCHLD handler).
     my $max_children = $config->{max_children} // 256;
     my $live = 0;
+    my $accept_failures = 0;   # consecutive accept() failures, reset on success
 
     while (1) {
         my $conn = $server->accept;
 
         unless (defined $conn) {
-            my $err  = $IO::Socket::SSL::SSL_ERROR // '';
-            my $peer = $server->peerhost // 'unknown';
+            # Capture errno FIRST - any call below, even a failing one, clobbers
+            # $!. (The pre-0.12.4 loop asked the LISTENING socket for its
+            # peerhost here, which always fails with ENOTCONN, so every accept
+            # failure - a stranger's bad handshake, the EINTR a SIGHUP reload
+            # produces - looked fatal and silently stopped the agent.)
+            my $errno   = $! + 0;
+            my $errstr  = "$!";
+            my $ssl_err = $IO::Socket::SSL::SSL_ERROR // '';
+            my $action  = Exec::Agent::Server::accept_failure_action($errno, $ssl_err);
 
-            # Distinguish TLS handshake failure from a fatal socket error.
-            # A handshake failure leaves $! at 0 (or EAGAIN/EINTR); the SSL
-            # error string describes the cert/protocol problem. A fatal error
-            # (server socket closed, accept(2) syscall failed) sets $! to a
-            # real errno value. Exit the loop only on fatal errors.
-            if ($!) {
+            if ($action eq 'fatal') {
                 Exec::Log::log_action('ERR', {
                     ACTION => 'accept-fatal',
-                    PEER   => $peer,
-                    REASON => "$!",
+                    REASON => $errstr,
                 });
                 last;
             }
+            if (++$accept_failures >= 20) {
+                # Many failures with no success in between: pause briefly so a
+                # misbehaving listener cannot spin this process hot.
+                select(undef, undef, undef, 0.05);
+            }
+            next if $action eq 'retry';
 
+            # TLS handshake failure: a peer presented a bad/unsigned cert or an
+            # unsupported protocol, or reset mid-handshake. The listening socket
+            # carries no peer address, so these count under 'unknown' for the
+            # probe threshold.
+            my $peer = 'unknown';
             Exec::RateLimit::record_failure($peer, \%rate_state);
             Exec::Log::log_action('WARNING', {
                 ACTION => 'tls-failure',
                 PEER   => $peer,
-                REASON => $err,
+                REASON => ($ssl_err || $errstr),
             });
             Exec::RateLimit::check($peer, \%rate_state, $rate_config);
             next;
         }
+        $accept_failures = 0;
 
         my $peer        = $conn->peerhost // 'unknown';
 
@@ -343,11 +358,42 @@ MSG
             next;
         }
 
-        if (Exec::RateLimit::check($peer, \%rate_state, $rate_config)) {
-            $conn->close(SSL_no_shutdown => 1);
-            next;
+        # Read the peer cert serial here: it must happen before fork() (once the
+        # parent closes its copy of $conn the SSL object is invalid in the child)
+        # and before the rate check, because a serial in the trusted-dispatcher
+        # map identifies a dispatcher this agent was paired with - every request
+        # it makes will be served anyway, so counting its connections against
+        # the per-IP volume limit only manufactures an outage: the one legitimate
+        # caller got blocked for 5 minutes after ~10 operations in a minute
+        # (every run, ping and discovery is a fresh connection), surfacing at the
+        # dispatcher as "no response from child". The volume limit now guards
+        # against CA-signed-but-unpaired peers; the probe limit (handshake
+        # failures) and max_children below apply to everyone as before.
+        my $peer_serial = Exec::Agent::Server::peer_serial($conn);
+        my $trusted_id  = Exec::Agent::AgentPairing::dispatcher_trusted($peer_serial, $trusted);
+
+        unless (defined $trusted_id) {
+            if (Exec::RateLimit::check($peer, \%rate_state, $rate_config)) {
+                # Say so rather than dropping the socket: a silent close reached
+                # the dispatcher as an opaque empty result.
+                my $retry = Exec::RateLimit::blocked_for($peer, \%rate_state);
+                eval {
+                    Exec::Http::send_json($conn, 429, {
+                        status      => 'error',
+                        error       => 'rate limited',
+                        retry_after => $retry,
+                    });
+                };
+                $conn->close(SSL_no_shutdown => 1);
+                next;
+            }
+            # Count the connection only when the limiter is judging them. With
+            # rate_limit_disable, check() returns early and nothing prunes the
+            # list, so recording would grow it by one entry per connection for
+            # the life of the process.
+            Exec::RateLimit::record_connection($peer, \%rate_state)
+                unless $rate_config->{disabled};
         }
-        Exec::RateLimit::record_connection($peer, \%rate_state);
 
         # Reap ALL finished children before admitting this one, dropping them
         # from the live count (also stops exited handlers accumulating as zombies
@@ -361,9 +407,6 @@ MSG
             next;
         }
 
-        # Read peer cert serial before forking - after the parent closes its
-        # copy of $conn the SSL object becomes invalid in the child.
-        my $peer_serial = Exec::Agent::Server::peer_serial($conn);
         my $pid  = fork();
         if (!defined $pid) {
             warn "fork failed: $!\n";

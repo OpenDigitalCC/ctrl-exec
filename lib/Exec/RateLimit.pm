@@ -144,6 +144,19 @@ sub check ($peer, $state_ref, $rate_config = undef) {
 }
 
 
+# blocked_for($peer_ip, $rate_state_ref) -> seconds left on an active block, or 0
+#
+# Read-only companion to check(): lets the accept loop tell a refused peer how
+# long to back off (the 429 body's retry_after) without widening check()'s
+# contract. Never autovivifies an entry.
+sub blocked_for ($peer, $state_ref) {
+    return 0 unless exists $state_ref->{$peer}
+                 && defined $state_ref->{$peer}{blocked_until};
+    my $left = $state_ref->{$peer}{blocked_until} - time();
+    return $left > 0 ? $left : 0;
+}
+
+
 # record_connection($peer_ip, $rate_state_ref) -> void
 #
 # Called after check() returns 0, before fork(). Records a post-handshake

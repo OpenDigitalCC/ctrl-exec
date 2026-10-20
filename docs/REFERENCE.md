@@ -762,6 +762,21 @@ Key settings:
 The agent applies two independent rate limits per source IP. Both are
 tracked in memory and reset on agent restart or SIGHUP.
 
+**Trusted dispatchers are exempt from the volume threshold** (since 0.12.4).
+The accept loop reads the peer certificate serial before the rate check; a
+serial present in the trusted-dispatcher map (`trusted_dispatchers_path`, written
+at pairing) identifies a dispatcher whose every request will be served anyway,
+and its connections are not counted. Every run, ping, result poll and
+discovery is a separate connection, so without the exemption ~10 operations
+in a minute from the one paired dispatcher tripped a 5-minute block. The
+volume threshold therefore governs CA-signed-but-unpaired peers; the probe
+threshold, `max_children` and `allowed_ips` apply to everyone.
+
+A blocked peer receives `HTTP/1.0 429 Too Many Requests` with a JSON body
+`{"status":"error","error":"rate limited","retry_after":<seconds>}` before the
+connection is closed (earlier releases closed it silently, which the
+dispatcher reported as `no response from child`).
+
 The volume threshold blocks IPs that open an unusually high number of
 connections in a short window — consistent with port scanning or connection
 flooding. The probe threshold blocks IPs that repeatedly fail TLS
@@ -790,7 +805,10 @@ handshakes — consistent with certificate probing or brute-force attempts.
 `rate_limit_disable`
 : Set to `1` to disable all rate limiting. Intended for use during the
   integration test suite, which opens many connections rapidly from
-  localhost. Do not set in production.
+  localhost. Do not set in production. (This is the key name `Config.pm`
+  reads; `disable_rate_limit` is not recognised.) Since 0.12.4 the paired
+  dispatcher is exempt from the volume threshold, so the suite's own
+  dispatcher no longer needs this unless it also exercises unpaired peers.
 
   ```
   rate_limit_disable = 1

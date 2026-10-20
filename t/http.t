@@ -35,6 +35,8 @@ like capture(sub { Exec::Http::send_raw($_[0], 200, '{}') }),
     qr{^HTTP/1\.0 200 OK\r\n}, '200 OK';
 like capture(sub { Exec::Http::send_raw($_[0], 500, '{}') }),
     qr{^HTTP/1\.0 500 Internal Server Error\r\n}, '500 phrase present';
+like capture(sub { Exec::Http::send_raw($_[0], 429, '{}') }),
+    qr{^HTTP/1\.0 429 Too Many Requests\r\n}, '429 phrase present (agent rate-limit reply)';
 like capture(sub { Exec::Http::send_raw($_[0], 499, '{}') }),
     qr{^HTTP/1\.0 499 Unknown\r\n}, 'unknown code falls back to a generic phrase';
 

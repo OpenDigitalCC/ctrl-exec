@@ -5,6 +5,53 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
+## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
+
+- **Fixed (CRITICAL)** the recurring `exit -1 / "no response from child"` outage.
+  The agent's per-IP volume limiter (default 10 connections / 60 s, then a 300 s
+  block) counted the paired dispatcher's own connections - and every run, ping,
+  result poll and discovery is a fresh mTLS connection - so roughly ten
+  operations inside a minute from the one legitimate caller blocked it for five
+  minutes, and the block was applied by closing the socket silently after the
+  handshake. The accept loop now reads the peer certificate serial before the
+  rate check and **exempts serials in the trusted-dispatcher map from the
+  volume limit** (they are never counted). The probe limit (handshake failures),
+  `max_children`, `allowed_ips` and the trusted-serial gate on every request are
+  unchanged, so the limiter still guards against CA-signed-but-unpaired peers.
+- **Changed** a volume/probe block to answer `HTTP/1.0 429 Too Many Requests`
+  with `{status:"error", error:"rate limited", retry_after:<s>}` before closing,
+  instead of a silent drop; the dispatcher maps a 429 to "agent rate-limited
+  this dispatcher (HTTP 429) - ... pair it, or raise rate_limit_volume".
+  `Exec::RateLimit::blocked_for` reports the remaining block time.
+- **Fixed** the agent exiting its serve loop on *any* failed accept. The failure
+  branch asked the listening socket for its `peerhost` (always `ENOTCONN`) before
+  testing `$!`, so a stranger's bad TLS handshake, or the `EINTR` a SIGHUP reload
+  produces (Perl installs handlers without `SA_RESTART`), was logged
+  `accept-fatal` and stopped the agent - with no respawn under OpenRC, and
+  `rc-service ctrl-exec-agent reload` / `rotate-serial` triggering it. errno is
+  now captured first and classified by `Exec::Agent::Server::accept_failure_action`:
+  `EINTR`/`EAGAIN`/`ECONNABORTED` retry, only `EBADF`/`EINVAL`/`ENOTSOCK` are fatal,
+  everything else is a handshake failure. Twenty consecutive failures add a
+  50 ms pause so a broken listener cannot spin.
+- **Fixed** a per-connection memory leak in the agent parent: `peer_serial` never
+  `X509_free`d the counted reference from `get_peer_certificate` (~230 MB RSS
+  after two weeks of dashboard polling). Also stopped recording connection
+  timestamps when `rate_limit_disable` is set (nothing pruned that list).
+- **Changed** the dispatcher fan-out so a lost worker is self-describing:
+  `no response from child` now carries why - `worker killed by signal N`,
+  `worker exited N with no output`, `worker died: <message>`, `waitpid: <errno>`.
+  The worker ignores SIGPIPE, resets the inherited INT/TERM handlers (which
+  exited 0 silently) and runs under `eval`; the parent keeps each child's wait
+  status and reports outstanding workers if `waitpid` fails instead of
+  dropping them. Agent response bodies are decoded through `_json_hash`, so a
+  non-object JSON body is `invalid JSON response` rather than a die in the worker.
+- **Fixed** docs: the agent key is `rate_limit_disable` (TESTING.md said
+  `disable_rate_limit`, which `Config.pm` never read); REFERENCE.md documents the
+  trusted-dispatcher exemption and the 429 reply.
+- **Added** tests: `t/agent-accept.t` (accept-failure classification and the
+  `peerhost`-sets-errno trap), fan-out failure reasons, `blocked_for`, the 429
+  phrase and transport mapping, and a non-object 200 body in `_dispatch_one`.
+
 ## 0.12.3 — fix agent crash on every connection (0.12.2 regression)
 
 - **Fixed (CRITICAL)** the agent crashing its main process on every accepted

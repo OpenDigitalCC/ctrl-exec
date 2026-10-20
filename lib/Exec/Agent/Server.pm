@@ -14,6 +14,7 @@ use feature                   qw(signatures);
 no warnings                   qw(experimental::signatures);
 use JSON                      qw(encode_json decode_json);
 use Sys::Hostname             qw(hostname);
+use Errno                     qw(EINTR EAGAIN EWOULDBLOCK ECONNABORTED EBADF EINVAL ENOTSOCK);
 
 use Exec::Agent::Config       qw();
 use Exec::Agent::Runner       qw();
@@ -686,10 +687,39 @@ sub _async_runs_dir ($config) {
 # handle_connection, not an internal helper.
 sub peer_serial ($conn) {
     my $ssl  = eval { $conn->_get_ssl_object } or return '';
+    # SSL_get_peer_certificate hands back a counted reference that the caller
+    # owns and must X509_free. This runs in the long-lived accept-loop parent
+    # once per connection; without the free it leaked one parsed certificate
+    # per connection (~230 MB RSS after two weeks of dashboard polling).
     my $cert = eval { Net::SSLeay::get_peer_certificate($ssl) } or return '';
-    my $asn1 = eval { Net::SSLeay::X509_get_serialNumber($cert) } or return '';
-    my $hex  = eval { Net::SSLeay::P_ASN1_INTEGER_get_hex($asn1) } // '';
+    my $hex  = eval {
+        my $asn1 = Net::SSLeay::X509_get_serialNumber($cert) or die "no serial\n";
+        Net::SSLeay::P_ASN1_INTEGER_get_hex($asn1);
+    } // '';
+    Net::SSLeay::X509_free($cert);
     return lc $hex;
+}
+
+# Classify a failed $server->accept for the serve loop. $errno is $!+0 captured
+# IMMEDIATELY after accept returned undef (any later call clobbers it), $ssl_err
+# is $IO::Socket::SSL::SSL_ERROR at that moment. Returns:
+#   'retry'     - interrupted or transient (EINTR from a SIGHUP reload, EAGAIN,
+#                 ECONNABORTED): go straight back to accept.
+#   'fatal'     - the listening socket itself is gone/invalid (EBADF, EINVAL,
+#                 ENOTSOCK): nothing further can be accepted, exit the loop.
+#   'handshake' - everything else: a peer that failed the TLS handshake, or a
+#                 peer-side reset mid-handshake. Count it for the probe limit
+#                 and carry on serving.
+# The pre-0.12.4 loop asked the LISTENING socket for its peerhost before testing
+# $!, which always sets ENOTCONN, so every failed accept - a stranger's bad
+# handshake, or the EINTR a reload produces - looked fatal and stopped the agent.
+sub accept_failure_action ($errno, $ssl_err) {
+    $errno   //= 0;
+    $ssl_err //= '';
+    return 'retry' if $errno == EINTR || $errno == EAGAIN
+                   || $errno == EWOULDBLOCK || $errno == ECONNABORTED;
+    return 'fatal' if $errno == EBADF || $errno == EINVAL || $errno == ENOTSOCK;
+    return 'handshake';
 }
 
 sub _send_json ($conn, $data) {

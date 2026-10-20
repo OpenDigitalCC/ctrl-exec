@@ -21,6 +21,7 @@ my %PHRASE = (
     404 => 'Not Found',
     409 => 'Conflict',
     413 => 'Content Too Large',
+    429 => 'Too Many Requests',
     431 => 'Request Header Fields Too Large',
     500 => 'Internal Server Error',
     503 => 'Service Unavailable',
