@@ -84,4 +84,28 @@ subtest 'unknown route (authorised) -> 404' => sub {
     like $resp, qr{^HTTP/1\.0 404 }, 'an unknown path 404s rather than mis-routing';
 };
 
+# --- /run args typing (T-024) ------------------------------------------------
+
+subtest '/run rejects args holding a reference or undef with 400' => sub {
+    for my $case (['["a",{"k":"v"}]', 'hash ref'],
+                  ['["a",["b"]]',     'array ref'],
+                  ['["a",null]',      'undef']) {
+        my ($json, $what) = @$case;
+        my $body = '{"hosts":["h1"],"script":"s","args":' . $json . '}';
+        my $resp = drive(
+            request => "POST /run HTTP/1.0\r\nContent-Length: " . length($body) . "\r\n\r\n$body",
+            auth_ok => 1);
+        like $resp, qr{^HTTP/1\.0 400 }, "$what element is a 400";
+        like $resp, qr/args must be an array of strings or numbers/, "$what: clear message";
+    }
+};
+
+subtest 'Exec::Http::args_problem accepts plain scalars' => sub {
+    require Exec::Http;
+    is Exec::Http::args_problem([]),              undef, 'empty array ok';
+    is Exec::Http::args_problem(['a', 1, 2.5, '']), undef, 'strings and numbers ok';
+    ok defined Exec::Http::args_problem('x'),     'non-array is a problem';
+    ok defined Exec::Http::args_problem([\'x']),  'scalar ref is a problem';
+};
+
 done_testing;

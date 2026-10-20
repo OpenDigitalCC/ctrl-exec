@@ -136,4 +136,37 @@ subtest 'POST /run with a trusted serial passes the gate' => sub {
         'a trusted dispatcher is not rejected at the serial gate';
 };
 
+# --- handle_connection: args must be plain strings/numbers (T-024) -----------
+
+sub run_with_args {
+    my ($json) = @_;
+    my $body = '{"script":"nosuch","args":' . $json . '}';
+    return drive(
+        request     => "POST /run HTTP/1.0\r\nContent-Length: " . length($body) . "\r\n\r\n$body",
+        peer_serial => 'deadbeef',
+        trusted     => { deadbeef => 'disp-1' },
+    );
+}
+
+subtest '/run rejects args holding a reference or undef' => sub {
+    for my $case (['["a",{"k":"v"}]', 'hash ref'],
+                  ['["a",["b"]]',     'array ref'],
+                  ['["a",null]',      'undef'],
+                  ['[true]',          'JSON boolean']) {
+        my ($json, $what) = @$case;
+        my $resp = run_with_args($json);
+        like $resp, qr/args must be an array of strings or numbers/,
+            "$what element is rejected";
+        like $resp, qr/"exit":-1/, "$what: error response shape";
+        unlike $resp, qr/script not permitted/,
+            "$what: rejected before the allowlist is consulted";
+    }
+};
+
+subtest '/run accepts args of plain strings and numbers' => sub {
+    my $resp = run_with_args('["a",1,2.5,""]');
+    unlike $resp, qr/args must be/, 'plain scalars pass the args check';
+    like $resp, qr/script not permitted/, 'and proceed to the allowlist';
+};
+
 done_testing;

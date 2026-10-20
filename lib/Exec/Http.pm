@@ -27,6 +27,20 @@ my %PHRASE = (
     503 => 'Service Unavailable',
 );
 
+# Validate the `args` of a /run request. Returns undef when args is an array
+# whose every element is a defined plain scalar (string or number), else an error
+# message. References (including JSON booleans) and undef are refused: they would
+# stringify to "HASH(0x...)" / warn at the exec boundary. The agent applies this
+# as the real boundary; the dispatcher API applies it so the caller fails early.
+sub args_problem ($args) {
+    return 'args must be an array' unless ref $args eq 'ARRAY';
+    for my $a (@$args) {
+        return 'args must be an array of strings or numbers'
+            if !defined $a || ref $a;
+    }
+    return undef;
+}
+
 # Write a raw (already-serialised) JSON body as an HTTP/1.0 response.
 sub send_raw ($conn, $code, $body) {
     my $phrase = $PHRASE{$code} // 'Unknown';

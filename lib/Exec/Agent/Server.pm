@@ -233,8 +233,10 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
     my $username = $data->{username} // '';
     my $token    = $data->{token}    // '';
 
-    unless (ref $args eq 'ARRAY') {
-        _send_json($conn, { exit => -1, error => 'args must be an array', reqid => $reqid });
+    # Real boundary for args typing: refuse refs/undef before allowlist, auth
+    # or exec ever see them.
+    if (defined(my $problem = Exec::Http::args_problem($args))) {
+        _send_json($conn, { exit => -1, error => $problem, reqid => $reqid });
         return;
     }
 

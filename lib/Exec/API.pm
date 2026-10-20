@@ -332,8 +332,8 @@ sub _handle_run ($conn, $peer, $body, $config) {
         _send_error($conn, 400, 'bad request', 'script name required (alphanumeric and hyphens only)');
         return;
     }
-    unless (ref $args eq 'ARRAY') {
-        _send_error($conn, 400, 'bad request', 'args must be an array');
+    if (defined(my $problem = Exec::Http::args_problem($args))) {
+        _send_error($conn, 400, 'bad request', $problem);
         return;
     }
 
