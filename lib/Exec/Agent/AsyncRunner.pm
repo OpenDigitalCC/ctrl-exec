@@ -53,6 +53,10 @@ my $DEFAULT_TTL      = 86400;   # seconds; results older than this are purged
 #                              is stored in this owner's namespace and the
 #                              /result owner-gate enforces it. Must be a safe
 #                              token; empty stores flat. See _record_path)
+#   input       => \%fields   (confidential run input, T-013; held in memory in
+#                              the detached job only, never written to a record)
+#   input_mode  => $mode      (context|raw|raw:<name>|fields; default context)
+#   input_tmpdir => $path     (parent of the per-run 'fields' directory)
 #   runs_dir    => $path      (default /var/lib/ctrl-exec-agent/runs)
 #   stdin_timeout => $sec     (passed to Runner::run_script)
 #
@@ -71,6 +75,8 @@ sub submit (%opts) {
     my $owner    = $opts{owner}    // '';
     my $runs_dir = $opts{runs_dir} // $DEFAULT_RUNS_DIR;
     my $timeout  = $opts{stdin_timeout};
+    my $input      = $opts{input};
+    my $input_mode = $opts{input_mode} // 'context';
 
     # The owner (submitting dispatcher's identity) becomes a directory component
     # under which this run is stored, so it must be a safe token. An empty owner
@@ -110,6 +116,7 @@ sub submit (%opts) {
     my $spawned = _spawn_detached(sub {
         my $result = Exec::Agent::Runner::run_script(
             $script_path, $args, $context, $timeout,
+            { mode => $input_mode, input => $input, tmpdir => $opts{input_tmpdir} },
         );
         _write_record($runs_dir, $owner, $reqid, {
             reqid    => $reqid,

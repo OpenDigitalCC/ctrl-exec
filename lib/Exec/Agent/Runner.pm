@@ -5,6 +5,10 @@ use warnings;
 use feature qw(signatures);
 no warnings qw(experimental::signatures);
 use JSON   qw(encode_json);
+use File::Path qw(remove_tree);
+use File::Temp qw(tempdir);
+use File::Spec qw();
+use Fcntl  qw(O_WRONLY O_CREAT O_EXCL O_NOFOLLOW);
 use POSIX  qw(WIFEXITED WEXITSTATUS EINTR EAGAIN EPIPE);
 use Fcntl  qw(F_GETFL F_SETFL O_NONBLOCK);
 use Exec::Log qw();   # _write_stdin logs a stdin-timeout; load it directly rather
@@ -20,14 +24,70 @@ use Exec::Log qw();   # _write_stdin logs a stdin-timeout; load it directly rath
 #   $context      - optional hashref piped as JSON to stdin
 #                   Keys: script, args, reqid, peer_ip, username, token, timestamp
 #                   If undef, stdin is closed immediately (empty).
+#   $timeout      - seconds allowed for writing stdin (default 10)
+#   $in           - optional hashref, confidential run input (T-013):
+#                     mode   => 'context' | 'raw' | 'raw:<name>' | 'fields'
+#                               (default 'context'; the caller has already
+#                               checked the input fits the mode)
+#                     input  => hashref of named string fields (may be empty)
+#                     tmpdir => parent for the 'fields' directory (default the
+#                               system temp dir)
+#                   context: the stdin JSON gains an 'input' object (only when
+#                   there is input). raw: stdin is the one field's bytes and the
+#                   context JSON (without input) is in CTRL_EXEC_CONTEXT.
+#                   fields: stdin is empty, each field is a 0600 file in a 0700
+#                   per-run directory named by CTRL_EXEC_INPUT (CTRL_EXEC_CONTEXT
+#                   as for raw), removed once the script has been reaped
+#                   whatever way it ended. Input values go nowhere else.
 #
 # Returns hashref: { stdout => '', stderr => '', exit => N }
 #   exit  0+    script exit code
 #   exit  126   killed by signal or exec failed
 #   exit  -1    fork or pipe failure (error in stderr)
-sub run_script ($script_path, $args = undef, $context = undef, $timeout = undef) {
+sub run_script ($script_path, $args = undef, $context = undef, $timeout = undef, $in = undef) {
     $args    //= [];
     $timeout //= 10;
+
+    my $mode  = $in->{mode}  // 'context';
+    my $input = $in->{input} // {};
+    my $has_input = %$input ? 1 : 0;
+
+    # Decide what goes to stdin and the environment before forking.
+    my ($stdin_data, %extra_env, $fields_dir);
+    if ($mode eq 'context') {
+        if ($context || $has_input) {
+            $stdin_data = encode_json($has_input ? { %{ $context // {} }, input => $input } : $context);
+        }
+    }
+    else {
+        my $ctx = encode_json($context // {});
+        $extra_env{CTRL_EXEC_CONTEXT} = $ctx;
+        if ($mode eq 'fields') {
+            $fields_dir = eval { _make_fields_dir($input, $in->{tmpdir}) };
+            unless (defined $fields_dir) {
+                (my $why = $@) =~ s/\s+\z//;
+                return _error("cannot prepare input files: $why");
+            }
+            $extra_env{CTRL_EXEC_INPUT} = $fields_dir;
+        }
+        else {
+            # raw / raw:<name>: the caller guaranteed which field it is.
+            my ($field) = $mode =~ /\Araw:(.*)\z/s;
+            $field = (sort keys %$input)[0] unless defined $field;
+            my $bytes = $input->{$field} // '';
+            utf8::encode($bytes);
+            $stdin_data = $bytes;
+        }
+    }
+
+    my $result = _run_forked($script_path, $args, $stdin_data, \%extra_env, $timeout);
+    # The directory goes whether the script exited, was killed by a signal or
+    # failed to start.
+    remove_tree($fields_dir) if defined $fields_dir;
+    return $result;
+}
+
+sub _run_forked ($script_path, $args, $stdin_data, $extra_env, $timeout) {
 
     # Pipes for stdin (JSON context), stdout, and stderr
     pipe my $stdin_r,  my $stdin_w  or return _error("pipe(stdin): $!");
@@ -53,6 +113,7 @@ sub run_script ($script_path, $args = undef, $context = undef, $timeout = undef)
         close $stderr_w;
 
         _sanitise_env();
+        $ENV{$_} = $extra_env->{$_} for keys %$extra_env;
 
         # An ignored SIGPIPE survives exec. If the agent was started with it
         # ignored (systemd does), put the default back so the script sees
@@ -70,8 +131,8 @@ sub run_script ($script_path, $args = undef, $context = undef, $timeout = undef)
     close $stderr_w;
 
     # Write context JSON to script stdin with timeout, then close to signal EOF
-    if ($context) {
-        _write_stdin($stdin_w, encode_json($context), $timeout);
+    if (defined $stdin_data) {
+        _write_stdin($stdin_w, $stdin_data, $timeout);
     }
     close $stdin_w;
 
@@ -88,6 +149,38 @@ sub run_script ($script_path, $args = undef, $context = undef, $timeout = undef)
         stderr => $stderr,
         exit   => $exit,
     };
+}
+
+# The per-run directory for input=fields: created by the agent as its own user,
+# mode 0700 (File::Temp, unpredictable name), one 0600 file per field. Only the
+# agent user (and root) can enter it. Any failure removes what was made.
+sub _make_fields_dir ($input, $parent) {
+    $parent //= File::Spec->tmpdir;
+    my $dir = tempdir('ctrl-exec-input-XXXXXXXXXX', DIR => $parent, CLEANUP => 0);
+    chmod 0700, $dir;
+    my $ok = eval {
+        for my $name (sort keys %$input) {
+            my $bytes = $input->{$name};
+            utf8::encode($bytes);
+            sysopen(my $fh, "$dir/$name", O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600)
+                or die "cannot create input file '$name': $!\n";
+            chmod 0600, $fh;
+            my $off = 0;
+            while ($off < length $bytes) {
+                my $n = syswrite($fh, $bytes, length($bytes) - $off, $off);
+                die "cannot write input file '$name': $!\n" unless defined $n;
+                $off += $n;
+            }
+            close $fh or die "cannot write input file '$name': $!\n";
+        }
+        1;
+    };
+    unless ($ok) {
+        my $err = $@;
+        remove_tree($dir);
+        die $err;
+    }
+    return $dir;
 }
 
 # Write to the script's stdin pipe with a timeout.

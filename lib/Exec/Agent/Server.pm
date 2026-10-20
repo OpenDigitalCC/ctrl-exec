@@ -27,6 +27,7 @@ use Exec::Agent::ExecClient   qw();
 use Exec::CertInfo            qw();
 use Exec::Auth                qw();
 use Exec::Http                qw();
+use Exec::Input               qw();
 use Exec::Log                 qw();
 
 # --- connection handler (runs in forked child) ---
@@ -242,6 +243,27 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
         return;
     }
 
+    # Confidential input (T-013): refuse a bad shape or size before the allowlist,
+    # any hook or exec. Errors name fields, never values; nothing below logs,
+    # records or forwards the values except the delivery to the script.
+    my $input = $data->{input};
+    my $max_input = $config->{max_input_bytes};
+    $max_input = Exec::Input::DEFAULT_MAX_BYTES
+        unless defined $max_input && $max_input =~ /\A[1-9][0-9]*\z/;
+    my $iv = Exec::Input::validate($input, $max_input);
+    unless ($iv->{ok}) {
+        Exec::Log::log_action('WARNING', {
+            ACTION => 'deny', REASON => 'invalid input', SCRIPT => $name,
+            PEER => $peer, REQID => $reqid,
+        });
+        _send_json($conn, {
+            script => $name, exit => -1, reqid => $reqid,
+            error  => 'invalid input: ' . $iv->{error},
+        });
+        return;
+    }
+    $input = undef unless @{ $iv->{names} };   # {} is no input
+
     my $script_path = Exec::Agent::Config::validate_script(
         $name, $allowlist, $config->{script_dirs}
     );
@@ -274,6 +296,34 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
         return;
     }
 
+    # The script's declared input mode must be satisfiable by this request.
+    my $input_mode = Exec::Agent::Config::script_input_mode($name, $allowlist);
+    if (defined(my $why = _input_mode_problem($input_mode, $iv->{names}))) {
+        Exec::Log::log_action('WARNING', {
+            ACTION => 'deny', REASON => 'input does not fit mode', SCRIPT => $name,
+            PEER => $peer, REQID => $reqid,
+        });
+        _send_json($conn, {
+            script => $name, exit => -1, reqid => $reqid,
+            error  => "invalid input: $why",
+        });
+        return;
+    }
+
+    # The executor's frame does not carry input yet (T-013 piece 3 removes this
+    # refusal): never run such a script and silently drop what was sent.
+    if ($config->{executor_socket} && ($input || $input_mode ne 'context')) {
+        Exec::Log::log_action('WARNING', {
+            ACTION => 'deny', REASON => 'input needs executor support', SCRIPT => $name,
+            PEER => $peer, REQID => $reqid,
+        });
+        _send_json($conn, {
+            script => $name, exit => -1, reqid => $reqid,
+            error  => 'input requires executor support; not yet available',
+        });
+        return;
+    }
+
     # Agent auth hook - called after allowlist validation
     if ($config->{auth_hook}) {
         my $auth = Exec::Auth::check(
@@ -281,6 +331,8 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
             config            => $config,
             script            => $name,
             args              => $args,
+            input_names       => $iv->{names},
+            input_bytes       => $iv->{bytes},
             username          => $username,
             token             => $token,
             source_ip         => $peer,
@@ -348,6 +400,9 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
             script_path   => $script_path,
             args          => $args,
             context       => $context,
+            input         => $input,
+            input_mode    => $input_mode,
+            input_tmpdir  => $config->{input_dir},
             owner         => $dispatcher,
             runs_dir      => _async_runs_dir($config),
             stdin_timeout => $config->{stdin_timeout} // 10,
@@ -422,6 +477,7 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
         $result = Exec::Agent::Runner::run_script(
             $script_path, $args, $context,
             $config->{stdin_timeout} // 10,
+            { mode => $input_mode, input => $input, tmpdir => $config->{input_dir} },
         );
     }
 
@@ -441,6 +497,21 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
         stderr => $result->{stderr},
         reqid  => $reqid,
     });
+}
+
+# Why the request's input fields cannot be delivered in the script's input mode
+# (undef when they can). Names fields, never values.
+sub _input_mode_problem ($mode, $names) {
+    if ($mode eq 'raw') {
+        return 'script takes input=raw: exactly one input field is required, got ' . scalar(@$names)
+            unless @$names == 1;
+    }
+    elsif ($mode =~ /\Araw:(.+)\z/s) {
+        my $want = $1;
+        return "script takes input=raw:$want but input field '$want' is missing"
+            unless grep { $_ eq $want } @$names;
+    }
+    return undef;
 }
 
 sub handle_ping ($conn, $body, $peer, $config, $trusted, $peer_serial, $version) {
@@ -616,6 +687,7 @@ sub handle_capabilities ($conn, $peer, $allowlist, $config, $trusted, $peer_seri
             path       => $path,
             executable => ((defined $path && -x $path) ? JSON::true : JSON::false),
             profile    => Exec::Agent::Config::script_profile($name, $allowlist),
+            input      => Exec::Agent::Config::script_input_mode($name, $allowlist),
         };
         # Advertise the script's schema sidecar when present (the agent only
         # transports it; the consumer interprets it). See docs/SCHEMA-SIDECAR.md.

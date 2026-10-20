@@ -72,6 +72,14 @@ ca   = /etc/ctrl-exec-agent/ca.crt
 # when it cannot build the executor (no gcc or libcap headers).
 executor_socket = /run/ctrl-exec-agent/exec.sock
 
+# Confidential run input (optional). max_input_bytes caps the total size of a
+# run request's input values (default 1048576). input_dir is the parent of the
+# private per-run directory used for scripts with input=fields when the agent runs
+# them itself (no executor); default the system temporary directory (the systemd
+# unit's PrivateTmp). See scripts.conf.example for the input= modes.
+# max_input_bytes = 1048576
+# input_dir = /tmp
+
 # Async result store (optional).
 # Directory where results of detached (--async) jobs are persisted, keyed by
 # request id, until fetched or TTL-purged (24h). Defaults to the path below.

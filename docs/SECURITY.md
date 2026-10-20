@@ -361,6 +361,19 @@ JSON context on stdin
   write end, delivering EOF to the script. The script continues to execute.
   Scripts that do not use stdin context do not need any special handling.
 
+Confidential input
+: A request may carry `input` (named string fields) for values that must not
+  appear in the process table: keys, passwords. The script declares in
+  `scripts.conf` how it receives them (`input=context|raw|raw:<name>|fields`,
+  see REFERENCE.md): inside the stdin JSON, as stdin bytes, or as 0600 files in
+  a private 0700 directory removed after the run. Input is never placed in
+  argv or in the environment (`CTRL_EXEC_INPUT` is only a path), never given
+  to either auth hook (they see field names and the total size), never logged
+  and never written to the run store. A script that echoes its input to
+  stdout or stderr returns it in the result - that is the script's choice.
+  Input is refused, not dropped, when the executor is configured, until the
+  executor carries it.
+
 
 ## Auth Hook
 

@@ -297,7 +297,7 @@ sub _validate_config ($config, $path) {
 }
 
 # Load and parse scripts.conf allowlist
-# Returns hashref: { script_name => { path, profile } }
+# Returns hashref: { script_name => { path, profile, input } }
 # Dies on parse errors; unknown/bad entries are skipped with a warning
 #
 # Optional opts:
@@ -370,6 +370,18 @@ sub load_allowlist_full ($path = undef, $script_dirs = undef) {
                 warn "Allowlist: skipping '$name' - path or profile name too long\n";
                 next;
             }
+            # input= (T-013): how confidential run input is delivered. Absent
+            # means context; anything but the four forms is a skipped script, so
+            # a typo cannot silently fall back to a different delivery.
+            my $input_mode = 'context';
+            if (exists $annot{input}) {
+                if (defined(my $why = input_mode_problem($annot{input}))) {
+                    $skipped{$name} = $why;
+                    warn "Allowlist: skipping '$name' - $why\n";
+                    next;
+                }
+                $input_mode = $annot{input};
+            }
             unless ($script_path =~ m{^/}) {
                 $skipped{$name} = "'$script_path' is not an absolute path";
                 warn "Allowlist: skipping '$name' - path must be absolute: $script_path\n";
@@ -388,6 +400,7 @@ sub load_allowlist_full ($path = undef, $script_dirs = undef) {
             $allowlist{$name} = {
                 path    => $script_path,
                 profile => ($annot{profile} // 'default'),
+                input   => $input_mode,
             };
         }
         else {
@@ -397,6 +410,19 @@ sub load_allowlist_full ($path = undef, $script_dirs = undef) {
     close $fh;
 
     return (\%allowlist, \%skipped);
+}
+
+# Why an 'input=' value in scripts.conf is not usable, or undef when it is:
+# context, raw, raw:<name> (name as for an input field) or fields.
+sub input_mode_problem ($value) {
+    return undef if $value =~ /\A(?:context|raw|fields)\z/;
+    if ($value =~ /\Araw:(.*)\z/s) {
+        my $f = $1;
+        return undef if $f =~ /\A[A-Za-z0-9_.-]{1,64}\z/ && $f ne '.' && $f ne '..';
+        return "its input=raw:<name> field name is not valid (allowed: A-Z a-z 0-9 _ . -, 1-64 characters)";
+    }
+    my $shown = length $value > 40 ? substr($value, 0, 40) . '...' : $value;
+    return "its input mode '$shown' is not one of context, raw, raw:<name>, fields";
 }
 
 # The reason text for a path outside script_dirs, shared by the load-time skip
@@ -595,6 +621,14 @@ sub script_profile ($name, $allowlist) {
     my $entry = $allowlist->{$name};
     return undef unless defined $entry;
     return ref $entry eq 'HASH' ? ($entry->{profile} // 'default') : 'default';
+}
+
+# The input mode of a script ('context' when unset): context, raw, raw:<name>
+# or fields (T-013).
+sub script_input_mode ($name, $allowlist) {
+    my $entry = $allowlist->{$name};
+    return 'context' unless ref $entry eq 'HASH';
+    return $entry->{input} // 'context';
 }
 
 # Cross-check the allowlist against the defined profiles: every script's profile

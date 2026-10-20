@@ -192,6 +192,20 @@ push @fixtures, (
         names   => [qw(l r rep rep2 emp unk upper num eqpath eqlead keyonly)],
     },
     {
+        # input= (T-013) is a Perl-front-end annotation until the executor
+        # parses it (piece 3); the C parser ignores unknown annotations, so
+        # valid values must not change the path/profile decision on either side.
+        # Bad values (Perl skips the script) are NOT here: the C side still
+        # resolves them, and piece 3 adds them once it rejects the same values.
+        label   => 'scripts: input= valid values leave the decision unchanged',
+        expect  => { c => 'OK path=/opt/c.sh|profile=a', r => 'OK path=/opt/r.sh|profile=a', rn => 'OK path=/opt/rn.sh|profile=a', f => 'OK path=/opt/f.sh|profile=a', first => 'OK path=/opt/first.sh|profile=a' },
+        agent   => $REQUIRED . "[profile a]\nrun_as = nobody\n",
+        scripts => "c = /opt/c.sh profile=a input=context\nr = input=raw /opt/r.sh profile=a\n"
+                 . "rn = /opt/rn.sh input=raw:key profile=a\nf = /opt/f.sh profile=a input=fields\n"
+                 . "first = input=fields profile=a /opt/first.sh\n",
+        names   => [qw(c r rn f first)],
+    },
+    {
         label   => 'scripts: script_dirs boundary (prefix, trailing slash, dots)',
         expect  => { in => 'OK', sib => 'DENY not-in-script-dirs', second => 'OK', out => 'DENY not-in-script-dirs' },
         agent   => $REQUIRED . "script_dirs = /opt/s/:/srv/x\n[profile default]\nrun_as = nobody\n",

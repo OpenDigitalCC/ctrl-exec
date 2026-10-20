@@ -1175,6 +1175,48 @@ as before.
 
 ---
 
+### Confidential run input (scripts.conf `input=`)
+
+A run request may carry `input`: an object of named string fields (names
+`A-Za-z0-9_.-`, 1-64 characters, at most 32 fields, at most `max_input_bytes`
+of values in total, default 1048576). Input is never in the script's argument
+list, never in a hook's environment or stdin (hooks get `input_names` and
+`input_bytes` only), never in a log line and never in the run store. The
+script's own `scripts.conf` entry decides how it receives the input, so a
+script changes form on the agent alone:
+
+`input=context` (default)
+: The context JSON on stdin gains an `input` object, only when the request had
+  input. Existing scripts are unaffected.
+
+`input=raw` or `input=raw:<name>`
+: Stdin carries the bytes of one field. `raw` needs exactly one field;
+  `raw:<name>` needs the field `<name>` (other fields are ignored). A request
+  that does not fit is refused before the script starts, naming the field
+  (`invalid input: script takes input=raw:key but input field 'key' is
+  missing`). The context JSON, without `input`, is in `CTRL_EXEC_CONTEXT`.
+
+`input=fields`
+: Stdin is empty. Each field is a file `$CTRL_EXEC_INPUT/<name>` (mode 0600) in
+  a private per-run directory (mode 0700) which is removed when the script
+  exits or is killed. `CTRL_EXEC_CONTEXT` is set as for `raw`. Without the
+  executor the agent creates the directory as its own user under `input_dir`
+  in `agent.conf` (default the system temporary directory, which under the
+  shipped systemd unit is the service's private `/tmp`); the run user is
+  therefore the agent user.
+
+A `scripts.conf` entry with any other `input=` value (`input=bogus`, an empty
+value, a `raw:` name that is not a valid field name) is skipped, and a run of it
+reports `script not permitted: its input mode '<value>' is not one of context,
+raw, raw:<name>, fields`. `/capabilities` lists each script's `input` mode.
+
+Executor support is not yet available: with `executor_socket` set, a run that
+carries input, or of a script whose mode is not `context`, is refused with
+`input requires executor support; not yet available`. Context-mode runs
+without input are unchanged.
+
+---
+
 ### Auth hook (agent-side)
 
 When `auth_hook` is configured in `agent.conf`, the hook is executed after
