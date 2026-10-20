@@ -415,4 +415,49 @@ sub _resp {
     is $r->{error}, 'invalid JSON response', 'non-object 200 body: invalid JSON response, no die';
 }
 
+# T-034: an agent result of exit -1 carries its reason in stderr only (e.g. the
+# executor transport failure). The dispatcher must surface it in `error`, so a
+# caller never sees exit -1 with an empty error; stdout/stderr stay as sent.
+{
+    no warnings 'redefine';
+    my $body;
+    local *Exec::Engine::_build_ua = sub {
+        MockUA->new(
+            on_post => sub { _resp(200, 'OK', $body) },
+            on_get  => sub { _resp(200, 'OK', $body) },
+        );
+    };
+    my %run = (host => 'h', port => 7443, script => 's', args => [], reqid => 'r1',
+               config => {}, username => '', token => '');
+
+    $body = '{"exit":-1,"stdout":"","stderr":"executor closed before responding\n","reqid":"r1"}';
+    my $r = Exec::Engine::_dispatch_one(%run);
+    is $r->{exit},   -1, 'exit -1 with reason in stderr: exit kept';
+    is $r->{error},  'executor closed before responding',
+        'exit -1: stderr reason surfaced in error';
+    is $r->{stderr}, "executor closed before responding\n", 'exit -1: stderr unchanged';
+    is $r->{stdout}, '', 'exit -1: stdout unchanged';
+
+    $body = '{"exit":-1,"stdout":"","stderr":"","reqid":"r1"}';
+    $r = Exec::Engine::_dispatch_one(%run);
+    ok length($r->{error} // ''), 'exit -1 with empty stderr: error still non-empty';
+
+    $body = '{"exit":-1,"error":"agent said why","stderr":"other","reqid":"r1"}';
+    $r = Exec::Engine::_dispatch_one(%run);
+    is $r->{error}, 'agent said why', 'exit -1: an agent-supplied error is kept';
+
+    $body = '{"exit":3,"stdout":"","stderr":"script complaint","reqid":"r1"}';
+    $r = Exec::Engine::_dispatch_one(%run);
+    ok !exists $r->{error}, 'script exit 3: no error added (stderr is the script\'s own)';
+
+    $body = '{"exit":0,"stdout":"ok","stderr":"","reqid":"r1"}';
+    $r = Exec::Engine::_dispatch_one(%run);
+    ok !exists $r->{error}, 'exit 0: no error added';
+
+    $body = '{"status":"completed","exit":-1,"stdout":"","stderr":"executor closed before responding","reqid":"r1"}';
+    $r = Exec::Engine::_result_one(host => 'h', port => 7443, reqid => 'r1', config => {});
+    is $r->{error}, 'executor closed before responding',
+        'result poll: exit -1 stderr reason surfaced in error';
+}
+
 done_testing;

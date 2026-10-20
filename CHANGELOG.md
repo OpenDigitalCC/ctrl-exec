@@ -72,6 +72,13 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
   actions previously inherited `SIG_IGN`). Nothing else at the privilege
   boundary changed: request parsing, re-derivation from root-owned config and
   the privilege-drop order are as before. Test: `t/exec-sigpipe.t`.
+- **Changed** the dispatcher so a result with `exit -1` always names its cause
+  in `error`. The agent reports its own failures (executor unreachable or
+  closed, fork/pipe failure) in `stderr` only, so callers saw `exit -1` with an
+  empty `error`. `_dispatch_one` and `_result_one` now copy the `stderr` text
+  into `error` when the agent gave none; `stdout` and `stderr` are unchanged,
+  and results with a script's own exit code are untouched. Tests in
+  `t/engine.t`; API.md describes `exit -1`.
 
 ## 0.12.3 — fix agent crash on every connection (0.12.2 regression)
 

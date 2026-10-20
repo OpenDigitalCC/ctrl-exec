@@ -437,6 +437,21 @@ sub _json_hash ($content) {
     return ref $d eq 'HASH' ? $d : undef;
 }
 
+# An agent result with exit -1 is the agent's own failure, never a script's exit
+# code (those are 0-255): the executor transport ("executor closed before
+# responding"), a fork/pipe failure, a malformed request. The agent reports the
+# reason in stderr only, so a caller reading `error` saw it empty (T-034). Copy
+# the stderr text into `error` when the agent gave none; stdout and stderr are
+# left exactly as the agent sent them.
+sub _error_from_stderr ($result) {
+    return unless defined $result->{exit} && "$result->{exit}" eq '-1';
+    return if defined $result->{error} && length $result->{error};
+    my $why = $result->{stderr} // '';
+    $why =~ s/\s+\z//;
+    $result->{error} = length $why ? $why : 'agent reported exit -1 with no reason';
+    return;
+}
+
 # The suffix a caller appends to its 'no response from child' fallback.
 sub _lost ($f) {
     return defined $f->{failure} ? ": $f->{failure}" : '';
@@ -550,6 +565,7 @@ sub _dispatch_one (%opts) {
     }
 
     my $result  = $decoded // { exit => -1, error => 'invalid JSON response' };
+    _error_from_stderr($result);
 
     # Keep the agent's self-reported hostname; the caller sets the canonical
     # host from the name the agent was addressed by.
@@ -619,6 +635,7 @@ sub _result_one (%opts) {
 
     my $decoded = _json_hash($resp->content);
     my $result  = $decoded // { status => 'error', error => 'invalid JSON' };
+    _error_from_stderr($result);
     $result->{rtt}    = $rtt;
     $result->{reqid} //= $reqid;
 

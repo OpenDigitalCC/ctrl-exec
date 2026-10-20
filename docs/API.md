@@ -168,8 +168,11 @@ Response (success):
   correlate log entries across both sides.
 
 `exit`
-: Script exit code. 0 = success. Positive = script failure. -1 = dispatcher-side
-  failure (connection error, timeout). 126 = killed by signal or exec failed.
+: Script exit code. 0 = success. Positive = script failure. -1 = the run did
+  not complete: a dispatcher-side failure (connection error, timeout) or an
+  agent-side one (executor unreachable or closed before responding, fork or
+  pipe failure). A result with exit -1 always carries the reason in `error`.
+  126 = killed by signal or exec failed.
 
 Response (lock conflict):
 
