@@ -524,6 +524,13 @@ for bin in ctrl-exec-dispatcher ctrl-exec-agent ctrl-exec-api; do
         "$STAGE/bin/$bin"
 done
 
+# The tree's VERSION file still holds the PREVIOUS release at this point (it is
+# only advanced to $VERSION further down, after the tarball is built), so the
+# copy staged from SHIP_FILES above is stale. Stamp the staged one explicitly;
+# otherwise the tarball ships VERSION of the prior release (R-009 / T-005:
+# ctrl-exec-0.12.3.tar.gz carried VERSION 0.12.2).
+echo "$VERSION" > "$STAGE/VERSION"
+
 info "Generating CycloneDX SBOM..."
 
 # The full-project SBOM travels in the tarball (and is committed at the repo
@@ -555,12 +562,36 @@ fi
 
 tar -czf "$TARBALL" -C "$STAGE_DIR" "$RELEASE_NAME"
 
+# Guard: read what is actually INSIDE the finished tarball and compare it with
+# the release version (the one in the filename). Runs before the .sha256 is
+# written and before any commit/tag/push, so a mismatch stops the release.
+check_tarball_version() {
+    local tb="$1" want="$2" name got
+    name=$(basename "$tb" .tar.gz)
+    got=$(tar -xzOf "$tb" "$name/VERSION" 2>/dev/null | tr -d '[:space:]') || got=""
+    [[ "$got" == "$want" ]] \
+        || die "Release check failed: $tb contains VERSION '${got:-<missing>}', expected '$want'. Nothing committed, tagged or pushed."
+    got=$(tar -xzOf "$tb" "$name/sbom.json" 2>/dev/null \
+          | python3 -c "import json,sys; print(json.load(sys.stdin)['metadata']['component']['version'])" 2>/dev/null) || got=""
+    [[ "$got" == "$want" ]] \
+        || die "Release check failed: $tb sbom.json is version '${got:-<missing>}', expected '$want'. Nothing committed, tagged or pushed."
+    info "Release check: VERSION and sbom.json inside $(basename "$tb") are $want."
+}
+check_tarball_version "$TARBALL" "$VERSION"
+
 TARBALL_HASH=$(sha256sum "$TARBALL" | awk '{print $1}')
 info "SHA-256: $TARBALL_HASH"
 echo "$TARBALL_HASH  $TARBALL" > "${TARBALL}.sha256"
 
 if [[ "$BUILD_DEBS" -eq 1 ]]; then
     build_debs "$DIST_DIR" "$VERSION"
+    # Guard: every .deb produced must carry the release version.
+    for deb in "$DIST_DIR"/ctrl-exec*_"${VERSION}"_*.deb; do
+        [[ -e "$deb" ]] || continue
+        deb_ver=$(dpkg-deb -f "$deb" Version 2>/dev/null) || deb_ver=""
+        [[ "$deb_ver" == "$VERSION" ]] \
+            || die "Release check failed: $deb has Version '${deb_ver:-<unreadable>}', expected '$VERSION'. Nothing committed, tagged or pushed."
+    done
 else
     info "Skipping .deb build (--no-deb)."
 fi

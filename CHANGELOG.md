@@ -51,6 +51,13 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 - **Added** tests: `t/agent-accept.t` (accept-failure classification and the
   `peerhost`-sets-errno trap), fan-out failure reasons, `blocked_for`, the 429
   phrase and transport mapping, and a non-object 200 body in `_dispatch_one`.
+- **Fixed** `make-release.sh` shipping the previous release's `VERSION` in the
+  tarball (`ctrl-exec-0.12.3.tar.gz` carried `VERSION` 0.12.2, so agents installed
+  from it reported 0.12.2): the file was staged from the tree before the script
+  advanced it. It is now stamped into the staged tree, and the script reads
+  `VERSION` and `sbom.json` back out of the finished tarball (and `Version` from
+  each `.deb`) before writing the `.sha256`, stopping before any commit, tag or
+  push on a mismatch.
 
 ## 0.12.3 — fix agent crash on every connection (0.12.2 regression)
 
