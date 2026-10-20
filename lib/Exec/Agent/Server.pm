@@ -308,20 +308,6 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
         return;
     }
 
-    # The executor's frame does not carry input yet (T-013 piece 3 removes this
-    # refusal): never run such a script and silently drop what was sent.
-    if ($config->{executor_socket} && ($input || $input_mode ne 'context')) {
-        Exec::Log::log_action('WARNING', {
-            ACTION => 'deny', REASON => 'input needs executor support', SCRIPT => $name,
-            PEER => $peer, REQID => $reqid,
-        });
-        _send_json($conn, {
-            script => $name, exit => -1, reqid => $reqid,
-            error  => 'input requires executor support; not yet available',
-        });
-        return;
-    }
-
     # Agent auth hook - called after allowlist validation
     if ($config->{auth_hook}) {
         my $auth = Exec::Auth::check(
@@ -448,14 +434,38 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
     my $result;
     if ($config->{executor_socket}) {
         require Exec::Agent::ExecClient;
+        # Confidential input (T-013): the executor takes the input mode from its
+        # own scripts.conf, so it is given everything any mode needs, built as
+        # Runner builds it: the stdin JSON for input=context (with 'input' when
+        # there is any), the CTRL_EXEC_CONTEXT JSON for raw and fields (no input,
+        # and no token: the environment reaches every child the script starts),
+        # and the fields. With no input for an input=context script the frame
+        # is the old one, so such runs work with an executor of either age.
+        my %frame_input;
+        if ($input || $input_mode ne 'context') {
+            my %ctx = %$context;
+            delete $ctx{token};
+            %frame_input = (context => encode_json(\%ctx), input => $input // {});
+        }
         my $r = Exec::Agent::ExecClient::run(
             socket        => $config->{executor_socket},
             reqid         => $reqid,
             dispatcher_id => $dispatcher,
             script        => $name,
             args          => $args,
-            stdin         => encode_json($context),
+            stdin         => encode_json($input ? { %$context, input => $input } : $context),
+            %frame_input,
         );
+        if ($r->{executor_no_input}) {
+            Exec::Log::log_action('ERR', {
+                ACTION => 'deny', REASON => 'executor does not support input',
+                SCRIPT => $name, PEER => $peer, REQID => $reqid,
+            });
+            _send_json($conn, {
+                script => $name, exit => -1, reqid => $reqid, error => $r->{error},
+            });
+            return;
+        }
         if ($r->{executor_unavailable}) {
             Exec::Log::log_action('ERR', {
                 ACTION => 'executor-unavailable',

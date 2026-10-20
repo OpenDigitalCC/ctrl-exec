@@ -329,7 +329,11 @@ Privilege separation and per-script profiles (optional, recommended)
 
 The action's environment under the executor
 : The executor never passes its own environment to an action, and nothing in
-  the request enters it (request context reaches the script on stdin). The
+  the request enters it (request context reaches the script on stdin), except
+  for a script declared `input=raw`, `raw:<name>` or `fields`: it gets the
+  context JSON, without input and without the caller's token, in
+  `CTRL_EXEC_CONTEXT`, and for `fields` the input directory's path in
+  `CTRL_EXEC_INPUT` (see "Confidential input at the executor"). The
   action gets a fixed `PATH`
   (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`). Under a
   profile with `run_as`, it also gets `HOME`, `USER` and `LOGNAME` from the
@@ -376,8 +380,48 @@ Confidential input
   to either auth hook (they see field names and the total size), never logged
   and never written to the run store. A script that echoes its input to
   stdout or stderr returns it in the result - that is the script's choice.
-  Input is refused, not dropped, when the executor is configured, until the
-  executor carries it.
+
+Confidential input at the executor
+: With `executor_socket` set, the agent hands the input to the executor in the
+  run request (frame v2) and the executor delivers it; the executor never
+  parses JSON. What root does with it:
+
+  - It takes the input mode from its own root-owned `scripts.conf`, as it does
+    the path and profile, never from the request. A request that does not fit
+    the mode (`raw` without exactly one field, `raw:<name>` without that field)
+    is refused before anything is created or forked, naming the field.
+  - It bounds the input itself before using any of it: at most 32 fields, names
+    `[A-Za-z0-9_.-]{1,64}` other than `.` and `..`, no name twice, at most
+    4 MiB of values, and nothing after the last field. Field values are read in
+    place from the request buffer and never logged; that buffer and the copy of
+    the context-mode stdin are zeroed before they are freed.
+  - `raw`: the field's bytes are written to the action's stdin by the same
+    non-blocking loop that feeds the context JSON.
+  - `fields`: before the fork, root makes `/run/ctrl-exec-agent/input/<reqid>.
+    <16 random hex>` with `mkdirat` mode 0700 in the root-owned, 0711 `input`
+    directory (reachable by name, not listable), opens it `O_NOFOLLOW` and
+    checks it with `fstat`, creates each file with `openat` relative to that
+    directory fd (`O_CREAT|O_EXCL|O_NOFOLLOW`, mode 0600), writes it, and
+    `fchown`s each file and then the directory to the profile's `run_as` user
+    and group. No path that another user could swap is used. The action is then
+    forked and the profile applied (mount namespace, `writable`, capabilities,
+    `run_as`, `no_new_privileges`) exactly as before; just before `execve` the
+    child checks that `CTRL_EXEC_INPUT` still names that directory (same device
+    and inode) and that it is owned by the uid it now runs as. Because the
+    directory exists before the namespace is made, a `writable` profile sees it
+    read-only. Only the `run_as` user (and root) can read the files; the agent
+    user cannot.
+  - Removal: once the action has been reaped - a normal exit, a crash, or a
+    kill from outside - the handler removes the directory, walking it by
+    directory fds opened `O_NOFOLLOW` and unlinking with `unlinkat`, so
+    anything the action placed there (links, subdirectories, FIFOs) is removed
+    and never followed. If the handler itself dies, the executor removes every
+    entry in the `input` directory at its next start-up. A process the action
+    left running keeps its open files until it exits.
+  - The environment gains only `CTRL_EXEC_CONTEXT` (the agent's context JSON
+    without input and without the caller's token) for `raw` and `fields`, and
+    `CTRL_EXEC_INPUT` (the path) for `fields`. Executor messages name fields
+    and request ids, never values.
 
 
 ## Auth Hook

@@ -13,7 +13,9 @@
  * THIS FILE contains the config parser plus three subcommands: `resolve` (the
  * security decision, exercised by the shared conformance test), the socket
  * server (`serve`), and `check-path` (the script ownership rule, T-045); and
- * the privileged exec path that runs under a profile.
+ * the privileged exec path that runs under a profile, including the delivery
+ * of confidential run input (T-013: stdin, or a per-run directory of files
+ * made by root and handed to the profile's run_as user).
  * The `resolve` mode must produce exactly the security decision the Perl
  * front-end (Exec::Agent::Config) makes for the same files, or the executor
  * would apply a different privilege than the front-end believes; the socket
@@ -39,6 +41,7 @@
 #include <pwd.h>
 #include <grp.h>
 #include <sched.h>
+#include <dirent.h>
 #include <sys/prctl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -732,16 +735,40 @@ static int cmd_resolve(const char *agent_conf, const char *scripts_conf,
  *  serve mode: socket + peer-cred + framed request -> profiled exec
  * ====================================================================== */
 
-/* Wire framing. Request (front-end -> executor), all big-endian length-prefixed:
- *   [u32 total] [u32 len][reqid] [u32 len][disp] [u32 len][script]
- *   [u32 len][stdin] [u32 argc] argc*([u32 len][arg])
+/* Wire framing. Request (front-end -> executor), all big-endian length-prefixed,
+ * field = [u32 len][bytes]:
+ *   v1: [u32 total] [field reqid] [field disp] [field script] [field stdin]
+ *       [u32 argc] argc*[field arg]
+ *   v2: [u32 total] [u32 FRAME_V2_MAGIC] [field reqid] [field disp] [field script]
+ *       [field stdin] [field context] [u32 argc] argc*[field arg]
+ *       [u32 nfields] nfields*([field name] [field value])     (T-013)
  * Response (executor -> front-end):
  *   [i32 exit] [u32 len][stdout] [u32 len][stderr]
  * Length-prefixed throughout so args/stdin may hold arbitrary bytes (args still
- * cannot contain NUL - execv requires C strings - but stdin may). */
+ * cannot contain NUL - execv requires C strings - but stdin may).
+ *
+ * v2 carries confidential run input. In v2, stdin is the context JSON for an
+ * input=context script (with an "input" object when there is input), context
+ * is the context JSON for CTRL_EXEC_CONTEXT (no input, no caller token; the
+ * agent builds both), and the fields are the input itself. The executor never
+ * parses JSON: it takes the mode from its own scripts.conf and picks which of
+ * these to deliver. FRAME_V2_MAGIC sits where v1 has the reqid length and is
+ * larger than MAX_FRAME, so an executor that predates v2 fails its first length
+ * check and replies "malformed request" without running anything; this
+ * executor reads either form (a v1 frame is a run with no input). */
 
 #define MAX_FRAME   (16 * 1024 * 1024)   /* 16MB request cap */
 #define MAX_ARGS    256
+
+/* Confidential run input (T-013). The agent enforces max_input_bytes (default
+ * 1 MiB) and 32 fields before anything reaches here; these are the executor's
+ * own bounds, checked on the frame before any of it is used. MAX_INPUT_BYTES
+ * leaves headroom over the default, and a max_input_bytes above it is refused
+ * here with a reason that names the limit. */
+#define FRAME_V2_MAGIC   0xCE0E0002u
+#define MAX_INPUT_FIELDS 32
+#define MAX_INPUT_BYTES  (4 * 1024 * 1024)
+#define RMTREE_MAX_DEPTH 16
 
 static int read_all(int fd, void *buf, size_t n) {
     char *p = buf; size_t got = 0;
@@ -788,6 +815,33 @@ static char *take_field(const unsigned char *buf, uint32_t total, uint32_t *off,
     *off += l;
     if (len) *len = l;
     return s;
+}
+
+static uint32_t be32(const unsigned char *b) {
+    return ((uint32_t)b[0]<<24)|((uint32_t)b[1]<<16)|((uint32_t)b[2]<<8)|b[3];
+}
+
+/* A field read in place: a pointer into the frame and its length, no copy.
+ * Input values are used this way, so the only copies of them in this process
+ * are the frame itself and what the kernel holds for the pipe or file. */
+typedef struct { const unsigned char *p; uint32_t len; } view_t;
+
+static int take_view(const unsigned char *buf, uint32_t total, uint32_t *off, view_t *v) {
+    if (total - *off < 4) return -1;
+    uint32_t l = be32(buf + *off);
+    *off += 4;
+    if (l > total - *off) return -1;
+    v->p = buf + *off;
+    v->len = l;
+    *off += l;
+    return 0;
+}
+
+/* Zero memory that held input before it is freed (volatile, so the stores are
+ * not optimised away as dead). */
+static void wipe(void *p, size_t n) {
+    volatile unsigned char *q = p;
+    while (n--) *q++ = 0;
 }
 
 /* Recursively make a subtree read-only via mount_setattr(2). Returns 0, or -1
@@ -989,6 +1043,249 @@ static int apply_profile(const profile_t *p, int allow_unpriv, user_env_t *ue) {
     return 0;
 }
 
+/* ---- confidential run input (T-013): the per-run directory -------------- */
+/* For an input=fields script the executor, as root and before it forks the
+ * action, makes a directory <socket dir>/input/<reqid>.<random> (mode 0700),
+ * writes one file per field into it (mode 0600, created O_EXCL|O_NOFOLLOW
+ * relative to the directory's fd), then hands the files and the directory to
+ * the run_as user with fchown. It exists before the profile's mount namespace
+ * is made, so it is visible (read-only) inside a `writable` profile too. After
+ * the action is reaped, however it ended, the handler removes it; a directory
+ * left by a crash is removed at the next start-up. */
+
+typedef struct {
+    int   active;                          /* made: must be removed */
+    char  name[INPUT_NAME_MAX + 18];       /* "<reqid|run>.<16 hex>" */
+    char  path[PATH_MAX];
+    dev_t dev;
+    ino_t ino;
+} input_dir_t;
+
+/* Remove `name` inside the directory open as dfd, and everything under it,
+ * without following a symbolic link: every step is relative to a directory fd
+ * opened with O_NOFOLLOW, so an entry the action replaced with a link is
+ * unlinked as a link, never followed. Root does this inside a directory the
+ * run_as user owns; nothing the user put there can steer it elsewhere. Returns
+ * 0 when the entry is gone (or was never there), -1 otherwise (errno set). */
+static int remove_tree_at(int dfd, const char *name, int depth) {
+    int fd = openat(dfd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+        if (errno == ENOENT) return 0;
+        if (errno == ENOTDIR || errno == ELOOP) {
+            if (unlinkat(dfd, name, 0) == 0 || errno == ENOENT) return 0;
+        }
+        return -1;
+    }
+    if (depth >= RMTREE_MAX_DEPTH) { close(fd); errno = ELOOP; return -1; }
+    DIR *d = fdopendir(fd);
+    if (!d) { int e = errno; close(fd); errno = e; return -1; }
+    /* A few passes: a process the action left behind may still be adding
+     * entries. What survives is removed at the next start-up. */
+    for (int pass = 0; pass < 3; pass++) {
+        rewinddir(d);
+        struct dirent *de;
+        while ((de = readdir(d)) != NULL) {
+            if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
+            (void)remove_tree_at(dirfd(d), de->d_name, depth + 1);
+        }
+        if (unlinkat(dfd, name, AT_REMOVEDIR) == 0 || errno == ENOENT) {
+            closedir(d);
+            return 0;
+        }
+        if (errno != ENOTEMPTY && errno != EEXIST) break;
+    }
+    int e = errno;
+    closedir(d);
+    errno = e;
+    return -1;
+}
+
+/* Set up <socket dir>/input, the parent of every per-run input directory
+ * (/run/ctrl-exec-agent/input under the shipped unit, the executor's runtime
+ * directory), and remove anything a crash left in it. The socket directory
+ * must belong to this process's user and be writable by no one else, so no one
+ * else can replace the 'input' entry; 'input' is made 0711 so the run_as user
+ * can reach its own directory by name while no one can list which runs exist.
+ * Returns an O_CLOEXEC fd on it (handlers inherit it through fork), or -1 with
+ * the reason on stderr, in which case input=fields runs are refused. */
+static int input_base_init(const char *sockpath, char *base, size_t bl) {
+    const char *slash = strrchr(sockpath, '/');
+    if (sockpath[0] != '/' || !slash) {
+        fprintf(stderr, "ctrl-exec-executor: socket path '%s' is not absolute; "
+                        "input=fields runs will be refused\n", sockpath);
+        return -1;
+    }
+    char sdir[PATH_MAX];
+    size_t n = (size_t)(slash - sockpath);
+    if (n == 0) n = 1;                                  /* a socket in "/" */
+    if (n >= sizeof(sdir) - 8) {
+        fprintf(stderr, "ctrl-exec-executor: socket directory too long; "
+                        "input=fields runs will be refused\n");
+        return -1;
+    }
+    memcpy(sdir, sockpath, n);
+    sdir[n] = '\0';
+    snprintf(base, bl, "%s%sinput", sdir, n == 1 ? "" : "/");
+
+    struct stat st;
+    int pfd = open(sdir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (pfd < 0 || fstat(pfd, &st) != 0) {
+        fprintf(stderr, "ctrl-exec-executor: '%s': %s; input=fields runs will be refused\n",
+                sdir, strerror(errno));
+        if (pfd >= 0) close(pfd);
+        return -1;
+    }
+    if (st.st_uid != geteuid() || (st.st_mode & (S_IWGRP | S_IWOTH))) {
+        fprintf(stderr, "ctrl-exec-executor: '%s' must be owned by uid %lu and not "
+                        "group/other-writable; input=fields runs will be refused\n",
+                sdir, (unsigned long)geteuid());
+        close(pfd);
+        return -1;
+    }
+    if (mkdirat(pfd, "input", 0711) != 0 && errno != EEXIST) {
+        fprintf(stderr, "ctrl-exec-executor: cannot create '%s': %s; input=fields runs "
+                        "will be refused\n", base, strerror(errno));
+        close(pfd);
+        return -1;
+    }
+    int bfd = openat(pfd, "input", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    close(pfd);
+    if (bfd < 0 || fstat(bfd, &st) != 0 || !S_ISDIR(st.st_mode) ||
+        st.st_uid != geteuid() || fchmod(bfd, 0711) != 0) {
+        fprintf(stderr, "ctrl-exec-executor: '%s' is not a directory owned by uid %lu; "
+                        "input=fields runs will be refused\n", base, (unsigned long)geteuid());
+        if (bfd >= 0) close(bfd);
+        return -1;
+    }
+
+    /* Start-up sweep: nothing in here belongs to a live run yet. */
+    int sfd = openat(bfd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    DIR *d = sfd >= 0 ? fdopendir(sfd) : NULL;
+    if (!d) {
+        if (sfd >= 0) close(sfd);
+        fprintf(stderr, "ctrl-exec-executor: cannot read '%s': %s; input=fields runs "
+                        "will be refused\n", base, strerror(errno));
+        close(bfd);
+        return -1;
+    }
+    int removed = 0, left = 0;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
+        if (remove_tree_at(bfd, de->d_name, 0) == 0) removed++; else left++;
+    }
+    closedir(d);
+    if (removed)
+        fprintf(stderr, "ctrl-exec-executor: removed %d stale input director%s from '%s'\n",
+                removed, removed == 1 ? "y" : "ies", base);
+    if (left)
+        fprintf(stderr, "ctrl-exec-executor: could not remove %d entr%s in '%s'\n",
+                left, left == 1 ? "y" : "ies", base);
+    return bfd;
+}
+
+/* The uid and gid the action will run as, resolved as apply_profile resolves
+ * them (a passwd name, else an all-digits id), or this process's own when the
+ * profile has no run_as. The input directory and files are handed to these;
+ * the child checks after the privilege drop that the directory it is given is
+ * owned by the uid it then runs as. Returns 0, or -1 if run_as is unknown. */
+static int run_as_ids(const profile_t *p, uid_t *uid, gid_t *gid) {
+    if (!p->run_as[0]) { *uid = geteuid(); *gid = getegid(); return 0; }
+    struct passwd *pw = getpwnam(p->run_as);
+    if (pw) { *uid = pw->pw_uid; *gid = pw->pw_gid; return 0; }
+    unsigned long v = 0;
+    for (const char *q = p->run_as; *q; q++) {
+        if (*q < '0' || *q > '9') return -1;
+        if (v > (ULONG_MAX - 9) / 10) return -1;
+        v = v * 10 + (unsigned long)(*q - '0');
+    }
+    if ((unsigned long)(uid_t)v != v || (unsigned long)(gid_t)v != v) return -1;
+    *uid = (uid_t)v; *gid = (gid_t)v;
+    return 0;
+}
+
+/* Make the per-run directory for an input=fields run and write the fields into
+ * it, then give it to uid/gid. Order: mkdirat 0700 (root-owned, so nothing else
+ * can enter while it is filled), openat O_NOFOLLOW + fstat, then per field
+ * openat(O_CREAT|O_EXCL|O_NOFOLLOW) 0600 + fchmod + write + fchown, and fchown
+ * of the directory last. Returns 0, or -1 with the reason in why (naming a
+ * field, never a value); id->active says whether there is a directory to
+ * remove either way. */
+static int prepare_fields_dir(int bfd, const char *base, const char *reqid,
+                              const view_t *names, const view_t *vals, uint32_t nf,
+                              uid_t uid, gid_t gid, input_dir_t *id,
+                              char *why, size_t wl) {
+    unsigned char rnd[8];
+    int rfd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    if (rfd < 0 || read_all(rfd, rnd, sizeof(rnd)) != 0) {
+        snprintf(why, wl, "executor: cannot prepare the input directory: no randomness\n");
+        if (rfd >= 0) close(rfd);
+        return -1;
+    }
+    close(rfd);
+    /* The reqid names the directory only when it is a plain token. */
+    const char *comp = "run";
+    size_t rl = strlen(reqid);
+    if (rl >= 1 && rl <= INPUT_NAME_MAX) {
+        int ok = 1;
+        for (size_t i = 0; i < rl; i++)
+            if (!(isalnum((unsigned char)reqid[i]) || reqid[i] == '_' || reqid[i] == '-')) ok = 0;
+        if (ok) comp = reqid;
+    }
+    snprintf(id->name, sizeof(id->name), "%s.%02x%02x%02x%02x%02x%02x%02x%02x", comp,
+             rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5], rnd[6], rnd[7]);
+    int w = snprintf(id->path, sizeof(id->path), "%s/%s", base, id->name);
+    if (w < 0 || (size_t)w >= sizeof(id->path)) {
+        snprintf(why, wl, "executor: cannot prepare the input directory: path too long\n");
+        return -1;
+    }
+    if (mkdirat(bfd, id->name, 0700) != 0) {
+        snprintf(why, wl, "executor: cannot create the input directory: %s\n", strerror(errno));
+        return -1;
+    }
+    id->active = 1;
+    struct stat st;
+    int dfd = openat(bfd, id->name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (dfd < 0 || fstat(dfd, &st) != 0 || !S_ISDIR(st.st_mode) ||
+        st.st_uid != geteuid() || fchmod(dfd, 0700) != 0) {
+        snprintf(why, wl, "executor: cannot prepare the input directory: %s\n", strerror(errno));
+        if (dfd >= 0) close(dfd);
+        return -1;
+    }
+    for (uint32_t i = 0; i < nf; i++) {
+        char fname[INPUT_NAME_MAX + 1];
+        memcpy(fname, names[i].p, names[i].len);         /* validated: 1..64 */
+        fname[names[i].len] = '\0';
+        int fd = openat(dfd, fname, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+        int e = 0;
+        if (fd < 0) e = errno;
+        else if (fchmod(fd, 0600) != 0 || write_all(fd, vals[i].p, vals[i].len) != 0 ||
+                 fchown(fd, uid, gid) != 0) e = errno;
+        if (fd >= 0 && close(fd) != 0 && !e) e = errno;
+        if (e) {
+            snprintf(why, wl, "executor: cannot create input file '%s': %s\n", fname, strerror(e));
+            close(dfd);
+            return -1;
+        }
+    }
+    if (fchown(dfd, uid, gid) != 0) {
+        snprintf(why, wl, "executor: cannot hand the input directory to the run_as user: %s\n",
+                 strerror(errno));
+        close(dfd);
+        return -1;
+    }
+    id->dev = st.st_dev;
+    id->ino = st.st_ino;
+    close(dfd);
+    return 0;
+}
+
+/* What the action gets beyond the fixed environment, for raw and fields. */
+typedef struct {
+    char              *env[3];   /* "CTRL_EXEC_CONTEXT=..", "CTRL_EXEC_INPUT=..", NULL */
+    const input_dir_t *dir;      /* the fields directory to verify, or NULL */
+} run_input_t;
+
 /* Per-stream cap on captured stdout/stderr. The request frame is bounded
  * (MAX_FRAME) but the action's output was not: a chatty or runaway allowlisted
  * script (a log dump, `yes`, a misbehaving job) could grow the ROOT executor's
@@ -1016,6 +1313,7 @@ static int buf_add(buf_t *b, const char *d, size_t n) {
  * stderr concurrently (select, to avoid pipe-buffer deadlock). */
 static int run_with_profile(const profile_t *p, const char *path, char *const argv[],
                             const char *indata, size_t inlen, int allow_unpriv,
+                            const run_input_t *ri,
                             int *exit_out, buf_t *out, buf_t *err) {
     int o[2], e[2], in[2];
     if (pipe(o) || pipe(e) || pipe(in)) return -1;
@@ -1088,6 +1386,20 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
                        "being checked\n", path);
             _exit(126);
         }
+        /* input=fields (T-013): the path handed over in CTRL_EXEC_INPUT must
+         * name, in this namespace and under this identity, the directory the
+         * handler prepared (same dev/ino), owned by the uid the action now
+         * runs as. */
+        if (ri && ri->dir) {
+            struct stat ist;
+            if (stat(ri->dir->path, &ist) != 0 || !S_ISDIR(ist.st_mode) ||
+                ist.st_dev != ri->dir->dev || ist.st_ino != ri->dir->ino ||
+                ist.st_uid != getuid()) {
+                dprintf(2, "executor: the input directory is not reachable as prepared "
+                           "inside the action's profile\n");
+                _exit(126);
+            }
+        }
         /* Sanitised environment: the executor never trusts its own inherited
          * env for the action. The script receives request context on stdin
          * (not via the environment), so a fixed PATH avoids passing the
@@ -1096,8 +1408,11 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
          * under the profile. Under a run_as user with a passwd entry, HOME,
          * USER and LOGNAME are added from that entry (T-004), so the user's
          * tools (docker, git, ssh) find their home; nothing caller-controlled
-         * enters the environment. */
-        char *clean_env[5];
+         * enters the environment. For input=raw and input=fields (T-013) the
+         * front end's context JSON (no input, no caller token) is added as
+         * CTRL_EXEC_CONTEXT, and for fields the directory path as
+         * CTRL_EXEC_INPUT; input values never enter the environment. */
+        char *clean_env[8];
         int ne = 0;
         clean_env[ne++] = (char *)"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
         if (ue.set) {
@@ -1105,6 +1420,7 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
             clean_env[ne++] = ue.user;
             clean_env[ne++] = ue.logname;
         }
+        for (int i = 0; ri && i < 2 && ri->env[i]; i++) clean_env[ne++] = ri->env[i];
         clean_env[ne] = NULL;
         execve(path, argv, clean_env);
         dprintf(2, "executor: exec '%s' failed: %s\n", path, strerror(errno));
@@ -1177,10 +1493,11 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
  * agent.conf (cfg) is supplied by the serve loop - parsed once at startup and
  * reloaded only on mtime change - so each forked handler does not re-parse it or
  * re-allocate the large config_t per connection. The security property is
- * unchanged: path and profile are re-derived from this OWN root-owned config,
- * never from the message. */
+ * unchanged: path, profile and input mode are re-derived from this OWN
+ * root-owned config, never from the message. input_bfd/input_base are the
+ * per-run input directories' parent (-1 when it could not be set up). */
 static void handle_conn(int cfd, config_t *cfg, const char *scripts_conf,
-                        int allow_unpriv) {
+                        int allow_unpriv, int input_bfd, const char *input_base) {
     /* A write to a pipe or socket whose reader has gone must fail with EPIPE,
      * not kill this handler: the stdin write to an action that exited without
      * reading it raced the action's exit, and the default SIGPIPE killed the
@@ -1192,15 +1509,25 @@ static void handle_conn(int cfd, config_t *cfg, const char *scripts_conf,
     if (read_u32(cfd, &total) != 0 || total == 0 || total > MAX_FRAME) return;
     unsigned char *frame = malloc(total);
     if (!frame) return;
-    if (read_all(cfd, frame, total) != 0) { free(frame); return; }
+    if (read_all(cfd, frame, total) != 0) { wipe(frame, total); free(frame); return; }
 
     uint32_t off = 0;
+    int v2 = (total >= 4 && be32(frame) == FRAME_V2_MAGIC);
+    if (v2) off = 4;
     char *reqid  = take_field(frame, total, &off, NULL);
     char *disp   = take_field(frame, total, &off, NULL);
     char *script = take_field(frame, total, &off, NULL);
     uint32_t inlen = 0;
     char *indata = take_field(frame, total, &off, &inlen);
     int bad = (!reqid || !disp || !script || !indata);
+
+    /* v2: the context for CTRL_EXEC_CONTEXT - an environment string, so no NUL. */
+    char *ctxenv = NULL;
+    uint32_t ctxlen = 0;
+    if (v2 && !bad) {
+        ctxenv = take_field(frame, total, &off, &ctxlen);
+        if (!ctxenv || strlen(ctxenv) != ctxlen) bad = 1;
+    }
 
     char *argv[MAX_ARGS + 2]; int argc = 0;
     uint32_t na = 0;
@@ -1220,15 +1547,61 @@ static void handle_conn(int cfd, config_t *cfg, const char *scripts_conf,
         argv[argc] = NULL;
     }
 
+    /* v2: the input fields, read in place and bounded before any is used: the
+     * count first, then each name's form, duplicates, the running byte total,
+     * and nothing may follow the last field. Errors name fields, never values. */
+    view_t inames[MAX_INPUT_FIELDS], ivals[MAX_INPUT_FIELDS];
+    uint32_t nf = 0;
+    char ierr[200] = "";
+    if (v2 && !bad) {
+        if (total - off < 4) bad = 1;
+        else { nf = be32(frame + off); off += 4; }
+        if (!bad && nf > MAX_INPUT_FIELDS)
+            snprintf(ierr, sizeof(ierr), "executor: input has more than %d fields\n", MAX_INPUT_FIELDS);
+        uint64_t sum = 0;
+        for (uint32_t i = 0; !bad && !ierr[0] && i < nf; i++) {
+            if (take_view(frame, total, &off, &inames[i]) != 0 ||
+                take_view(frame, total, &off, &ivals[i]) != 0) { bad = 1; break; }
+            if (!input_name_ok((const char *)inames[i].p, inames[i].len)) {
+                snprintf(ierr, sizeof(ierr), "executor: input field name is invalid "
+                         "(allowed: A-Z a-z 0-9 _ . -, 1-64 characters)\n");
+                break;
+            }
+            for (uint32_t j = 0; j < i; j++)
+                if (inames[j].len == inames[i].len &&
+                    memcmp(inames[j].p, inames[i].p, inames[i].len) == 0) {
+                    snprintf(ierr, sizeof(ierr), "executor: input field '%.*s' appears more than once\n",
+                             (int)inames[i].len, (const char *)inames[i].p);
+                    break;
+                }
+            sum += ivals[i].len;
+            if (!ierr[0] && sum > MAX_INPUT_BYTES)
+                snprintf(ierr, sizeof(ierr), "executor: input exceeds the executor's limit of %d bytes\n",
+                         MAX_INPUT_BYTES);
+        }
+        if (!bad && !ierr[0] && off != total) bad = 1;   /* trailing bytes */
+    }
+
     int ecode = -1; buf_t out = {0}, err = {0};
-    if (bad) { buf_add(&err, "executor: malformed request\n", 28); ecode = -1; }
-    else {
-        /* Re-derive path + profile from our OWN cached root-owned config; never
-         * trust the message. The window between path_in_dirs() (realpath) below
-         * and the later execve is not reachable by a non-root user: before the
-         * exec, run_with_profile checks that the script and every directory on
-         * its path are root-owned and not group/other-writable (T-045), and
-         * that the path still names the file it checked. */
+    input_dir_t idir;
+    memset(&idir, 0, sizeof(idir));
+    run_input_t ri;
+    memset(&ri, 0, sizeof(ri));
+    if (bad) {
+        /* v1 keeps its old text; an agent that sent v2 reads that text as "this
+         * executor predates input" (Exec::Agent::ExecClient). */
+        const char *m = v2 ? "executor: malformed input frame\n" : "executor: malformed request\n";
+        buf_add(&err, m, strlen(m));
+        ecode = -1;
+    } else if (ierr[0]) {
+        buf_add(&err, ierr, strlen(ierr));
+    } else {
+        /* Re-derive path + profile + input mode from our OWN cached root-owned
+         * config; never trust the message. The window between path_in_dirs()
+         * (realpath) below and the later execve is not reachable by a non-root
+         * user: before the exec, run_with_profile checks that the script and
+         * every directory on its path are root-owned and not group/other-
+         * writable (T-045), and that the path still names the file it checked. */
         char spath[VALLEN], pname[NAMELEN], imode[INPUT_MODE_LEN];
         profile_t *p = NULL;
         if (!find_script(scripts_conf, script, spath, sizeof(spath), pname, sizeof(pname),
@@ -1242,8 +1615,78 @@ static void handle_conn(int cfd, config_t *cfg, const char *scripts_conf,
              * under an implicit root context. */
             buf_add(&err, "executor: undefined profile\n", 28);
         } else {
-            argv[0] = spath;                          /* argv[0] = resolved path */
-            run_with_profile(p, spath, argv, indata, inlen, allow_unpriv, &ecode, &out, &err);
+            /* Delivery by the mode in OUR scripts.conf (imode). A request that
+             * does not fit it is refused here, before anything is created or
+             * forked. context: stdin is the frame's stdin, as before. raw: stdin
+             * is the one field's bytes. fields: stdin is empty and the fields
+             * are files. raw and fields add CTRL_EXEC_CONTEXT. */
+            const char *feed = indata;
+            size_t feedlen = inlen;
+            int fields = 0;
+            char why[PATH_MAX + 256] = "";
+            if (strcmp(imode, "context") != 0) {
+                if (!v2) {
+                    snprintf(why, sizeof(why), "executor: script '%s' takes input=%s but the "
+                             "agent sent no input (it is older than this executor): upgrade "
+                             "or restart ctrl-exec-agent\n", script, imode);
+                } else if (ctxlen == 0) {
+                    snprintf(why, sizeof(why), "executor: malformed input frame\n");
+                } else if (strcmp(imode, "fields") == 0) {
+                    fields = 1;
+                    feed = NULL; feedlen = 0;
+                } else if (strcmp(imode, "raw") == 0) {
+                    if (nf != 1)
+                        snprintf(why, sizeof(why), "executor: script takes input=raw: exactly one "
+                                 "input field is required, got %u\n", (unsigned)nf);
+                    else { feed = (const char *)ivals[0].p; feedlen = ivals[0].len; }
+                } else {                                    /* raw:<name> */
+                    const char *want = imode + 4;
+                    size_t wl = strlen(want);
+                    uint32_t k = nf;
+                    for (uint32_t i = 0; i < nf; i++)
+                        if (inames[i].len == wl && memcmp(inames[i].p, want, wl) == 0) { k = i; break; }
+                    if (k == nf)
+                        snprintf(why, sizeof(why), "executor: script takes input=raw:%s but input "
+                                 "field '%s' is missing\n", want, want);
+                    else { feed = (const char *)ivals[k].p; feedlen = ivals[k].len; }
+                }
+                if (!why[0]) {
+                    static const char pre[] = "CTRL_EXEC_CONTEXT=";
+                    ri.env[0] = malloc(sizeof(pre) + ctxlen);
+                    if (!ri.env[0]) snprintf(why, sizeof(why), "executor: out of memory\n");
+                    else { memcpy(ri.env[0], pre, sizeof(pre) - 1);
+                           memcpy(ri.env[0] + sizeof(pre) - 1, ctxenv, (size_t)ctxlen + 1); }
+                }
+            }
+            if (!why[0] && fields) {
+                uid_t uid; gid_t gid;
+                if (input_bfd < 0)
+                    snprintf(why, sizeof(why), "executor: input=fields is unavailable: the input "
+                             "directory could not be set up at start-up (see the executor's log)\n");
+                else if (run_as_ids(p, &uid, &gid) != 0)
+                    snprintf(why, sizeof(why), "executor: unknown run_as '%s'\n", p->run_as);
+                else if (prepare_fields_dir(input_bfd, input_base, reqid, inames, ivals, nf,
+                                            uid, gid, &idir, why, sizeof(why)) == 0) {
+                    static const char pre[] = "CTRL_EXEC_INPUT=";
+                    ri.env[1] = malloc(sizeof(pre) + strlen(idir.path));
+                    if (!ri.env[1]) snprintf(why, sizeof(why), "executor: out of memory\n");
+                    else { memcpy(ri.env[1], pre, sizeof(pre) - 1);
+                           strcpy(ri.env[1] + sizeof(pre) - 1, idir.path); }
+                    ri.dir = &idir;
+                }
+            }
+            if (why[0]) {
+                buf_add(&err, why, strlen(why));
+            } else {
+                argv[0] = spath;                      /* argv[0] = resolved path */
+                run_with_profile(p, spath, argv, feed, feedlen, allow_unpriv,
+                                 (ri.env[0] || ri.dir) ? &ri : NULL, &ecode, &out, &err);
+            }
+            /* The action has been reaped (or never started): the directory goes
+             * whatever way it ended. */
+            if (idir.active && remove_tree_at(input_bfd, idir.name, 0) != 0)
+                fprintf(stderr, "ctrl-exec-executor: could not remove input directory "
+                                "'%s/%s': %s\n", input_base, idir.name, strerror(errno));
         }
     }
 
@@ -1253,9 +1696,12 @@ static void handle_conn(int cfd, config_t *cfg, const char *scripts_conf,
     write_u32(cfd, (uint32_t)err.len); if (err.len) write_all(cfd, err.p, err.len);
 
     free(out.p); free(err.p);
-    free(reqid); free(disp); free(indata);
+    free(ri.env[0]); free(ri.env[1]);
+    if (indata) wipe(indata, inlen);                 /* context-mode stdin holds input */
+    free(reqid); free(disp); free(indata); free(ctxenv);
     for (int i = 1; i < argc; i++) free(argv[i]);   /* argv[0] is spath/script (freed via script) */
     free(script);
+    wipe(frame, total);
     free(frame);
 }
 
@@ -1295,6 +1741,11 @@ static int cmd_serve(const char *sockpath, const char *agent_conf,
     struct stat cst;
     time_t cfg_mtime = (stat(agent_conf, &cst) == 0) ? cst.st_mtime : 0;
 
+    /* Confidential run input (T-013): the parent of the per-run input=fields
+     * directories, swept of anything a crash left behind. */
+    char input_base[PATH_MAX] = "";
+    int input_bfd = input_base_init(sockpath, input_base, sizeof(input_base));
+
     for (;;) {
         int cfd = accept(sfd, NULL, NULL);
         if (cfd < 0) { if (errno == EINTR) continue; perror("accept"); break; }
@@ -1319,11 +1770,17 @@ static int cmd_serve(const char *sockpath, const char *agent_conf,
         }
 
         pid_t pid = fork();
-        if (pid == 0) { close(sfd); handle_conn(cfd, cfg, scripts_conf, allow_unpriv); close(cfd); _exit(0); }
+        if (pid == 0) {
+            close(sfd);
+            handle_conn(cfd, cfg, scripts_conf, allow_unpriv, input_bfd, input_base);
+            close(cfd);
+            _exit(0);
+        }
         close(cfd);
         while (waitpid(-1, NULL, WNOHANG) > 0) {}   /* reap finished handlers */
     }
     free(cfg);
+    if (input_bfd >= 0) close(input_bfd);
     close(sfd);
     return 0;
 }

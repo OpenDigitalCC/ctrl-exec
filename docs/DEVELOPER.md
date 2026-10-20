@@ -1059,7 +1059,14 @@ TTL. A second async run of the same script is refused via a per-script flock.
 
 Front-end -> executor client. `run(%opts)` hands an authorised run to the
 privileged executor (`ctrl-exec-executor`) over its unix socket using the
-length-prefixed wire framing and parses the captured result back.
+length-prefixed wire framing and parses the captured result back. A run with
+confidential input, or of a script that is not `input=context`, uses frame v2
+(T-013): a magic number where v1 has the reqid length (larger than any frame,
+so an executor that predates it refuses the frame as malformed without running
+anything, which `run` reports as an executor without input support), then the
+v1 fields, the `CTRL_EXEC_CONTEXT` JSON, the args and the named input fields.
+Other runs keep v1, which an executor of either age reads. The layout is
+documented in `src/ctrl-exec-executor.c` and the module header.
 
 
 ### `Exec::Agent::Schema`

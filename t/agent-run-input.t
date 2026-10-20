@@ -317,22 +317,21 @@ subtest 'the allowlist records each mode; /capabilities reports it' => sub {
                         flds => 'fields', killed => 'fields' }, 'modes reported';
 };
 
-subtest 'with an executor configured, input is refused, not dropped' => sub {
+subtest 'with an executor configured, input goes to it, never dropped' => sub {
+    # The executor carries input (piece 3; t/exec-input.t runs it end to end).
+    # Here it is absent: the run fails naming it, after the hook, and no value
+    # reaches the reply or the logs.
     my %ex = (executor_socket => "$dir/no.sock");
     for my $c (['ctx', { key => $SENTINEL }], ['flds', undef], ['flds', { key => $SENTINEL }]) {
         my ($s, $in) = @$c;
         unlink "$dir/seen.$s", "$dir/hook.seen";
         @logs = ();
         my $r = post({ script => $s, args => [], (defined $in ? (input => $in) : ()) }, %ex);
-        is $r->{exit}, -1, "$s: refused";
-        is $r->{error}, 'input requires executor support; not yet available', "$s: says so";
-        ok !-e "$dir/hook.seen", "$s: hook not asked";
+        is $r->{exit}, -1, "$s: not run";
+        like $r->{stderr} // '', qr/ctrl-exec-executor is not available/, "$s: names the executor";
+        ok !-e "$dir/seen.$s", "$s: script not started";
         unlike $JSON->encode([$r, \@logs]), qr/\Q$SENTINEL\E/, "$s: no value in reply or logs";
     }
-    # context mode without input reaches the executor path exactly as before
-    my $r = post({ script => 'ctx', args => [] }, %ex);
-    like $r->{stderr} // '', qr/./, 'ctx without input goes to the executor client (unavailable here)';
-    isnt $r->{error} // '', 'input requires executor support; not yet available', 'not refused';
 };
 
 subtest 'async: the record never holds input; the job still receives it' => sub {

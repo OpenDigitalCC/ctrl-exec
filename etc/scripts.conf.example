@@ -27,9 +27,10 @@
 #   input=fields     one 0600 file per field in $CTRL_EXEC_INPUT (a private
 #                    directory removed afterwards); stdin is empty
 # raw and fields put the context JSON (without the caller's token) in
-# $CTRL_EXEC_CONTEXT. Any other value
-# skips the entry. Input needs executor support, which is not yet available:
-# with executor_socket set, a run that carries input is refused.
+# $CTRL_EXEC_CONTEXT. Any other value skips the entry. All modes work with and
+# without the executor; with it, the executor reads the mode from this file
+# itself, and for input=fields it creates the directory as root under
+# /run/ctrl-exec-agent/input and gives it to the profile's run_as user.
 #
 # A line with more than one path, a relative path, a name outside [A-Za-z0-9_-],
 # or a path of 4096 characters or more is skipped. If a name appears twice, the

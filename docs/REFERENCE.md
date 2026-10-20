@@ -1202,21 +1202,37 @@ script changes form on the agent alone:
 `input=fields`
 : Stdin is empty. Each field is a file `$CTRL_EXEC_INPUT/<name>` (mode 0600) in
   a private per-run directory (mode 0700) which is removed when the script
-  exits or is killed. `CTRL_EXEC_CONTEXT` is set as for `raw`. Without the
-  executor the agent creates the directory as its own user under `input_dir`
-  in `agent.conf` (default the system temporary directory, which under the
-  shipped systemd unit is the service's private `/tmp`); the run user is
-  therefore the agent user.
+  exits or is killed. `CTRL_EXEC_CONTEXT` is set as for `raw`. With the
+  executor (`executor_socket` set), the executor creates the directory as root
+  at `/run/ctrl-exec-agent/input/<reqid>.<random>` (the `input` directory
+  beside the executor's socket) before it applies the script's profile, and
+  hands the directory and its files to the profile's `run_as` user (the
+  executor's own user, root, when the profile has no `run_as`). It is visible,
+  read-only, inside a profile with `writable`. Without the executor the agent
+  creates the directory as its own user under `input_dir` in `agent.conf`
+  (default the system temporary directory, which under the shipped systemd
+  unit is the service's private `/tmp`); the run user is therefore the agent
+  user.
 
 A `scripts.conf` entry with any other `input=` value (`input=bogus`, an empty
 value, a `raw:` name that is not a valid field name) is skipped, and a run of it
 reports `script not permitted: its input mode '<value>' is not one of context,
 raw, raw:<name>, fields`. `/capabilities` lists each script's `input` mode.
 
-Executor support is not yet available: with `executor_socket` set, a run that
-carries input, or of a script whose mode is not `context`, is refused with
-`input requires executor support; not yet available`. Context-mode runs
-without input are unchanged.
+All three modes work with and without the executor. With the executor, the
+mode is taken from the executor's own reading of `scripts.conf`, as the path
+and profile are; the agent's reading only decides what it checks and sends
+first. The executor applies its own limits to what the agent hands it: at most
+32 fields, names as above, and at most 4194304 bytes (4 MiB) of values in
+total, so a `max_input_bytes` above 4 MiB on the agent is refused at the
+executor (`executor: input exceeds the executor's limit of 4194304 bytes`).
+A script the executor reads as `raw` or `fields` is refused if the request came
+from an agent too old to send input (`executor: script '<name>' takes
+input=fields but the agent sent no input ...`). An agent newer than its
+executor refuses a run that needs input with `ctrl-exec-executor does not
+support run input: it is older than this agent. Restart
+ctrl-exec-executor.service ...`; runs without input, of `input=context`
+scripts, still go through it unchanged.
 
 ---
 

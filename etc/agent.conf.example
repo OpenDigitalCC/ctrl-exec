@@ -73,10 +73,13 @@ ca   = /etc/ctrl-exec-agent/ca.crt
 executor_socket = /run/ctrl-exec-agent/exec.sock
 
 # Confidential run input (optional). max_input_bytes caps the total size of a
-# run request's input values (default 1048576). input_dir is the parent of the
-# private per-run directory used for scripts with input=fields when the agent runs
-# them itself (no executor); default the system temporary directory (the systemd
-# unit's PrivateTmp). See scripts.conf.example for the input= modes.
+# run request's input values (default 1048576); with executor_socket set, the
+# executor also refuses more than 4194304 bytes, so keep it at or below that.
+# input_dir is the parent of the private per-run directory used for scripts with
+# input=fields when the agent runs them itself (no executor); default the system
+# temporary directory (the systemd unit's PrivateTmp). With the executor the
+# directory is made by the executor under /run/ctrl-exec-agent/input instead.
+# See scripts.conf.example for the input= modes.
 # max_input_bytes = 1048576
 # input_dir = /tmp
 

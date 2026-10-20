@@ -7,9 +7,23 @@ package Exec::Agent::ExecClient;
 # before exec; this side only frames the request and parses the response.
 #
 # Wire framing (big-endian, length-prefixed throughout; see src/ctrl-exec-executor.c):
-#   request:  [u32 total][field reqid][field disp][field script][field stdin]
-#             [u32 argc] argc*[field arg]      where field = [u32 len][bytes]
-#   response: [i32 exit][field stdout][field stderr]
+#   request v1: [u32 total][field reqid][field disp][field script][field stdin]
+#               [u32 argc] argc*[field arg]      where field = [u32 len][bytes]
+#   request v2: [u32 total][u32 FRAME_V2_MAGIC][field reqid][field disp]
+#               [field script][field stdin][field context]
+#               [u32 argc] argc*[field arg]
+#               [u32 nfields] nfields*([field name][field value])
+#   response:   [i32 exit][field stdout][field stderr]
+#
+# v2 carries confidential run input (T-013): stdin is the context JSON for an
+# input=context script (with 'input' when there is input), context is the JSON
+# for CTRL_EXEC_CONTEXT (no input, no token), and the fields are the input as
+# UTF-8 bytes. The executor picks which to deliver from its own scripts.conf.
+# v1 is sent when there is nothing new to say (no input, and the script is
+# input=context here), so such runs work with an executor of either age. An
+# executor that predates v2 fails the magic as a field length and replies
+# "executor: malformed request" without running anything; run() reports that
+# as an executor without input support.
 
 use strict;
 use warnings;
@@ -48,6 +62,21 @@ sub probe ($path) {
 
 sub _field ($s) { pack('N', length $s) . $s }
 
+use constant {
+    FRAME_V2_MAGIC => 0xCE0E0002,
+    MAX_FRAME      => 16 * 1024 * 1024,    # the executor's request cap
+};
+
+# The old executor's reply to a frame it cannot parse.
+my $OLD_EXECUTOR_REPLY = "executor: malformed request\n";
+
+sub old_executor_message () {
+    return "ctrl-exec-executor does not support run input: it is older than this "
+         . "agent. Restart ctrl-exec-executor.service so the upgraded executor "
+         . "runs (input, and scripts declared input=raw, raw:<name> or fields, "
+         . "need it).";
+}
+
 sub _read_all ($sock, $n) {
     my $buf = '';
     while (length $buf < $n) {
@@ -65,9 +94,13 @@ sub _read_field ($sock) {
     return _read_all($sock, $len);
 }
 
-# run(%opts): socket, reqid, dispatcher_id, script, args (arrayref), stdin
-# Returns { exit, stdout, stderr } or { exit => -1, error => ... } on a
-# transport failure (so the caller can report it like any other run error).
+# run(%opts): socket, reqid, dispatcher_id, script, args (arrayref), stdin,
+# and for a v2 frame (T-013) context and/or input:
+#   context - the JSON for CTRL_EXEC_CONTEXT (bytes; no input, no token)
+#   input   - hashref of named string fields (character strings)
+# A v2 frame is sent when either is given. Returns { exit, stdout, stderr } or
+# { exit => -1, error => ... } on a transport failure or a refusal before the
+# executor ran anything (so the caller can report it like any other run error).
 sub run (%o) {
     my $path = $o{socket} or croak "socket required";
     my $script = defined $o{script} ? $o{script} : croak "script required";
@@ -75,14 +108,37 @@ sub run (%o) {
     my $stdin = defined $o{stdin} ? $o{stdin} : '';
     my $reqid = $o{reqid} // '';
     my $disp  = $o{dispatcher_id} // '';
+    my $v2    = defined $o{context} || defined $o{input};
+
+    my $inner;
+    if ($v2) {
+        my $input = $o{input} // {};
+        my $fields = '';
+        for my $name (sort keys %$input) {
+            my $bytes = $input->{$name};
+            utf8::encode($bytes);
+            $fields .= _field($name) . _field($bytes);
+        }
+        $inner = pack('N', FRAME_V2_MAGIC)
+               . _field($reqid) . _field($disp) . _field($script) . _field($stdin)
+               . _field($o{context} // '')
+               . pack('N', scalar @args) . join('', map { _field($_) } @args)
+               . pack('N', scalar keys %$input) . $fields;
+    }
+    else {
+        $inner = _field($reqid) . _field($disp) . _field($script) . _field($stdin)
+               . pack('N', scalar @args) . join('', map { _field($_) } @args);
+    }
+    # The executor drops a larger request without a reply; say why here.
+    return { exit => -1, error => 'request too large for the executor ('
+                                . length($inner) . ' bytes; the limit is ' . MAX_FRAME . ')' }
+        if length $inner > MAX_FRAME;
 
     my $sock = IO::Socket::UNIX->new(Peer => $path, Type => IO::Socket::UNIX::SOCK_STREAM())
         or return { exit => -1, error => unavailable_message($path, $! + 0),
                     executor_unavailable => 1 };
     binmode $sock;
 
-    my $inner = _field($reqid) . _field($disp) . _field($script) . _field($stdin)
-              . pack('N', scalar @args) . join('', map { _field($_) } @args);
     my $frame = pack('N', length $inner) . $inner;
 
     {
@@ -99,6 +155,9 @@ sub run (%o) {
     my $err  = _read_field($sock);
     return { exit => -1, error => 'truncated executor response' }
         unless defined $out && defined $err;
+
+    return { exit => -1, error => old_executor_message(), executor_no_input => 1 }
+        if $v2 && $exit == -1 && $out eq '' && $err eq $OLD_EXECUTOR_REPLY;
 
     return { exit => $exit, stdout => $out, stderr => $err };
 }
