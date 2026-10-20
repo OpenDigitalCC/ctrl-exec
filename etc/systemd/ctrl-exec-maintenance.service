@@ -4,6 +4,10 @@ Documentation=https://github.com/OpenDigitalCC/ctrl-exec
 After=network-online.target
 Wants=network-online.target
 
+# `maintain` runs every phase even if one fails, then exits 1 if any did, so a
+# failed phase leaves this unit in the "failed" state (visible in `systemctl
+# --failed` and to monitoring). Type=oneshot has no Restart=, so a failure is
+# not retried in a loop: the next attempt is the timer's next interval.
 [Service]
 Type=oneshot
 # Runs as root: signing a renewal needs the CA private key (/etc/ctrl-exec-dispatcher/ca.key,
