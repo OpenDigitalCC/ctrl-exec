@@ -41,7 +41,7 @@ require Exec::Agent::Server;
 require Exec::Log;
 my @logs;
 {
-    no warnings 'redefine';
+    no warnings qw(redefine once);
     *Exec::Log::log_action = sub { push @logs, { level => $_[0], %{ $_[1] } } };
 }
 my $JSON = JSON::PP->new->canonical;
@@ -165,9 +165,10 @@ sub read_as {
     if (!$pid) {
         close $r;
         POSIX::setgid($gid); $) = "$gid $gid"; POSIX::setuid($uid);
-        my $out = ($> == $uid && $< == $uid)
-            ? (open(my $fh, '<', $path) ? do { local $/; <$fh> } : "DENIED:" . ($! + 0))
-            : 'NODROP';
+        my ($fh, $out);
+        if ($> != $uid || $< != $uid)     { $out = 'NODROP' }
+        elsif (open $fh, '<', $path)       { local $/; $out = <$fh> // '' }
+        else                               { $out = 'DENIED:' . ($! + 0) }
         print $w $out; close $w; POSIX::_exit(0);
     }
     close $w; local $/; my $got = <$r>; waitpid $pid, 0;
