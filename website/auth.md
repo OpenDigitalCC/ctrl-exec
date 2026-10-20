@@ -157,7 +157,7 @@ exit 0
 In `ctrl-exec.conf`:
 
 ```ini
-auth_hook = /etc/ctrl-exec/hooks/auth.sh
+auth_hook = /etc/ctrl-exec-dispatcher/hooks/auth.sh
 ```
 
 In `agent.conf`:
@@ -169,7 +169,7 @@ auth_hook = /etc/ctrl-exec-agent/hooks/auth.sh
 The hook must be executable by the user running the dispatcher or the agent:
 
 ```bash
-chmod 750 /etc/ctrl-exec/hooks/auth.sh
+chmod 750 /etc/ctrl-exec-dispatcher/hooks/auth.sh
 ```
 
 # API Auth Default

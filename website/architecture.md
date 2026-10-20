@@ -71,7 +71,7 @@ sudo systemctl kill --signal=HUP ctrl-exec-agent
 
 State is divided into configuration and CA material (which must be backed up), runtime registry state (which must be replicated in HA deployments), and transient files (which are local to each instance and can be discarded).
 
-`/etc/ctrl-exec/`
+`/etc/ctrl-exec-dispatcher/`
 : CA key and certificate, dispatcher TLS key and certificate, auth hook. The CA key is the root of trust for the deployment — back it up to encrypted offline storage. Access to the CA key allows issuing arbitrary agent certificates.
 
 `/etc/ctrl-exec-agent/`

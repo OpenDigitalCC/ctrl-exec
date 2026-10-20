@@ -16,10 +16,10 @@ All persistent state is files on disk. The dispatcher holds no runtime state. Mu
 
 ## Must be shared or replicated
 
-`/etc/ctrl-exec/`
+`/etc/ctrl-exec-dispatcher/`
 : CA key and certificate, dispatcher TLS key and certificate. The CA key is the root of trust — access to it allows issuing arbitrary agent certificates. Transfer only over encrypted, host-authenticated channels.
 
-`/etc/ctrl-exec/ca.serial`
+`/etc/ctrl-exec-dispatcher/ca.serial`
 : Serial counter for certificate issuance. Must be consistent across all instances — concurrent signing against different copies produces duplicate serials.
 
 `/var/lib/ctrl-exec/agents/`
@@ -40,14 +40,14 @@ All persistent state is files on disk. The dispatcher holds no runtime state. Mu
 
 ## Shared filesystem
 
-Mount `/etc/ctrl-exec` and `/var/lib/ctrl-exec` on all dispatcher hosts via NFS or DRBD. All instances read and write the same files. For concurrent pairing operations, use DRBD with OCFS2 or GFS2 for cluster-safe locking on `ca.serial`.
+Mount `/etc/ctrl-exec-dispatcher` and `/var/lib/ctrl-exec` on all dispatcher hosts via NFS or DRBD. All instances read and write the same files. For concurrent pairing operations, use DRBD with OCFS2 or GFS2 for cluster-safe locking on `ca.serial`.
 
 ## Active/passive with rsync
 
 Rsync state from primary to standby after pairing or rotation events:
 
 ```bash
-rsync -az --delete /etc/ctrl-exec/ standby:/etc/ctrl-exec/
+rsync -az --delete /etc/ctrl-exec-dispatcher/ standby:/etc/ctrl-exec-dispatcher/
 rsync -az --delete /var/lib/ctrl-exec/agents/ standby:/var/lib/ctrl-exec/agents/
 rsync -az --delete /var/lib/ctrl-exec/rotation.json standby:/var/lib/ctrl-exec/rotation.json
 ```
@@ -103,7 +103,7 @@ Cert rotation
 All instances must present the new certificate before any agent processes its serial update. Procedure:
 
 1. Run `ced rotate-cert` on one designated node.
-2. Sync updated `/etc/ctrl-exec/` to all other instances immediately.
+2. Sync updated `/etc/ctrl-exec-dispatcher/` to all other instances immediately.
 3. Restart all instances:
    ```bash
    sudo systemctl restart ctrl-exec-api

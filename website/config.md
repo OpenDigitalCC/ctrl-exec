@@ -6,7 +6,7 @@ github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/CONFIG.md
 current_page: /config
 ---
 
-# /etc/ctrl-exec/ctrl-exec.conf
+# /etc/ctrl-exec-dispatcher/ctrl-exec.conf
 
 | Key | Default | Description |
 | --- | --- | --- |

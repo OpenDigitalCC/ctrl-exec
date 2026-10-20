@@ -68,7 +68,7 @@ If the CA key is suspected compromised:
 
 2. Back up existing state:
    ```bash
-   sudo cp -a /etc/ctrl-exec /etc/ctrl-exec.compromised.$(date +%Y%m%d)
+   sudo cp -a /etc/ctrl-exec-dispatcher /etc/ctrl-exec-dispatcher.compromised.$(date +%Y%m%d)
    ```
 
 3. Generate a new CA:
@@ -77,11 +77,11 @@ If the CA key is suspected compromised:
    sudo ced setup-ctrl-exec
    ```
 
-4. Distribute the new CA certificate to all agents. This cannot be done via the dispatcher — the agents no longer trust the new dispatcher certificate. Use out-of-band tooling to push `/etc/ctrl-exec/ca.crt` to `/etc/ctrl-exec-agent/ca.crt` on each agent.
+4. Distribute the new CA certificate to all agents. This cannot be done via the dispatcher — the agents no longer trust the new dispatcher certificate. Use out-of-band tooling to push `/etc/ctrl-exec-dispatcher/ca.crt` to `/etc/ctrl-exec-agent/ca.crt` on each agent.
 
 5. Re-pair all agents.
 
-After recovery, audit access to `/etc/ctrl-exec/ca.key` to determine the scope of the compromise. Consider restricting access with filesystem permissions and audit logging.
+After recovery, audit access to `/etc/ctrl-exec-dispatcher/ca.key` to determine the scope of the compromise. Consider restricting access with filesystem permissions and audit logging.
 
 # Auth Hook Hardening
 

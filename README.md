@@ -161,7 +161,7 @@ newgrp ctrl-exec           # apply the new group to this shell (or re-login)
 
 > **Auth hook.** The install ships an auth hook that allows every `run`/`ping`,
 > so this works out of the box - fine for a localhost/isolated trial. To restrict
-> who may run what, edit `/etc/ctrl-exec/auth-hook` with real rules (the file has
+> who may run what, edit `/etc/ctrl-exec-dispatcher/auth-hook` with real rules (the file has
 > commented examples); see *Auth Hook* in `INSTALL.md`.
 
 **2. Agent host - configure (do not start the service yet)**
@@ -232,7 +232,7 @@ curl -s http://localhost:7445/health
 
 The API uses the same auth hook as the CLI, and the shipped hook allows every
 request (step 1), so this works out of the box on the localhost bind. Edit
-`/etc/ctrl-exec/auth-hook` to restrict it. If you remove the hook entirely, the
+`/etc/ctrl-exec-dispatcher/auth-hook` to restrict it. If you remove the hook entirely, the
 API falls back to `api_auth_default` (default: `deny`) - set it to `allow` to
 permit requests without a hook. Either is read at startup, so restart the service
 after changing it.

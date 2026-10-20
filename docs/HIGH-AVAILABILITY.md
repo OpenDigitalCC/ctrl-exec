@@ -26,25 +26,25 @@ All ctrl-exec state is on the filesystem of the dispatcher host. There is
 no embedded database, no in-memory cluster state, and no daemon with
 persistent connections that must be preserved across restarts.
 
-`/etc/ctrl-exec/ca.key`
+`/etc/ctrl-exec-dispatcher/ca.key`
 : The CA private key. Root of trust for the entire deployment. This is the
   most sensitive file in the system — access to it allows issuing arbitrary
   agent certificates. Mode 0600, owned by root.
 
-`/etc/ctrl-exec/ca.crt`
+`/etc/ctrl-exec-dispatcher/ca.crt`
 : The CA certificate. Distributed to agents at pairing time and used by
   both the dispatcher and all agents to verify peer certificates.
 
-`/etc/ctrl-exec/ca.serial`
+`/etc/ctrl-exec-dispatcher/ca.serial`
 : The serial counter for cert issuance. Incremented on every signing
   operation (`sign_csr` in `CA.pm`). Must be consistent across all
   dispatcher instances — concurrent signing operations against different
   copies would produce duplicate serials.
 
-`/etc/ctrl-exec/dispatcher.key`
+`/etc/ctrl-exec-dispatcher/dispatcher.key`
 : The dispatcher's own private key.
 
-`/etc/ctrl-exec/dispatcher.crt`
+`/etc/ctrl-exec-dispatcher/dispatcher.crt`
 : The dispatcher's TLS certificate, signed by the CA. Its serial number is
   the value agents store as a key in their trusted-dispatcher map and check
   on every `/run`, `/ping`, `/result`, and `/capabilities` request. All
@@ -84,7 +84,7 @@ persistent connections that must be preserved across restarts.
 The paths that must be shared or replicated for active/passive or
 active/active operation are:
 
-- `/etc/ctrl-exec/` — all CA and cert material
+- `/etc/ctrl-exec-dispatcher/` — all CA and cert material
 - `/var/lib/ctrl-exec/agents/` — agent registry
 - `/var/lib/ctrl-exec/rotation.json` — rotation state
 
@@ -96,7 +96,7 @@ Lock files and run results are instance-local concerns.
 ### Shared filesystem
 
 The simplest approach for bare-metal or VM deployments is a shared
-filesystem mounted at `/etc/ctrl-exec` and `/var/lib/ctrl-exec` on all
+filesystem mounted at `/etc/ctrl-exec-dispatcher` and `/var/lib/ctrl-exec` on all
 dispatcher hosts. Both NFS and DRBD (in primary/secondary or dual-primary
 mode) work. All instances read and write the same files.
 
@@ -119,7 +119,7 @@ to the standby on a schedule or after each significant write:
 
 ```bash
 # Run on primary after pairing or rotation events
-rsync -az --delete /etc/ctrl-exec/ standby:/etc/ctrl-exec/
+rsync -az --delete /etc/ctrl-exec-dispatcher/ standby:/etc/ctrl-exec-dispatcher/
 rsync -az --delete /var/lib/ctrl-exec/agents/ standby:/var/lib/ctrl-exec/agents/
 rsync -az --delete /var/lib/ctrl-exec/rotation.json standby:/var/lib/ctrl-exec/rotation.json
 ```
@@ -141,7 +141,7 @@ after write operations. This is suitable when the fleet is managed from
 ephemeral dispatcher instances (e.g. autoscaling groups) and a shared NFS
 mount is inconvenient.
 
-The CA material (`/etc/ctrl-exec/`) should not be in object storage — the
+The CA material (`/etc/ctrl-exec-dispatcher/`) should not be in object storage — the
 CA key must remain in a secrets manager or encrypted block volume with
 audited access controls, not in a general-purpose object bucket.
 
@@ -328,10 +328,10 @@ Seamless rotation (0.9.0)
 Rotation procedure for HA:
 
 1. Run `ced rotate-cert` on one designated node. This generates the
-   new cert, writes it to `/etc/ctrl-exec/dispatcher.crt` and
-   `/etc/ctrl-exec/dispatcher.key`, and broadcasts the new serial to all
+   new cert, writes it to `/etc/ctrl-exec-dispatcher/dispatcher.crt` and
+   `/etc/ctrl-exec-dispatcher/dispatcher.key`, and broadcasts the new serial to all
    agents via their built-in `/rotate-serial` operation.
-2. Sync the updated `/etc/ctrl-exec/` to all other dispatcher instances. The
+2. Sync the updated `/etc/ctrl-exec-dispatcher/` to all other dispatcher instances. The
    old serial stays trusted through the overlap window, so an instance still
    presenting the old cert continues to be accepted while the sync and restarts
    roll through — there is no narrow window in which an unsynced instance is

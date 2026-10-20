@@ -90,7 +90,7 @@ forwarding* below); they are inert unless `SYSLOG_HOST` is set at runtime.
 #!/bin/sh
 set -e
 
-CONF_DIR=/etc/ctrl-exec
+CONF_DIR=/etc/ctrl-exec-dispatcher
 CONF_FILE="$CONF_DIR/ctrl-exec.conf"
 
 # --- First-start initialisation ---
@@ -98,7 +98,7 @@ CONF_FILE="$CONF_DIR/ctrl-exec.conf"
 # files on the volume are never overwritten.
 
 # Generate ctrl-exec.conf from environment variables if not present.
-# Mount a config file at /etc/ctrl-exec/ctrl-exec.conf to override entirely.
+# Mount a config file at /etc/ctrl-exec-dispatcher/ctrl-exec.conf to override entirely.
 if [ ! -f "$CONF_FILE" ]; then
     echo "[entrypoint] Generating ctrl-exec.conf..."
     cat > "$CONF_FILE" << EOF
@@ -323,9 +323,9 @@ When no hook is present, `api_auth_default` governs — `deny` rejects all
 requests, `allow` permits all requests.
 
 On first start the entrypoint copies the example hook to
-`/etc/ctrl-exec/auth-hook.example` on the volume for reference. It is not
+`/etc/ctrl-exec-dispatcher/auth-hook.example` on the volume for reference. It is not
 installed as the active hook — the operator must place a real policy hook
-at `/etc/ctrl-exec/auth-hook` when ready.
+at `/etc/ctrl-exec-dispatcher/auth-hook` when ready.
 
 To install a hook from the host:
 
@@ -333,9 +333,9 @@ To install a hook from the host:
 services:
   dispatcher:
     volumes:
-      - dispatcher-data:/etc/ctrl-exec
+      - dispatcher-data:/etc/ctrl-exec-dispatcher
       - dispatcher-registry:/var/lib/ctrl-exec
-      - ./auth-hook:/etc/ctrl-exec/auth-hook:ro
+      - ./auth-hook:/etc/ctrl-exec-dispatcher/auth-hook:ro
 ```
 
 See `INSTALL.md` for the full auth hook interface and examples.
@@ -361,9 +361,9 @@ services:
       - "7444:7444"   # pairing - expose only when actively pairing
       - "7445:7445"   # API
     volumes:
-      - dispatcher-data:/etc/ctrl-exec
+      - dispatcher-data:/etc/ctrl-exec-dispatcher
       - dispatcher-registry:/var/lib/ctrl-exec
-      # - ./auth-hook:/etc/ctrl-exec/auth-hook:ro   # optional host-mounted hook
+      # - ./auth-hook:/etc/ctrl-exec-dispatcher/auth-hook:ro   # optional host-mounted hook
 
 volumes:
   dispatcher-data:
@@ -569,7 +569,7 @@ services:
     ports:
       - "7445:7445"
     volumes:
-      - dispatcher-data:/etc/ctrl-exec
+      - dispatcher-data:/etc/ctrl-exec-dispatcher
       - dispatcher-registry:/var/lib/ctrl-exec
     networks:
       - ctrl-exec-net
@@ -747,14 +747,14 @@ start via the entrypoint script:
 ```bash
 #!/bin/sh
 # Retrieve CA key from secrets manager before starting
-if [ ! -f /etc/ctrl-exec/ca.key ]; then
+if [ ! -f /etc/ctrl-exec-dispatcher/ca.key ]; then
     echo "[entrypoint] Fetching CA key from secrets manager..."
     # Example: AWS Secrets Manager
     aws secretsmanager get-secret-value \
         --secret-id ctrl-exec/ca-key \
         --query SecretString \
-        --output text > /etc/ctrl-exec/ca.key
-    chmod 600 /etc/ctrl-exec/ca.key
+        --output text > /etc/ctrl-exec-dispatcher/ca.key
+    chmod 600 /etc/ctrl-exec-dispatcher/ca.key
 fi
 ```
 
@@ -783,7 +783,7 @@ At minimum, ensure:
 
 ```bash
 # Backup CA key after first start
-docker exec dispatcher cat /etc/ctrl-exec/ca.key \
+docker exec dispatcher cat /etc/ctrl-exec-dispatcher/ca.key \
     | gpg --symmetric --cipher-algo AES256 \
     > ca.key.gpg
 # Store ca.key.gpg in offline/offsite storage

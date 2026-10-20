@@ -102,7 +102,7 @@ function-based design
 
 ## Certificate Layout
 
-dispatcher host (`/etc/ctrl-exec/`)
+dispatcher host (`/etc/ctrl-exec-dispatcher/`)
 
 ```
 ca.key          CA private key (0600, root only, never leaves this host)
@@ -206,7 +206,7 @@ delegated to the system `openssl` binary - no Perl crypto modules used.
 Functions:
 
 `generate_ca(%opts)`
-: Generates `ca.key` and `ca.crt` in `ca_dir` (default `/etc/ctrl-exec`).
+: Generates `ca.key` and `ca.crt` in `ca_dir` (default `/etc/ctrl-exec-dispatcher`).
   Dies if CA already exists unless `force => 1`. Sets `ca.key` to mode 0600.
   Options: `days` (default 3650), `bits` (default 4096), `cn`, `ca_dir`, `force`.
 
@@ -1059,7 +1059,7 @@ Modes:
 
 `setup-ca`
 : Calls `Exec::CA::generate_ca()`. One-time operation on the dispatcher
-  host. Creates the CA key and cert in `/etc/ctrl-exec/`.
+  host. Creates the CA key and cert in `/etc/ctrl-exec-dispatcher/`.
 
 `setup-ctrl-exec`
 : Calls `Exec::CA::generate_dispatcher_cert()`. Generates the

@@ -22,7 +22,7 @@ Agent scripts
 : Scripts deployed to agent hosts and added to the allowlist. Common tasks across Linux systems, OpenWrt, databases, and web servers.
 
 Auth hooks
-: Hook implementations for common identity systems: LDAP, OIDC, token registries, time-of-day restrictions. Drop into `/etc/ctrl-exec/hooks/` or `/etc/ctrl-exec-agent/hooks/` and configure `auth_hook` in the relevant conf file.
+: Hook implementations for common identity systems: LDAP, OIDC, token registries, time-of-day restrictions. Drop into `/etc/ctrl-exec-dispatcher/hooks/` or `/etc/ctrl-exec-agent/hooks/` and configure `auth_hook` in the relevant conf file.
 
 Management interfaces
 : Browser-based API UIs, client libraries, and OpenAPI collection files. Run on the dispatcher host or externally. Consume `ctrl-exec-api`.

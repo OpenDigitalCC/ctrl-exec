@@ -349,12 +349,12 @@ Agent-side hook
 ## File Permissions
 
 ```
-/etc/ctrl-exec/ca.key              0600  root         CA private key
-/etc/ctrl-exec/ca.crt              0644  root         CA certificate
-/etc/ctrl-exec/dispatcher.key      0600  ctrl-exec    dispatcher private key (API service user reads it; root also can)
-/etc/ctrl-exec/dispatcher.crt      0644  root         dispatcher certificate
-/etc/ctrl-exec/auth-hook           0755  root         Auth hook executable
-/etc/ctrl-exec/                    0750  root:ctrl-exec
+/etc/ctrl-exec-dispatcher/ca.key              0600  root         CA private key
+/etc/ctrl-exec-dispatcher/ca.crt              0644  root         CA certificate
+/etc/ctrl-exec-dispatcher/dispatcher.key      0600  ctrl-exec    dispatcher private key (API service user reads it; root also can)
+/etc/ctrl-exec-dispatcher/dispatcher.crt      0644  root         dispatcher certificate
+/etc/ctrl-exec-dispatcher/auth-hook           0755  root         Auth hook executable
+/etc/ctrl-exec-dispatcher/                    0750  root:ctrl-exec
 
 /etc/ctrl-exec-agent/agent.key     0640  root:ctrl-exec-agent
 /etc/ctrl-exec-agent/agent.crt     0640  root:ctrl-exec-agent
@@ -649,7 +649,7 @@ systemctl reload ctrl-exec-agent
 
 To revoke a cert:
 
-1. Obtain the serial: `openssl x509 -noout -serial -in /etc/ctrl-exec/dispatcher.crt`
+1. Obtain the serial: `openssl x509 -noout -serial -in /etc/ctrl-exec-dispatcher/dispatcher.crt`
 2. Append the output directly to `/etc/ctrl-exec-agent/revoked-serials` on each
    affected agent - no format conversion needed, `serial=DEADBEEF` is accepted as-is
 3. Reload: `systemctl reload ctrl-exec-agent`
@@ -689,7 +689,7 @@ compromised, an attacker can issue valid agent certs and connect to any agent.
 
 Recommended practices:
 
-- Back up `/etc/ctrl-exec/ca.key` to encrypted offline storage immediately
+- Back up `/etc/ctrl-exec-dispatcher/ca.key` to encrypted offline storage immediately
   after `setup-ca`
 - Restrict access to the dispatcher host itself; the CA key should not be
   accessible over the network

@@ -237,6 +237,30 @@ upgrade - a service that was stopped is not started by the upgrade (see the next
 entry).
 
 
+### Upgrading to 0.13: the executor and the dispatcher config directory were renamed
+
+0.13 renames two things so that every part of ctrl-exec is named
+`ctrl-exec-<part>`. Upgrading with `install.sh` or the packages migrates an
+existing install; no manual steps are needed.
+
+- The executor `ctrl-exec-exec` is now `ctrl-exec-executor` (binary, and
+  `ctrl-exec-executor.service`). The old unit is stopped and disabled, and its
+  unit file and binary removed; the new unit is enabled and started if the old
+  one was. `executor_socket` and the socket path in `agent.conf` are unchanged.
+- The dispatcher's config directory `/etc/ctrl-exec/` is now
+  `/etc/ctrl-exec-dispatcher/`, matching `/etc/ctrl-exec-agent/`. An existing
+  directory is moved, the paths inside `ctrl-exec.conf` are updated (the old file
+  is kept as `ctrl-exec.conf.pre-0.13`), and `/etc/ctrl-exec` is left as a symlink
+  to the new directory for this release. **The symlink is removed in 0.14**, so
+  update any script, mount or backup job that names `/etc/ctrl-exec`.
+
+If the dispatcher logs `using the legacy config directory /etc/ctrl-exec`, the
+move has not happened on this host: only the old directory exists. It still
+works; run the installer or package upgrade, or move the directory yourself and
+leave the symlink. If both directories exist, the new one is used and the old one
+is left alone - merge anything you still need from it and remove it.
+
+
 ### "Failed to stop ... Unit not loaded" during install
 
 If you see a message like `Failed to stop ctrl-exec-executor.service: Unit

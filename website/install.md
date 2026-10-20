@@ -98,7 +98,7 @@ The installer detects Debian/Ubuntu or Alpine automatically and installs to the 
 /usr/local/bin/ctrl-exec-agent         cea binary
 /usr/local/bin/ctrl-exec-api           API server binary
 /usr/local/lib/ctrl-exec/              Perl library modules
-/etc/ctrl-exec/                        dispatcher config and CA material
+/etc/ctrl-exec-dispatcher/                        dispatcher config and CA material
 /etc/ctrl-exec-agent/                  Agent config and certificates
 /opt/ctrl-exec-scripts/                Managed scripts (agent hosts)
 /var/lib/ctrl-exec/                    Runtime state: registry, locks, runs
@@ -213,7 +213,7 @@ First-start initialisation entrypoint:
 ```bash
 #!/bin/sh
 set -e
-CONF_DIR=/etc/ctrl-exec
+CONF_DIR=/etc/ctrl-exec-dispatcher
 if [ ! -f "$CONF_DIR/ca.crt" ]; then
     ced setup-ca
     ced setup-ctrl-exec
@@ -250,7 +250,7 @@ services:
     ports:
       - "7445:7445"
     volumes:
-      - ctrl-exec-data:/etc/ctrl-exec
+      - ctrl-exec-data:/etc/ctrl-exec-dispatcher
       - ctrl-exec-registry:/var/lib/ctrl-exec
     networks:
       - ctrl-exec-net

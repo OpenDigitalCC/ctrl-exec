@@ -119,12 +119,12 @@ For a quick manual check on any deployment, configure a minimal hook that logs
 to syslog and permits all requests:
 
 ```bash
-cat > /etc/ctrl-exec/auth-hook << 'EOF'
+cat > /etc/ctrl-exec-dispatcher/auth-hook << 'EOF'
 #!/bin/sh
 logger -t ctrl-exec-auth "hook called: SCRIPT=$ENVEXEC_SCRIPT USER=$ENVEXEC_USERNAME"
 exit 0
 EOF
-chmod 755 /etc/ctrl-exec/auth-hook
+chmod 755 /etc/ctrl-exec-dispatcher/auth-hook
 ```
 
 Run a script, then check the log on the agent host:
@@ -269,7 +269,7 @@ agent.
 
 ```bash
 # Obtain the dispatcher cert serial
-openssl x509 -noout -serial -in /etc/ctrl-exec/dispatcher.crt \
+openssl x509 -noout -serial -in /etc/ctrl-exec-dispatcher/dispatcher.crt \
     | sed 's/serial=//' | tr 'A-F' 'a-f'
 
 # Add to revoked-serials on the agent and reload

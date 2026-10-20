@@ -417,7 +417,7 @@ Additional fields by variant
 ```
 ACTION=auth RESULT=pass AUTHACTION=run USER=alice IP=127.0.0.1
 ACTION=auth RESULT=deny REASON=denied AUTHACTION=run USER=alice IP=127.0.0.1
-ACTION=auth RESULT=error REASON=hook-not-executable HOOK=/etc/ctrl-exec/auth-hook IP=127.0.0.1
+ACTION=auth RESULT=error REASON=hook-not-executable HOOK=/etc/ctrl-exec-dispatcher/auth-hook IP=127.0.0.1
 ```
 
 ### pair-denied (dispatcher-side)

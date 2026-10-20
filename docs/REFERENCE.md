@@ -29,7 +29,7 @@ ctrl-exec-dispatcher <mode> [options] [args]
 These options apply to all modes.
 
 `--config <path>`
-: Path to `ctrl-exec.conf`. Default: `/etc/ctrl-exec/ctrl-exec.conf`.
+: Path to `ctrl-exec.conf`. Default: `/etc/ctrl-exec-dispatcher/ctrl-exec.conf`.
 
 `--port <n>`
 : Override the default agent port (7443) for all hosts in this invocation.
@@ -457,7 +457,7 @@ on the dispatcher host before any pairing.
 ced setup-ca
 ```
 
-Writes to `/etc/ctrl-exec/`. Does not overwrite an existing CA.
+Writes to `/etc/ctrl-exec-dispatcher/`. Does not overwrite an existing CA.
 
 ---
 
@@ -476,7 +476,7 @@ will need re-pairing.
 ced setup-ctrl-exec
 ```
 
-Writes to `/etc/ctrl-exec/`.
+Writes to `/etc/ctrl-exec-dispatcher/`.
 
 ---
 
@@ -525,7 +525,7 @@ Status values:
 ## ctrl-exec.conf
 
 Configuration file for the dispatcher and ctrl-exec-api processes.
-Default path: `/etc/ctrl-exec/ctrl-exec.conf`.
+Default path: `/etc/ctrl-exec-dispatcher/ctrl-exec.conf`.
 
 Key settings:
 
@@ -1260,7 +1260,7 @@ service (`ctrl-exec-api.service`) and listens on `api_port` (default 7445).
 Start manually for testing:
 
 ```bash
-ctrl-exec-api --config /etc/ctrl-exec/ctrl-exec.conf
+ctrl-exec-api --config /etc/ctrl-exec-dispatcher/ctrl-exec.conf
 ```
 
 TLS is enabled if `api_cert` and `api_key` are set in `ctrl-exec.conf`

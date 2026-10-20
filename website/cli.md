@@ -11,7 +11,7 @@ current_page: /cli
 # Global Options
 
 `--config <path>`
-: Path to `ctrl-exec.conf`. Default: `/etc/ctrl-exec/ctrl-exec.conf`.
+: Path to `ctrl-exec.conf`. Default: `/etc/ctrl-exec-dispatcher/ctrl-exec.conf`.
 
 `--port <n>`
 : Override the default agent port (7443) for all hosts in this invocation. Individual hosts can also specify a port with `<host>:<port>` syntax.
@@ -185,7 +185,7 @@ Removes an agent from the registry. The agent certificate remains valid until na
 sudo ced setup-ca
 ```
 
-Initialises the CA. One-time operation on a new ctrl-exec installation. Writes `ca.key` and `ca.crt` to `/etc/ctrl-exec/`. The CA key is the root of trust for the deployment — back it up to encrypted offline storage immediately after creation.
+Initialises the CA. One-time operation on a new ctrl-exec installation. Writes `ca.key` and `ca.crt` to `/etc/ctrl-exec-dispatcher/`. The CA key is the root of trust for the deployment — back it up to encrypted offline storage immediately after creation.
 
 # setup-ctrl-exec
 

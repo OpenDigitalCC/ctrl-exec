@@ -65,7 +65,7 @@ sudo ced setup-ca
 sudo ced setup-ctrl-exec
 ```
 
-The CA key at `/etc/ctrl-exec/ca.key` is the root of trust for the deployment. Back it up to encrypted offline storage before proceeding.
+The CA key at `/etc/ctrl-exec-dispatcher/ca.key` is the root of trust for the deployment. Back it up to encrypted offline storage before proceeding.
 
 # Start Pairing Mode
 

@@ -82,7 +82,7 @@ Show the control-host serial and per-agent serial state.
 Path to
 .BR ctrl-exec.conf .
 Default:
-.IR /etc/ctrl-exec/ctrl-exec.conf .
+.IR /etc/ctrl-exec-dispatcher/ctrl-exec.conf .
 .TP
 .BI \-\-port " n"
 Override the agent port (7443) for all hosts in this invocation.
@@ -101,10 +101,10 @@ Output results as JSON.
 Print the version and exit.
 .SH FILES
 .TP
-.I /etc/ctrl-exec/ctrl-exec.conf
+.I /etc/ctrl-exec-dispatcher/ctrl-exec.conf
 Control-host configuration.
 .TP
-.I /etc/ctrl-exec/auth-hook
+.I /etc/ctrl-exec-dispatcher/auth-hook
 Optional executable authorising
 .B run
 and

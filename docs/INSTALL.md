@@ -80,7 +80,7 @@ sudo apt install ./ctrl-exec-common_*.deb ./ctrl-exec-agent_*.deb
 Use `apt install ./<file>.deb` rather than `dpkg -i`: apt resolves the runtime
 dependencies (libwww-perl, libio-socket-ssl-perl, libjson-perl, openssl) from
 your configured sources, whereas `dpkg -i` fails if they are not already
-present. The packages seed example config into `/etc/ctrl-exec` and
+present. The packages seed example config into `/etc/ctrl-exec-dispatcher` and
 `/etc/ctrl-exec-agent`, create the `ctrl-exec` group, and install the systemd
 units **without enabling or starting them** — you start the agent only after
 pairing (see *Initial Setup*).
@@ -114,15 +114,17 @@ identical.
 ```
 /usr/local/bin/{ctrl-exec-dispatcher, ced, ctrl-exec-agent, ctrl-exec-api}
                                    the CLIs (packages: /usr/bin)
+/usr/local/sbin/ctrl-exec-executor the privileged executor, agent hosts (packages: /usr/sbin)
 /usr/local/lib/ctrl-exec/          Perl library (packages: /usr/share/perl5/Exec)
-/etc/ctrl-exec/                    dispatcher config, CA material, auth hook
+/etc/ctrl-exec-dispatcher/         dispatcher config, CA material, auth hook
 /etc/ctrl-exec-agent/              agent config and certs
 /opt/ctrl-exec-scripts/            managed scripts on agent hosts
 /var/lib/ctrl-exec/pairing/        pending pairing requests
 /var/lib/ctrl-exec/agents/         agent registry
 /var/lib/ctrl-exec/locks/          concurrency lock files (transient)
-ctrl-exec-agent.service            systemd unit (tarball: /etc/systemd/system;
-ctrl-exec-api.service              packages: /usr/lib/systemd/system)
+ctrl-exec-agent.service            systemd units (tarball: /etc/systemd/system;
+ctrl-exec-executor.service         packages: /usr/lib/systemd/system)
+ctrl-exec-api.service
 ```
 
 The tarball installer stamps the release version from the `VERSION` file into
@@ -185,19 +187,19 @@ Generate the dispatcher's own certificate:
 sudo ced setup-ctrl-exec
 ```
 
-Both commands write to `/etc/ctrl-exec/`. The CA private key (`ca.key`) is
+Both commands write to `/etc/ctrl-exec-dispatcher/`. The CA private key (`ca.key`) is
 set 0600 and must not leave this host. Back it up to encrypted offline storage.
 
 ### 2. Configure the dispatcher
 
-Edit `/etc/ctrl-exec/ctrl-exec.conf`:
+Edit `/etc/ctrl-exec-dispatcher/ctrl-exec.conf`:
 
 ```ini
 port      = 7443
-cert      = /etc/ctrl-exec/dispatcher.crt
-key       = /etc/ctrl-exec/dispatcher.key
-ca        = /etc/ctrl-exec/ca.crt
-auth_hook = /etc/ctrl-exec/auth-hook
+cert      = /etc/ctrl-exec-dispatcher/dispatcher.crt
+key       = /etc/ctrl-exec-dispatcher/dispatcher.key
+ca        = /etc/ctrl-exec-dispatcher/ca.crt
+auth_hook = /etc/ctrl-exec-dispatcher/auth-hook
 
 # Cert lifetime for new and renewed agent certs (days)
 cert_days = 365
@@ -569,14 +571,14 @@ curl -s http://localhost:7445/discovery | python3 -m json.tool
 
 ### API TLS
 
-Add to `/etc/ctrl-exec/ctrl-exec.conf`:
+Add to `/etc/ctrl-exec-dispatcher/ctrl-exec.conf`:
 
 ```ini
-api_cert = /etc/ctrl-exec/dispatcher.crt
-api_key  = /etc/ctrl-exec/dispatcher.key
+api_cert = /etc/ctrl-exec-dispatcher/dispatcher.crt
+api_key  = /etc/ctrl-exec-dispatcher/dispatcher.key
 ```
 
-Restart the API service. Clients use `--cacert /etc/ctrl-exec/ca.crt` or a
+Restart the API service. Clients use `--cacert /etc/ctrl-exec-dispatcher/ca.crt` or a
 certificate from a public CA if clients do not have the private CA cert.
 
 
@@ -660,17 +662,17 @@ validation in zero-trust or multi-dispatcher deployments.
 
 ## Configuration Reference
 
-### `/etc/ctrl-exec/ctrl-exec.conf`
+### `/etc/ctrl-exec-dispatcher/ctrl-exec.conf`
 
 ```ini
 port      = 7443                          # mTLS port agents connect to
-cert      = /etc/ctrl-exec/dispatcher.crt
-key       = /etc/ctrl-exec/dispatcher.key
-ca        = /etc/ctrl-exec/ca.crt
-auth_hook = /etc/ctrl-exec/auth-hook     # optional
+cert      = /etc/ctrl-exec-dispatcher/dispatcher.crt
+key       = /etc/ctrl-exec-dispatcher/dispatcher.key
+ca        = /etc/ctrl-exec-dispatcher/ca.crt
+auth_hook = /etc/ctrl-exec-dispatcher/auth-hook     # optional
 api_port  = 7445                          # API server port
-api_cert  = /etc/ctrl-exec/dispatcher.crt  # optional, enables TLS on API
-api_key   = /etc/ctrl-exec/dispatcher.key  # optional
+api_cert  = /etc/ctrl-exec-dispatcher/dispatcher.crt  # optional, enables TLS on API
+api_key   = /etc/ctrl-exec-dispatcher/dispatcher.key  # optional
 cert_days = 365                           # lifetime for new/renewed agent certs
 ```
 
@@ -817,8 +819,8 @@ On the primary dispatcher after `setup-ca` and `setup-ctrl-exec`:
 
 ```bash
 # Transfer CA material to secondary over a secure channel
-sudo scp /etc/ctrl-exec/ca.key root@secondary:/etc/ctrl-exec/ca.key
-sudo scp /etc/ctrl-exec/ca.crt root@secondary:/etc/ctrl-exec/ca.crt
+sudo scp /etc/ctrl-exec-dispatcher/ca.key root@secondary:/etc/ctrl-exec-dispatcher/ca.key
+sudo scp /etc/ctrl-exec-dispatcher/ca.crt root@secondary:/etc/ctrl-exec-dispatcher/ca.crt
 ```
 
 On the secondary:
@@ -915,7 +917,7 @@ sudo ./install.sh --uninstall
 Config, certs, and the agent registry are preserved. To remove everything:
 
 ```bash
-sudo rm -rf /etc/ctrl-exec-agent /etc/ctrl-exec
+sudo rm -rf /etc/ctrl-exec-agent /etc/ctrl-exec-dispatcher /etc/ctrl-exec
 sudo rm -rf /var/lib/ctrl-exec /opt/ctrl-exec-scripts
 # Debian
 sudo userdel ctrl-exec-agent && sudo groupdel ctrl-exec

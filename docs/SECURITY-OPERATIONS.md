@@ -297,7 +297,7 @@ Recovery procedure:
 
    ```bash
    # Back up the compromised material first for forensics
-   cp -a /etc/ctrl-exec /etc/ctrl-exec.compromised.$(date +%Y%m%d)
+   cp -a /etc/ctrl-exec-dispatcher /etc/ctrl-exec-dispatcher.compromised.$(date +%Y%m%d)
 
    ced setup-ca   # generates new CA key and cert
    ced setup-ctrl-exec  # generates new dispatcher cert signed by new CA
@@ -305,7 +305,7 @@ Recovery procedure:
 
 3. Distribute the new CA cert to all agents. This cannot be done via ctrl-exec
    (the agents do not trust the new CA yet). Use SSH or configuration
-   management tooling to push `/etc/ctrl-exec/ca.crt` to
+   management tooling to push `/etc/ctrl-exec-dispatcher/ca.crt` to
    `/etc/ctrl-exec-agent/ca.crt` on each agent.
 
 4. Re-pair every agent. The agent certs signed by the old CA are no longer
@@ -321,7 +321,7 @@ Recovery procedure:
    Ensure the old CA cert is removed from all trust stores.
 
 6. Investigate how the CA key was accessed: review dispatcher host auth logs,
-   check for unauthorised access to `/etc/ctrl-exec/ca.key`, and determine
+   check for unauthorised access to `/etc/ctrl-exec-dispatcher/ca.key`, and determine
    the scope of the compromise before returning to normal operations.
 
 This procedure affects the entire fleet. Test the re-pairing path before a
