@@ -223,6 +223,45 @@ subtest 'fields: directory removed after the script is killed' => sub {
     is leftovers(), 0, 'nothing left in input_dir';
 };
 
+subtest 'the body limit admits a full-size input and refuses beyond it' => sub {
+    my $big  = 'a' x 1_048_576;   # exactly max_input_bytes: body is over 1 MiB
+    my $body = $JSON->encode({ script => 'ctx', args => [], reqid => 'big', username => 'u',
+                               input => { key => $big } });
+    ok length($body) > 1_048_576, 'body is larger than the old 1 MiB limit';
+    my ($client, $server) = IO::Socket::UNIX->socketpair(
+        IO::Socket::AF_UNIX(), IO::Socket::SOCK_STREAM(), 0) or die "socketpair: $!";
+    my $pid = fork // die "fork: $!";
+    if (!$pid) {   # writer: the request is larger than the socket buffer
+        $server->close;
+        print $client "POST /run HTTP/1.0\r\nContent-Length: " . length($body) . "\r\n\r\n$body";
+        $client->shutdown(1);
+        local $/; my $resp = <$client> // '';
+        $resp =~ s/\A.*?\r\n\r\n//s;
+        my $r = eval { JSON::PP::decode_json($resp) } // {};
+        exit(defined $r->{exit} && $r->{exit} == 0 ? 0 : 1);
+    }
+    $client->close;
+    Exec::Agent::Server::handle_connection(
+        $server, '10.0.0.5', $allowlist, \%config, {},
+        { deadbeef => 'disp-1' }, 'deadbeef', {}, '9.9.9', $skipped,
+    );
+    $server->close;
+    waitpid $pid, 0;
+    is $? >> 8, 0, 'a 1 MiB input runs';
+
+    ($client, $server) = IO::Socket::UNIX->socketpair(
+        IO::Socket::AF_UNIX(), IO::Socket::SOCK_STREAM(), 0) or die "socketpair: $!";
+    print $client "POST /run HTTP/1.0\r\nContent-Length: " . (2 * 1_048_576 + 1) . "\r\n\r\n";
+    $client->shutdown(1);
+    Exec::Agent::Server::handle_connection(
+        $server, '10.0.0.5', $allowlist, \%config, {},
+        { deadbeef => 'disp-1' }, 'deadbeef', {}, '9.9.9', $skipped,
+    );
+    $server->close;
+    local $/; my $resp = <$client> // '';
+    like $resp, qr/\A\S+ 413 /, 'beyond 1 MiB plus max_input_bytes: 413 before reading';
+};
+
 subtest 'bad shapes are refused before the hook and exec' => sub {
     my %bad = (
         'not an object'   => [ ['a'], qr/must be an object/ ],

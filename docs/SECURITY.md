@@ -865,10 +865,12 @@ TLS version and cipher restriction
   and the API server (when TLS is enabled) - so it cannot drift between them.
 
 Request body size limit
-: The agent limits incoming request bodies to 1 MB. Any request declaring a
+: The agent and the API limit incoming request bodies to 1 MiB plus
+  `max_input_bytes` (default 1 MiB, so 2 MiB). Any request declaring a
   `Content-Length` above this threshold is rejected with HTTP 413 before the
-  body is read. No legitimate dispatcher request approaches this limit - the
-  largest legitimate body (a `/renew-complete` cert delivery) is under 10 KB.
+  body is read. Without confidential run input no legitimate request
+  approaches 1 MiB - the largest (a `/renew-complete` cert delivery) is under
+  10 KB.
 
 HTTP header count limit
 : The agent limits incoming requests to 32 header lines. Any request exceeding
@@ -953,7 +955,7 @@ limitations, Docker-specific notes), see SECURITY-OPERATIONS.md.
 | API host count exhaustion | 500-host ceiling per request (fixed Engine limit; not user-configurable) |
 | Port scan or TLS probe from unexpected host | IP allowlist (`allowed_ips` in `agent.conf`); connection closed before any request |
 | TLS downgrade or weak cipher negotiation | TLS 1.2 minimum; ECDHE+AEAD ciphers only; CBC, RC4, export-grade excluded |
-| Memory exhaustion via large request body | Body size limit: 1 MB ceiling checked before read; 413 returned on excess |
+| Memory exhaustion via large request body | Body size limit: 1 MiB plus `max_input_bytes` checked before read; 413 returned on excess |
 | Privilege escalation via allowlisted script | Per-script profile bounds run_as + capabilities (executor); on the front-end, empty `CapabilityBoundingSet`, `MemoryDenyWriteExecute`, restricted syscall filter |
 | Namespace escape from agent process | `RestrictNamespaces=yes` in agent systemd unit |
 | Unauthorised API access (no hook) | `api_auth_default = deny` blocks all requests by default |

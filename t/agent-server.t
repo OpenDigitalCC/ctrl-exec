@@ -108,10 +108,10 @@ subtest 'too many headers -> 431' => sub {
 };
 
 subtest 'oversized body -> 413' => sub {
-    my $req = "POST /run HTTP/1.0\r\nContent-Length: 2000000\r\n\r\n";
+    my $req = "POST /run HTTP/1.0\r\nContent-Length: 3000000\r\n\r\n";
     my $resp = drive(request => $req, peer_serial => 'deadbeef',
                      trusted => { deadbeef => 'disp-1' });
-    like $resp, qr{^HTTP/1\.0 413 }, 'a body over 1 MiB is rejected with 413';
+    like $resp, qr{^HTTP/1\.0 413 }, 'a body over 1 MiB plus max_input_bytes is rejected with 413';
 };
 
 # --- handle_connection: the gate is wired into /run --------------------------

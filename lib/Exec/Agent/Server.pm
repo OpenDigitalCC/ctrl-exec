@@ -96,7 +96,8 @@ sub handle_connection ($conn, $peer, $allowlist, $config, $revoked, $trusted, $p
     # Read body
     my $body = '';
     if (my $len = $headers{'content-length'}) {
-        if ($len > 1_048_576) {
+        # Room for confidential run input (T-013); same limit as the API.
+        if ($len > Exec::Input::max_body($config)) {
             _send_raw($conn, 413, encode_json({ error => 'request too large' }));
             return;
         }
@@ -247,10 +248,7 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
     # any hook or exec. Errors name fields, never values; nothing below logs,
     # records or forwards the values except the delivery to the script.
     my $input = $data->{input};
-    my $max_input = $config->{max_input_bytes};
-    $max_input = Exec::Input::DEFAULT_MAX_BYTES
-        unless defined $max_input && $max_input =~ /\A[1-9][0-9]*\z/;
-    my $iv = Exec::Input::validate($input, $max_input);
+    my $iv = Exec::Input::validate($input, Exec::Input::max_bytes($config));
     unless ($iv->{ok}) {
         Exec::Log::log_action('WARNING', {
             ACTION => 'deny', REASON => 'invalid input', SCRIPT => $name,
@@ -511,7 +509,7 @@ sub _input_mode_problem ($mode, $names) {
         return "script takes input=raw:$want but input field '$want' is missing"
             unless grep { $_ eq $want } @$names;
     }
-    return undef;
+    return;
 }
 
 sub handle_ping ($conn, $body, $peer, $config, $trusted, $peer_serial, $version) {
