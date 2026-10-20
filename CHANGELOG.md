@@ -32,6 +32,16 @@ task group, each adding its bullets to this entry.
   old `/etc/ctrl-exec/` exists (a half-migrated host) it is still found, with a
   warning; where both exist the new one wins (`Exec::DispatcherConfig::conf_dir`).
   The `ctrl-exec` group and user, and `/var/lib/ctrl-exec/`, are unchanged. (T-008)
+- **Changed** upgrades of existing installs, with no manual steps (`install.sh`
+  and the `.deb` packages alike). Dispatcher: an existing `/etc/ctrl-exec/` is
+  moved to `/etc/ctrl-exec-dispatcher/`, the paths inside `ctrl-exec.conf` are
+  rewritten to match (the old file is kept as `ctrl-exec.conf.pre-0.13`), and
+  `/etc/ctrl-exec` is left as a symlink to the new directory for this one
+  release. **The symlink is removed in 0.14.** Agent: the old `ctrl-exec-exec`
+  unit is stopped and disabled, and its unit file and `/usr/sbin` or
+  `/usr/local/sbin` binary removed; `ctrl-exec-executor.service` is enabled and
+  started if the old unit was. A fresh install gets only the new names.
+  `install.sh --uninstall` now also stops and removes the executor. (T-008)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 

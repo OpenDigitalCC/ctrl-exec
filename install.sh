@@ -25,6 +25,10 @@ SBIN_DIR="/usr/local/sbin"
 LIB_DIR="/usr/local/lib/ctrl-exec"
 AGENT_CONF_DIR="/etc/ctrl-exec-agent"
 EXEC_CONF_DIR="/etc/ctrl-exec-dispatcher"
+# Names used before 0.13 (T-008). Only the upgrade migration and uninstall use them.
+LEGACY_EXEC_CONF_DIR="/etc/ctrl-exec"
+LEGACY_EXECUTOR_SERVICE="ctrl-exec-exec.service"
+LEGACY_EXECUTOR_BIN="ctrl-exec-exec"
 SCRIPTS_DIR="/opt/ctrl-exec-scripts"
 PAIRING_DIR="/var/lib/ctrl-exec/pairing"
 AGENTS_DIR="/var/lib/ctrl-exec/agents"
@@ -34,6 +38,7 @@ AGENT_RUNS_DIR="/var/lib/ctrl-exec-agent/runs"
 SYSTEMD_DIR="/etc/systemd/system"
 AGENT_SERVICE="ctrl-exec-agent.service"
 API_SERVICE="ctrl-exec-api.service"
+EXECUTOR_SERVICE="ctrl-exec-executor.service"
 
 # Colours
 RED='\033[0;31m'
@@ -68,6 +73,64 @@ install_unit() {
     sh "$SOURCE_DIR/etc/systemd/render-unit" "$BIN_DIR" "$SBIN_DIR" \
         "$SOURCE_DIR/etc/systemd/$unit" "$SYSTEMD_DIR/$unit" || return 1
     chmod 644 "$SYSTEMD_DIR/$unit"
+}
+
+# --- migration of pre-0.13 installs (T-008) ---
+
+# The dispatcher's config directory was /etc/ctrl-exec; it is now
+# /etc/ctrl-exec-dispatcher. If only the old one exists, move it and leave a
+# symlink at the old name for one release (removed in 0.14), and point the paths
+# inside ctrl-exec.conf at the new directory so nothing depends on the symlink.
+# The previous file is kept as ctrl-exec.conf.pre-0.13. If both exist the new one
+# is used and the old one is left untouched for the operator to reconcile.
+migrate_dispatcher_conf_dir() {
+    local old="$LEGACY_EXEC_CONF_DIR" new="$EXEC_CONF_DIR"
+    [[ -d "$old" && ! -L "$old" ]] || return 0
+    if [[ -e "$new" ]]; then
+        warn "Both $old and $new exist; using $new and leaving $old alone."
+        warn "Merge anything you still need from $old, then remove it."
+        return 0
+    fi
+    mv "$old" "$new" || die "Could not move $old to $new."
+    ln -s "$new" "$old" || warn "Could not leave a symlink at $old."
+    info "Moved $old -> $new (symlink left at $old until 0.14)."
+    local conf="$new/ctrl-exec.conf"
+    if [[ -f "$conf" ]] && grep -q "=[[:space:]]*$old/" "$conf"; then
+        cp -p "$conf" "$conf.pre-0.13"
+        sed -i "s|\(=[[:space:]]*\)$old/|\1$new/|" "$conf"
+        info "Updated paths in $conf (previous copy: $conf.pre-0.13)."
+    fi
+}
+
+# The executor was ctrl-exec-exec (binary, ctrl-exec-exec.service); it is now
+# ctrl-exec-executor. Stop and disable the old unit, remove it and the old
+# binary, and give the new unit the old one's state (enabled, running). Runs
+# after the new binary and unit are installed; a fresh install does nothing here.
+migrate_legacy_executor() {
+    local old_unit="$SYSTEMD_DIR/$LEGACY_EXECUTOR_SERVICE"
+    local old_bin="$SBIN_DIR/$LEGACY_EXECUTOR_BIN"
+    [[ -f "$old_unit" || -f "$old_bin" ]] || return 0
+    local was_active=false was_enabled=false
+    if [[ "$HAS_SYSTEMD" == true ]]; then
+        systemctl is-active  --quiet "$LEGACY_EXECUTOR_SERVICE" 2>/dev/null && was_active=true
+        systemctl is-enabled --quiet "$LEGACY_EXECUTOR_SERVICE" 2>/dev/null && was_enabled=true
+        [[ "$was_active"  == true ]] && systemctl stop    "$LEGACY_EXECUTOR_SERVICE"
+        [[ "$was_enabled" == true ]] && systemctl disable "$LEGACY_EXECUTOR_SERVICE" 2>/dev/null
+    fi
+    rm -f "$old_unit" "$old_bin"
+    info "Removed the old executor ($LEGACY_EXECUTOR_BIN, $LEGACY_EXECUTOR_SERVICE)."
+    if [[ "$HAS_SYSTEMD" == true ]]; then
+        systemctl daemon-reload
+        if [[ "$was_enabled" == true ]]; then
+            systemctl enable "$EXECUTOR_SERVICE" 2>/dev/null \
+                || warn "Could not enable $EXECUTOR_SERVICE; enable it manually."
+        fi
+        if [[ "$was_active" == true ]]; then
+            systemctl start "$EXECUTOR_SERVICE" \
+                || warn "Could not start $EXECUTOR_SERVICE; start it manually."
+            info "$EXECUTOR_SERVICE started in place of $LEGACY_EXECUTOR_SERVICE."
+        fi
+    fi
 }
 
 # Prefix for suggested commands in next-steps output. Cleared on OpenWRT
@@ -511,9 +574,10 @@ install_agent() {
             chmod 755 "$SBIN_DIR/ctrl-exec-executor"
             info "Built ctrl-exec-executor -> $SBIN_DIR/ctrl-exec-executor"
             if [[ "$HAS_SYSTEMD" == true ]]; then
-                install_unit ctrl-exec-executor.service
+                install_unit "$EXECUTOR_SERVICE"
                 systemctl daemon-reload
             fi
+            migrate_legacy_executor
         else
             warn "Could not compile ctrl-exec-executor (install libcap-dev). Privilege"
             warn "separation will be unavailable until it is built."
@@ -630,6 +694,8 @@ install_agent() {
 
 install_ctrl_exec_dispatcher() {
     info "Installing the dispatcher CLI..."
+
+    migrate_dispatcher_conf_dir
 
     create_system_group "$EXEC_GROUP"
     # Service user the API server runs as (a member of the ctrl-exec group). It
@@ -755,6 +821,17 @@ uninstall() {
             info "Disabling $AGENT_SERVICE..."
             systemctl disable "$AGENT_SERVICE"
         fi
+        # The executor (and the pre-0.13 ctrl-exec-exec, if it is still around).
+        for svc in "$EXECUTOR_SERVICE" "$LEGACY_EXECUTOR_SERVICE"; do
+            if systemctl is-active --quiet "$svc" 2>/dev/null; then
+                info "Stopping $svc..."
+                systemctl stop "$svc"
+            fi
+            if systemctl is-enabled --quiet "$svc" 2>/dev/null; then
+                info "Disabling $svc..."
+                systemctl disable "$svc"
+            fi
+        done
     elif [[ "$HAS_PROCD" == true ]]; then
         local init_script="/etc/init.d/ctrl-exec-agent"
         if [[ -f "$init_script" ]]; then
@@ -770,12 +847,16 @@ uninstall() {
         "$BIN_DIR/ctrl-exec-api"
         "$BIN_DIR/ced"
         "$BIN_DIR/cea"
+        "$SBIN_DIR/ctrl-exec-executor"
+        "$SBIN_DIR/$LEGACY_EXECUTOR_BIN"
     )
 
     if [[ "$HAS_SYSTEMD" == true ]]; then
         files+=(
             "$SYSTEMD_DIR/$AGENT_SERVICE"
             "$SYSTEMD_DIR/$API_SERVICE"
+            "$SYSTEMD_DIR/$EXECUTOR_SERVICE"
+            "$SYSTEMD_DIR/$LEGACY_EXECUTOR_SERVICE"
         )
     elif [[ "$HAS_PROCD" == true ]]; then
         files+=( "/etc/init.d/ctrl-exec-agent" )
@@ -1037,6 +1118,7 @@ main() {
             ;;
         api)
             # API requires the dispatcher role to already be installed
+            migrate_dispatcher_conf_dir
             if [[ ! -f "$EXEC_CONF_DIR/ctrl-exec.conf" ]]; then
                 die "--api requires --dispatcher to be installed first."
             fi
