@@ -204,82 +204,108 @@ OpenWrt is not affected by the `PrivateDevices`/`AF_UNIX` syslog constraint that
 
 # Docker
 
-The dispatcher and `ctrl-exec-agent` run as Alpine Linux containers. All persistent state is on named volumes; containers are stateless and can be rebuilt without losing pairing or configuration.
+The dispatcher and `ctrl-exec-agent` run as Debian containers (`debian:trixie-slim`) built by installing the release `.deb` files. All persistent state is on bind mounts or named volumes; containers are stateless and can be rebuilt without losing pairing or configuration. The containers keep the packages' privilege split: a small root entrypoint does the work only root can do, then the service runs as an unprivileged user.
 
 ## Dispatcher container
 
-First-start initialisation entrypoint:
+The dispatcher entrypoint runs as root to fix mount ownership, create the CA on first start, and run certificate maintenance every four hours (the container's equivalent of the package's systemd timer). It then drops to the `ctrl-exec` user for the API with `setpriv`. In outline:
 
 ```bash
 #!/bin/sh
-set -e
+set -eu
 CONF_DIR=/etc/ctrl-exec-dispatcher
 if [ ! -f "$CONF_DIR/ca.crt" ]; then
     ced setup-ca
     ced setup-ctrl-exec
 fi
-exec ctrl-exec-api
+( sleep 300; while :; do ced maintain; sleep 14400; done ) &
+exec setpriv --reuid=ctrl-exec --regid=ctrl-exec --init-groups /usr/bin/ctrl-exec-api
 ```
+
+The complete entrypoint, Dockerfile and compose file are in the Docker deployment guide (`docs/DOCKER.md`). Two things in it are easy to miss:
+
+- **Pin `dispatcher_id`.** It defaults to the hostname, which in a container is a random ID. Changing it after agents have paired invalidates every pairing, so set `DISPATCHER_ID` and `hostname:` in the compose file.
+- **Pin the `ctrl-exec` UID in the image.** A fixed UID keeps bind-mount ownership predictable, including on hosts running Docker with `userns-remap`.
 
 ## Agent container
 
-The agent uses a two-phase entrypoint: pair on first start, serve on subsequent starts. Set `DISPATCHER_HOST` to the hostname or address of the dispatcher container.
+The agent uses a two-phase entrypoint: pair on first start, then serve as the unprivileged `ctrl-exec-agent` user. Set `DISPATCHER_HOST` to the hostname or address of the dispatcher container. The pairing request waits for approval on the dispatcher, 30 seconds by default.
 
 ```bash
 #!/bin/sh
-set -e
+set -eu
 CONF_DIR=/etc/ctrl-exec-agent
-if [ -z "$DISPATCHER_HOST" ]; then
+if [ -z "${DISPATCHER_HOST:-}" ]; then
     echo "ERROR: DISPATCHER_HOST not set" >&2; exit 1
 fi
 if [ ! -f "$CONF_DIR/agent.crt" ]; then
     ctrl-exec-agent request-pairing --dispatcher "$DISPATCHER_HOST"
-    echo "Pairing request sent. Approve on the dispatcher, then restart this container."
-    exit 0
 fi
-exec ctrl-exec-agent serve
+exec setpriv --reuid=ctrl-exec-agent --regid=ctrl-exec-agent --init-groups \
+             ctrl-exec-agent serve
 ```
+
+The privileged executor is a separate root service and is not part of the container, so per-script profiles are not enforced there. The guide gives the full entrypoint, which also turns `executor_socket` off in `agent.conf`.
 
 ## docker-compose
 
 ```yaml
 services:
-  ctrl-exec:
-    build: .
+  dispatcher:
+    build: ./dispatcher
+    hostname: dispatcher
     restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs: [/tmp, /run]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]
+    security_opt: [no-new-privileges:true]
+    environment:
+      DISPATCHER_ID: dispatcher
+      API_BIND: 0.0.0.0
     ports:
       - "7445:7445"
     volumes:
-      - ctrl-exec-data:/etc/ctrl-exec-dispatcher
-      - ctrl-exec-registry:/var/lib/ctrl-exec
+      - ./dispatcher-data:/etc/ctrl-exec-dispatcher
+      - ./dispatcher-registry:/var/lib/ctrl-exec
     networks:
       - ctrl-exec-net
 
   agent:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.agent
+    build: ./agent
+    hostname: agent
     restart: on-failure
+    init: true
+    read_only: true
+    tmpfs: [/tmp, /run]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]
+    security_opt: [no-new-privileges:true]
     environment:
-      DISPATCHER_HOST: ctrl-exec
+      DISPATCHER_HOST: dispatcher
     ports:
       - "7443:7443"
     volumes:
       - agent-data:/etc/ctrl-exec-agent
+      - agent-state:/var/lib/ctrl-exec-agent
       - agent-scripts:/opt/ctrl-exec-scripts
     networks:
       - ctrl-exec-net
 
 volumes:
-  ctrl-exec-data:
-  ctrl-exec-registry:
   agent-data:
+  agent-state:
   agent-scripts:
 
 networks:
   ctrl-exec-net:
 ```
 
-`DISPATCHER_HOST: ctrl-exec` uses Docker's internal DNS. No IP addresses required.
+`DISPATCHER_HOST: dispatcher` uses Docker's internal DNS. No IP addresses required.
 
-On first start, approve the agent's pairing request on the dispatcher container, then restart the agent container to begin serving.
+On first start, run `docker compose exec dispatcher ced pairing-mode`, start the agent container, and approve its pairing request on the dispatcher. The agent carries on to serving as soon as it is approved; no restart is needed.
+
+## Upgrading a container to 0.13
+
+The dispatcher's config directory is now `/etc/ctrl-exec-dispatcher` (it was `/etc/ctrl-exec`). A container image cannot migrate it for you: change the mount target in your compose file, edit the paths inside `ctrl-exec.conf` on the mount to match, and rebuild from the 0.13 packages. The old path stops working in 0.14. The deployment guide lists the steps.

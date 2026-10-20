@@ -87,6 +87,11 @@ the operational port - only certs from the private CA are accepted.
 The CA private key never leaves the dispatcher host. Loss of the CA key means
 all agent certs must be reissued via re-pairing.
 
+In a container the same split holds: the API runs as the unprivileged
+`ctrl-exec` user and cannot read the CA key, which only root operations
+(`setup-ca`, `pairing-mode`, `approve`, `rotate-cert`, `maintain`) can. See
+`DOCKER.md`, *Container privilege model*.
+
 
 ## Ports and Authentication
 

@@ -48,7 +48,7 @@ daemon.* action(
 )
 ```
 
-In containers, rsyslog runs inside the image and is configured from `SYSLOG_HOST` / `SYSLOG_PORT` at start — see the Docker deployment guide for the dispatcher and agent setup.
+In containers there is no syslog daemon to receive the local socket. Either mount the host's `/dev/log` into the container, or set `SYSLOG_HOST` / `SYSLOG_PORT` and the entrypoint runs rsyslog inside the container and forwards over TLS - see the Docker deployment guide for the dispatcher and agent setup.
 
 # Dispatcher-Side Actions
 

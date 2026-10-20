@@ -52,6 +52,8 @@ Two names changed so that every part of ctrl-exec is `ctrl-exec-<part>`. The ins
 - The executor `ctrl-exec-exec` is now `ctrl-exec-executor` (binary and `ctrl-exec-executor.service`). The old unit is stopped and removed, and the new one is enabled and started if the old one was.
 - The dispatcher's config directory `/etc/ctrl-exec/` is now `/etc/ctrl-exec-dispatcher/`, to match `/etc/ctrl-exec-agent/`. An existing directory is moved and the paths in `ctrl-exec.conf` are updated. `/etc/ctrl-exec` stays as a symlink for this release only; it is removed in 0.14, so change any script or backup job that names it.
 
+Containers are the exception. An image cannot move a directory that is a mounted volume, and an image built from the 0.13 packages already contains the new directory, so the old-path fallback never applies inside it. For a dispatcher container, change the mount target from `/etc/ctrl-exec` to `/etc/ctrl-exec-dispatcher`, edit the paths in `ctrl-exec.conf` on the mount, and rebuild. Leaving the mount at the old path can make an entrypoint that creates the CA when none is found create a second one. The Docker deployment guide has the steps.
+
 ::: textbox
 Other version-specific notes will be added here as releases are made. Check [CHANGELOG.md](/changelog) for a full history of changes.
 :::

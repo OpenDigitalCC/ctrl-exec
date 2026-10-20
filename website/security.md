@@ -22,6 +22,8 @@ The serial check means a certificate signed by the correct CA is not sufficient 
 
 There are no passwords, no shared secrets, and no SSH keys to distribute or rotate.
 
+In a container the same split holds: the API runs as the unprivileged `ctrl-exec` user and cannot read the CA key, which only root operations (`setup-ca`, `pairing-mode`, `approve`, `rotate-cert`, `maintain`) can. See the Docker deployment guide, *Container privilege model*.
+
 # The Pairing Protocol
 
 Pairing is the ceremony by which a new agent joins the fleet. It runs on a separate port (7444 by default) using server-TLS only — the agent does not yet have a certificate to present.

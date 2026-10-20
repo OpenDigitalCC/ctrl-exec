@@ -1,169 +1,272 @@
 ---
 title: ctrl-exec - Docker Deployment
-subtitle: Running dispatcher and agent containers with Alpine Linux
+subtitle: Running dispatcher and agent containers from the release packages
 brand: odcc
 ---
 
 
-This document covers deploying the ctrl-exec dispatcher and agent as Alpine Linux
-Docker containers. The application has no awareness of containers - the
-differences from a bare-metal installation are in how services are started,
-how configuration is persisted, and how pairing is performed between containers.
+This document covers deploying the ctrl-exec dispatcher and agent as Docker
+containers built from the release Debian packages. The application has no
+awareness of containers - the differences from a bare-metal installation are
+in how services are started, how configuration is persisted, how the
+privilege split of the packages is kept, and how pairing is performed between
+containers.
+
+The examples need ctrl-exec 0.13.0 or later: they use the dispatcher
+configuration directory `/etc/ctrl-exec-dispatcher` and the entrypoints call
+`ced`. If you run a container from an earlier release, read *Upgrading an
+existing container deployment* first.
 
 For bare-metal or VM installation see `INSTALL.md`.
 
 ## Overview
 
 dispatcher container
-: Runs `ctrl-exec-api` in the foreground. Exposes port 7445 (API) and
-  optionally 7444 (pairing, only when pairing mode is active). The CA, registry,
-  and dispatcher cert are stored on a named volume so they persist across
-  container restarts and image rebuilds.
+: Runs `ctrl-exec-api` in the foreground as the unprivileged `ctrl-exec` user.
+  Exposes port 7445 (API) and optionally 7444 (pairing, only while pairing
+  mode is active). The CA, registry, and dispatcher cert are stored on
+  bind mounts or volumes so they persist across container restarts and image
+  rebuilds. A small root-owned entrypoint does the work only root can do: it
+  fixes ownership, creates the CA on first start, and renews certificates.
 
 agent container
-: Runs `ctrl-exec-agent serve` in the foreground. Exposes port 7443. Agent
-  cert and config are stored on a named volume. The container pairs with the
-  dispatcher on first start and then serves normally on subsequent starts.
+: Runs `ctrl-exec-agent serve` in the foreground as the unprivileged
+  `ctrl-exec-agent` user. Exposes port 7443. Agent cert, config, and state are
+  stored on named volumes. The container pairs with the dispatcher on first
+  start and then serves normally on subsequent starts.
 
 Volumes hold all state. Containers are otherwise stateless and can be rebuilt
 from the image without loss of pairing or configuration.
 
-The dispatcher and agent each have their own `Dockerfile` and entrypoint script.
-Keeping them separate means either can be built and deployed independently.
-Both can be run together using the full-stack `compose.yml`.
+The dispatcher and agent each have their own build directory, Dockerfile, and
+entrypoint script. Keeping them separate means either can be built and deployed
+independently. Both can be run together using the full-stack `compose.yml`.
 
-The build directory should contain:
+Both images are built on `debian:trixie-slim` by installing the release `.deb`
+files. The package dependency lists live in the packages, not in the
+Dockerfiles, and `install.sh` is not involved. The deb files come from the
+[releases page](https://github.com/OpenDigitalCC/ctrl-exec/releases) or from
+`./make-release.sh` in a source checkout. The deployment directory looks like
+this:
 
 ```
 compose.yml
-Dockerfile.dispatcher
-Dockerfile.agent
-dispatcher-entrypoint.sh
-agent-entrypoint.sh
-ctrl-exec-<version>.tar.gz    ← download from https://ctrl-exec.io/downloads/
+dispatcher/                      build context for the dispatcher image
+    Dockerfile
+    entrypoint.sh
+    ctrl-exec-common_<version>_all.deb
+    ctrl-exec-dispatcher_<version>_all.deb
+agent/                           build context for the agent image
+    Dockerfile
+    entrypoint.sh
+    ctrl-exec-common_<version>_all.deb
+    ctrl-exec-agent_<version>_<arch>.deb
+dispatcher-data/                 bind mount, created at first start
+dispatcher-registry/             bind mount, created at first start
 ```
+
+Keep the bind-mount directories outside the build contexts, as above. Once the
+container has chowned them they are not readable by the user running
+`docker compose build`, and a build context that contains them fails.
+
+The agent package is architecture-specific (it carries the C executor), so
+download the one that matches the platform the image runs on.
+
+
+## Container privilege model
+
+The packages split privilege on purpose, and the container keeps the split
+rather than replacing it.
+
+- `ctrl-exec-api` runs as the unprivileged `ctrl-exec` service user. It owns
+  `dispatcher.key` (mode 0600) so it can make mTLS connections to agents, and it
+  is in the `ctrl-exec` group for the runtime directories. A flaw in this
+  network-facing process is not a root compromise, and it cannot read the CA key.
+- The CA key (`ca.key`) stays `root:root` mode 0600. `setup-ca`, `pairing-mode`,
+  `approve`, `rotate-cert` and `maintain` are root operations because they sign
+  with it.
+- `/etc/ctrl-exec-dispatcher` is mode 750 `root:ctrl-exec`. The four state
+  directories under `/var/lib/ctrl-exec` (`pairing`, `agents`, `locks`, `runs`)
+  are mode 2770 `root:ctrl-exec`, so files created by the root CLI and by the
+  API both belong to the `ctrl-exec` group.
+- The shipped `ctrl-exec-api.service` adds `NoNewPrivileges`, `ProtectSystem=strict`,
+  `PrivateTmp`, `PrivateDevices` and `ReadWritePaths=/var/lib/ctrl-exec`. The
+  container flags below are the equivalents.
+
+A container has no systemd, so the dispatcher entrypoint starts as root, does the
+root-only work, and then drops to `ctrl-exec` for the API:
+
+1. fix ownership and modes on the mounted directories
+2. seed `ctrl-exec.conf`, and run `ced setup-ca` and `ced setup-ctrl-exec`, on
+   first start only
+3. start the certificate-maintenance loop as root in the background (see
+   *Certificate maintenance*)
+4. `exec setpriv --reuid=ctrl-exec --regid=ctrl-exec --init-groups /usr/bin/ctrl-exec-api`
+
+The compose file starts the container with `cap_drop: [ALL]` and adds back only
+what the entrypoint needs:
+
+`CHOWN`, `FOWNER`, `DAC_OVERRIDE`
+: Fix ownership and modes on the mounts, and read and write the root-owned
+  files on them.
+
+`SETUID`, `SETGID`
+: Let `setpriv` change to the `ctrl-exec` user and group.
+
+These are capabilities of the container's user namespace. Under `userns-remap`
+(see *Host and container hardening*) they confer no privilege on the host. The
+API process itself ends up with an empty capability set, and
+`no-new-privileges` is compatible with `setpriv` because it only stops a process
+gaining privilege, not giving it up.
+
+Do not add `--bounding-set=-all` to the `setpriv` line. Changing the bounding
+set needs `CAP_SETPCAP`, which the container does not have, and `setpriv` fails
+with "apply bounding set: Operation not permitted". It is not needed: after the
+change of user the API holds no capabilities, and `no-new-privileges` stops it
+regaining any.
+
+Pairing and approval run as root with `docker compose exec dispatcher ced ...`,
+so the operator commands in *Pairing Workflow in Docker* are the same as on a
+bare-metal host. The difference is that the API process is not root while they
+run. See also the Trust Model section of `SECURITY.md`.
 
 
 ## Dispatcher Container
 
-### Dockerfile.dispatcher
+### Dockerfile
 
-Before building, download the ctrl-exec release tarball from
-`https://ctrl-exec.io/downloads/` and place it in the same directory as
-`Dockerfile.dispatcher`. The Dockerfile extracts it at build time.
+`dispatcher/Dockerfile`, with the two dispatcher-side debs and `entrypoint.sh`
+beside it:
 
 ```dockerfile
-FROM alpine:3.21
+FROM debian:trixie-slim
 
-WORKDIR /opt/ctrl-exec
+# Fixed UID/GID so bind-mount ownership is the same number on every host. The
+# package postinst skips creating the user when the account already exists.
+ARG CE_UID=10001
+RUN groupadd --system --gid ${CE_UID} ctrl-exec \
+ && useradd  --system --uid ${CE_UID} --gid ctrl-exec \
+             --no-create-home --shell /usr/sbin/nologin ctrl-exec
 
-COPY ctrl-exec-*.tar.gz .
+# rsyslog, rsyslog-gnutls and ca-certificates are for optional remote syslog
+# forwarding; they are inert unless SYSLOG_HOST is set at runtime.
+COPY ctrl-exec-common_*.deb ctrl-exec-dispatcher_*.deb /tmp/
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        /tmp/ctrl-exec-common_*.deb /tmp/ctrl-exec-dispatcher_*.deb \
+        rsyslog rsyslog-gnutls ca-certificates \
+ && rm -f /etc/ctrl-exec-dispatcher/ctrl-exec.conf \
+          /etc/ctrl-exec-dispatcher/auth-hook \
+ && rm -rf /var/lib/apt/lists/* /tmp/*.deb
 
-RUN apk add --no-cache bash openssl perl perl-libwww perl-io-socket-ssl perl-json perl-lwp-protocol-https \
-    rsyslog rsyslog-tls ca-certificates \
-    && VERSION=$(ls ctrl-exec-*.tar.gz | sed 's/ctrl-exec-//;s/\.tar\.gz//') \
-    && tar xzf ctrl-exec-${VERSION}.tar.gz --strip-components=1 \
-    && ./install.sh --dispatcher \
-    && ./install.sh --api \
-    && rm ctrl-exec-${VERSION}.tar.gz
-
-COPY dispatcher-entrypoint.sh /dispatcher-entrypoint.sh
-RUN chmod 755 /dispatcher-entrypoint.sh
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod 755 /entrypoint.sh
 
 EXPOSE 7444 7445
-
-ENTRYPOINT ["/dispatcher-entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]
 ```
 
-`install.sh` detects Alpine and verifies Perl module availability. The
-`apk add` step ensures `bash` and `openssl` are present — `install.sh`
-requires bash and checks for openssl before proceeding. `rsyslog`,
-`rsyslog-tls` (the GnuTLS netstream driver), and `ca-certificates` are
-installed for optional remote syslog forwarding (see *Remote syslog
-forwarding* below); they are inert unless `SYSLOG_HOST` is set at runtime.
+The `ctrl-exec` user and group are created with a fixed UID and GID (10001)
+before the package is installed. The package postinst skips creating the
+account when it exists. A fixed number makes bind-mount ownership the same on
+every host, which matters under `userns-remap` (see *Volumes and layout*). Change
+`CE_UID` if 10001 clashes with something on your hosts.
+
+The postinst also seeds `ctrl-exec.conf` and an `auth-hook` into
+`/etc/ctrl-exec-dispatcher`. The packaged `ctrl-exec.conf` names that hook as
+active, and the hook is the example, which authorises every request. The
+Dockerfile removes both so that neither can end up on a volume (a named volume
+is filled from the image on first use) and take the place of the config the
+entrypoint writes. See *Auth hook*.
+
+`rsyslog`, `rsyslog-gnutls` and `ca-certificates` are for optional remote syslog
+forwarding (see *Remote syslog forwarding*); they are inert unless `SYSLOG_HOST`
+is set at runtime.
 
 ### Entrypoint script
 
-`dispatcher-entrypoint.sh`:
+`dispatcher/entrypoint.sh`:
 
 ```bash
 #!/bin/sh
-set -e
+# Runs as root for the work only root can do: fixing mount ownership, seeding
+# the config and CA on first start, and the certificate-maintenance loop.
+# It then drops to the ctrl-exec user for the API, so the network-facing
+# process never holds the CA key.
+set -eu
 
 CONF_DIR=/etc/ctrl-exec-dispatcher
-CONF_FILE="$CONF_DIR/ctrl-exec.conf"
+CONF="$CONF_DIR/ctrl-exec.conf"
+STATE_DIR=/var/lib/ctrl-exec
+MAINT_INTERVAL="${MAINT_INTERVAL:-14400}"    # seconds; the deb timer's 4h
 
-# --- First-start initialisation ---
-# Each block is guarded so restarts are safe and operator-provided
-# files on the volume are never overwritten.
+log() { echo "[entrypoint] $*"; }
 
-# Generate ctrl-exec.conf from environment variables if not present.
-# Mount a config file at /etc/ctrl-exec-dispatcher/ctrl-exec.conf to override entirely.
-if [ ! -f "$CONF_FILE" ]; then
-    echo "[entrypoint] Generating ctrl-exec.conf..."
-    cat > "$CONF_FILE" << EOF
-# ctrl-exec dispatcher configuration
-# Generated by entrypoint on first start.
-# To customise, edit this file on the dispatcher-data volume,
-# or mount a config file at $CONF_FILE before starting.
+# A volume still mounted at the pre-0.13 path would be ignored, and a second
+# CA created beside it. Refuse to start instead.
+if [ -f /etc/ctrl-exec/ctrl-exec.conf ] && [ ! -f "$CONF" ]; then
+    log "ERROR: a config is mounted at /etc/ctrl-exec; mount it at $CONF_DIR." >&2
+    exit 1
+fi
 
+fix_perms() {
+    chown root:ctrl-exec "$CONF_DIR" && chmod 750 "$CONF_DIR"
+    for d in pairing agents locks runs; do
+        mkdir -p "$STATE_DIR/$d"
+        chown root:ctrl-exec "$STATE_DIR/$d" && chmod 2770 "$STATE_DIR/$d"
+    done
+}
+
+# Seed ctrl-exec.conf from the environment on first start only. An existing
+# file on the volume is never overwritten.
+write_config() {
+    [ -f "$CONF" ] && return 0
+    log "seeding $CONF from the environment"
+    cat > "$CONF" << EOC
+# Seeded by the entrypoint on first start. Edit on the volume, then restart.
 cert = $CONF_DIR/dispatcher.crt
 key  = $CONF_DIR/dispatcher.key
 ca   = $CONF_DIR/ca.crt
 
+dispatcher_id    = ${DISPATCHER_ID:-dispatcher}
 api_bind         = ${API_BIND:-127.0.0.1}
 api_port         = ${API_PORT:-7445}
 api_auth_default = ${API_AUTH_DEFAULT:-deny}
-EOF
-    # Only write read_timeout if set - otherwise dispatcher uses its own default.
-    if [ -n "$READ_TIMEOUT" ]; then
-        echo "read_timeout = $READ_TIMEOUT" >> "$CONF_FILE"
-    fi
-    # Only reference auth_hook if a hook file is already present on the volume.
-    if [ -f "$CONF_DIR/auth-hook" ]; then
-        echo "auth_hook = $CONF_DIR/auth-hook" >> "$CONF_FILE"
-    fi
-    echo "[entrypoint] ctrl-exec.conf written."
-fi
+EOC
+    [ -n "${READ_TIMEOUT:-}" ] && echo "read_timeout = $READ_TIMEOUT" >> "$CONF"
+    # Reference the hook only if one is already present; see "Auth hook".
+    [ -f "$CONF_DIR/auth-hook" ] && echo "auth_hook = $CONF_DIR/auth-hook" >> "$CONF"
+    chown root:ctrl-exec "$CONF" && chmod 640 "$CONF"
+}
 
-# Initialise CA and dispatcher cert if not present.
-if [ ! -f "$CONF_DIR/ca.crt" ]; then
-    echo "[entrypoint] First start: initialising CA..."
-    ctrl-exec-dispatcher setup-ca
-    ctrl-exec-dispatcher setup-ctrl-exec
-    echo "[entrypoint] CA and dispatcher cert created."
-fi
+init_ca() {
+    [ -f "$CONF_DIR/ca.crt" ] && return 0
+    log "first start: creating the CA and the dispatcher certificate"
+    ced setup-ca
+    ced setup-ctrl-exec
+}
 
-# Copy the example auth hook for reference if not already present.
-# The active hook must be placed at $CONF_DIR/auth-hook by the operator,
-# or mounted from the host. Without an active hook, api_auth_default governs.
-if [ ! -f "$CONF_DIR/auth-hook.example" ]; then
-    cp /opt/ctrl-exec/etc/auth-hook.example "$CONF_DIR/auth-hook.example"
-    echo "[entrypoint] Example auth hook copied to $CONF_DIR/auth-hook.example"
-fi
+# The equivalent of the deb's ctrl-exec-maintenance.timer (OnBootSec=5min,
+# OnUnitActiveSec=4h). Root only: renewal signs with the CA key.
+maintenance_loop() {
+    sleep 300
+    while :; do
+        ced maintain || log "maintain failed (exit $?)"
+        sleep "$MAINT_INTERVAL"
+    done
+}
 
-# --- Remote syslog forwarding (optional) ---
-# ctrl-exec-api logs via Sys::Syslog to the local syslog socket, which goes
-# nowhere in a container with no syslog daemon. When SYSLOG_HOST is set, run
-# rsyslog to receive that local syslog and forward it to a remote TLS syslog
-# collector. dispatcher uses the 'daemon' facility (daemon.info/warning/err),
-# so daemon.* is forwarded. Skipped entirely when SYSLOG_HOST is unset.
-if [ -n "$SYSLOG_HOST" ]; then
+# Optional: forward the API's syslog to a remote TLS collector.
+start_rsyslog() {
+    [ -n "${SYSLOG_HOST:-}" ] || return 0
     SYSLOG_PORT="${SYSLOG_PORT:-6514}"
-    echo "[entrypoint] Configuring syslog forwarding to $SYSLOG_HOST:$SYSLOG_PORT..."
-    cat > /etc/rsyslog.conf << EOF
-# Generated by entrypoint on start. Receives ctrl-exec-api's local syslog
-# and forwards it to a remote TLS collector. The collector is server-auth
-# only (anon/x509 name); its Let's Encrypt cert validates against the system
-# CA bundle, so no custom CA or client cert is needed.
+    log "forwarding daemon.* to $SYSLOG_HOST:$SYSLOG_PORT"
+    cat > /run/rsyslog.conf << EOC
 global(
     defaultNetstreamDriver="gtls"
     defaultNetstreamDriverCAFile="/etc/ssl/certs/ca-certificates.crt"
 )
-
-# Receive ctrl-exec-api's messages from the local /dev/log socket.
 module(load="imuxsock")
-
 daemon.* action(
     type="omfwd"
     target="$SYSLOG_HOST"
@@ -175,41 +278,65 @@ daemon.* action(
     StreamDriverPermittedPeers="$SYSLOG_HOST"
     template="RSYSLOG_SyslogProtocol23Format"
 )
-EOF
-    # Start rsyslog in the background, before exec, so /dev/log exists when
-    # ctrl-exec-api opens syslog. ctrl-exec-api remains PID 1.
-    rsyslogd
-    echo "[entrypoint] rsyslog started; forwarding daemon.* over TLS."
+EOC
+    # Background, before the drop, so /dev/log exists when the API opens syslog.
+    rsyslogd -f /run/rsyslog.conf -i /run/rsyslogd.pid
+}
+
+fix_perms
+write_config
+init_ca
+maintenance_loop &
+start_rsyslog
+
+# Copy the example hook for reference. It authorises everything, so it is
+# never installed as the active hook.
+if [ ! -f "$CONF_DIR/auth-hook.example" ]; then
+    cp /usr/share/ctrl-exec/examples/auth-hook.example "$CONF_DIR/auth-hook.example"
 fi
 
-echo "[entrypoint] Starting ctrl-exec-api..."
-exec ctrl-exec-api
+log "starting ctrl-exec-api as ctrl-exec"
+exec setpriv --reuid=ctrl-exec --regid=ctrl-exec --init-groups \
+             /usr/bin/ctrl-exec-api
 ```
 
-The entrypoint uses `exec` so `ctrl-exec-api` runs as PID 1 and receives
-signals directly from Docker.
+Run the container with `init: true` (or `docker run --init`). The entrypoint
+`exec`s the API, so the API replaces the shell, but the maintenance loop and
+`rsyslogd` are other processes in the container, and Docker's init process reaps
+them and passes `SIGTERM` on at shutdown.
 
-Each first-start block is guarded — restarts are safe and any file already
+Each first-start block is guarded: restarts are safe and any file already
 present on the volume is never overwritten. Config generated on first start
-persists on the `dispatcher-data` volume and is reused on subsequent starts.
+persists on the data mount and is reused on subsequent starts.
+
+The entrypoint stops with an error if it finds a config at `/etc/ctrl-exec`
+and none at `/etc/ctrl-exec-dispatcher`, which is what a mount left at the
+pre-0.13 path looks like (see *Upgrading an existing container deployment*).
 
 
 ## Dispatcher Configuration
 
 The dispatcher is configured through environment variables in `compose.yml`.
 On first start, the entrypoint generates `ctrl-exec.conf` from these values
-and writes it to the `dispatcher-data` volume. On subsequent starts the
-existing config file is used unchanged.
+and writes it to the data mount. On subsequent starts the existing config file
+is used unchanged, so editing the compose file later has no effect on a setting
+that is already in the file.
 
-To reconfigure, either edit `ctrl-exec.conf` directly on the volume, or
-remove it and let the entrypoint regenerate it from updated env vars on the
-next start.
+To reconfigure, either edit `ctrl-exec.conf` directly on the mount (it is
+`./dispatcher-data/ctrl-exec.conf` in the layout above) and restart, or remove
+it and let the entrypoint regenerate it from updated env vars on the next start.
+
+`DISPATCHER_ID`
+: The dispatcher's stable identity, written to `dispatcher_id` in
+  `ctrl-exec.conf`. Default: `dispatcher`. See the warning below.
 
 `API_BIND`
 : Network address the API server binds to. Default: `127.0.0.1` (localhost
   only, not reachable from outside the container). Set to `0.0.0.0` to
-  accept connections on all interfaces — required when accessing the API
-  from the host or external clients.
+  accept connections on all interfaces - required when accessing the API
+  from the host, from other containers, or from external clients. The API is
+  plain HTTP unless `api_cert` and `api_key` are set in `ctrl-exec.conf`, so
+  publish its port only on a network you trust.
 
   ```yaml
   API_BIND: 0.0.0.0
@@ -219,10 +346,11 @@ next start.
 : Port the API server listens on. Default: `7445`.
 
 `API_AUTH_DEFAULT`
-: Controls API behaviour when the auth hook permits all requests or is the
-  example hook. `deny` rejects all requests until a real policy hook is in
-  place (default, recommended for production). `allow` permits all requests —
-  suitable for isolated networks or initial testing.
+: What the API does with a request when **no `auth_hook` is configured**:
+  `deny` rejects every request (default, recommended), `allow` permits every
+  request (suitable for isolated networks or initial testing). When an
+  `auth_hook` is configured this setting has no effect - the hook alone decides.
+  See *Auth hook*.
 
   ```yaml
   API_AUTH_DEFAULT: allow
@@ -236,10 +364,15 @@ next start.
   READ_TIMEOUT: 120
   ```
 
+`MAINT_INTERVAL`
+: Seconds between certificate-maintenance runs. Default: `14400` (four hours),
+  the same as the deb's timer. Read by the entrypoint at every start; it is
+  not stored in `ctrl-exec.conf`. See *Certificate maintenance*.
+
 `SYSLOG_HOST`
 : Hostname of a remote TLS syslog collector. When set, the entrypoint starts
   rsyslog inside the container and forwards the dispatcher's logs to it (see
-  *Remote syslog forwarding* below). Unset by default — the container logs
+  *Remote syslog forwarding* below). Unset by default - the container logs
   only locally and rsyslog is not started.
 
   ```yaml
@@ -254,33 +387,92 @@ next start.
   SYSLOG_PORT: 6514
   ```
 
+### dispatcher_id
+
+Pin `dispatcher_id`, and do not change it after agents have paired. Every
+agent records the dispatcher's identity at pairing, and a different value
+invalidates all of those pairings - each agent must be paired again.
+
+If `dispatcher_id` is not set in `ctrl-exec.conf`, ctrl-exec uses the host's
+name. A container's hostname is its random container ID unless it is pinned, so
+a compose file that sets neither would give the dispatcher a new identity every
+time the container is recreated (`up --force-recreate`, or any image change).
+
+The sample compose therefore sets both:
+
+```yaml
+hostname: dispatcher
+environment:
+  DISPATCHER_ID: dispatcher   # changing after pairing invalidates all pairings
+```
+
+The entrypoint writes `DISPATCHER_ID` into the seeded `ctrl-exec.conf`, so the
+value is kept on the data mount and survives the compose file being edited
+later. Use letters, digits, `.`, `-` and `_`, up to 64 characters, starting with
+a letter or digit.
+
+### Certificate maintenance
+
+On a bare-metal host the `ctrl-exec-dispatcher` package installs a root systemd
+timer, `ctrl-exec-maintenance.timer`, that runs `ced maintain` five minutes after
+boot and every four hours after that. `maintain` pings every registered agent
+(which triggers a renewal when an agent certificate is past half-life), rotates
+and broadcasts the dispatcher's own certificate when it nears expiry, expires
+agents long out of contact, and purges old run records.
+
+A container has no timer, so the entrypoint runs the same command in a loop: a
+five-minute initial delay, then every `MAINT_INTERVAL` seconds. `ced maintain`
+signs with the CA key, so it is a root operation. That is why the loop belongs in
+the root entrypoint and cannot be delegated to a scheduler container, a cron job
+elsewhere, or anything else that only has API access: the API user cannot read
+the CA key, by design, and there is no API call that renews certificates.
+
+A failed pass is logged and the loop carries on. `maintain` runs every phase even
+if one fails, so to see the result of a pass run it by hand:
+
+```bash
+docker compose exec dispatcher ced maintain
+```
+
 ### Remote syslog forwarding
 
-`ctrl-exec-api` logs via `Sys::Syslog` to the local syslog socket. In a
-container with no syslog daemon those messages go nowhere. Setting
-`SYSLOG_HOST` makes the entrypoint run `rsyslog` inside the container to
-receive the local syslog and forward it to a remote collector over TLS.
+`ctrl-exec-api` logs via `Sys::Syslog` to the local syslog socket, `/dev/log`.
+In a container with no syslog daemon those messages go nowhere. There are two
+ways to collect them.
 
-How it works:
+Share the host's socket
+: Mount the host's `/dev/log` into the container
+  (`- /dev/log:/dev/log` under `volumes`). The dispatcher's messages then go to
+  whatever syslog or journal service the host runs, with no syslog software in
+  the image. This is the simplest option when the host collects logs.
 
-- The entrypoint generates `/etc/rsyslog.conf` from `SYSLOG_HOST` and
-  `SYSLOG_PORT` on start, then launches `rsyslogd` in the background before
-  `exec ctrl-exec-api`. `ctrl-exec-api` remains PID 1 and receives signals
-  directly; rsyslog is an auxiliary process.
+Forward from inside the container
+: Setting `SYSLOG_HOST` makes the entrypoint run `rsyslog` inside the container to
+  receive the local syslog and forward it to a remote collector over TLS. This
+  works with `read_only: true` and the capability set above: the entrypoint
+  writes the rsyslog config to `/run` (a tmpfs), `rsyslogd` creates `/dev/log` in
+  the container's own `/dev`, and that socket is world-writable, so the API user
+  can log to it after the drop to `ctrl-exec`.
+
+How the in-container forwarder works:
+
+- The entrypoint generates `/run/rsyslog.conf` from `SYSLOG_HOST` and
+  `SYSLOG_PORT` on start, then launches `rsyslogd` in the background before the
+  `exec` of `ctrl-exec-api`, so `/dev/log` exists when the API opens syslog.
 - dispatcher logs on the **`daemon`** facility (`daemon.info`,
-  `daemon.warning`, `daemon.err` — see `LOGGING.md`), so the forwarder
+  `daemon.warning`, `daemon.err` - see `LOGGING.md`), so the forwarder
   selects `daemon.*`. Operations, security events, and `reqid` correlation
-  fields all carry through unchanged in the structured `ACTION=…` lines.
+  fields all carry through unchanged in the structured `ACTION=...` lines.
 - Transport is TCP with the GnuTLS netstream driver (`StreamDriverMode="1"`).
   The collector is expected to be server-authenticated only (rsyslog `anon`
-  on the collector side); its Let's Encrypt certificate validates against the
+  on the collector side); a certificate from a public CA validates against the
   system CA bundle (`ca-certificates`), so no custom CA or client certificate
   is required. `StreamDriverAuthMode="x509/name"` with the collector hostname
   as the permitted peer ensures the dispatcher only forwards to the genuine
   collector.
 
 When `SYSLOG_HOST` is unset the block is skipped entirely: rsyslog is not
-started and the container behaves exactly as before, logging only locally.
+started and the container logs only locally.
 
 ```yaml
 services:
@@ -294,18 +486,17 @@ services:
 
 `Sys::Syslog` can connect directly to a remote server over TCP or UDP via
 `setlogsock`, which would avoid running rsyslog at all. It is not used here
-because it has **no native TLS**: a direct connection would send logs — which
-include usernames, source IPs, script names, and arguments — in plaintext.
-The collector requires TLS on 6514, so a plaintext direct path is not an
-option.
+because it has **no native TLS**: a direct connection would send logs - which
+include usernames, source IPs, script names, and arguments - in plaintext.
 
 Running rsyslog inside the container also buys properties a direct
 application connection would not have:
 
 - TLS (the GnuTLS `gtls` driver) with server-certificate validation against
   the system CA bundle.
-- On-disk queueing, so logs survive a briefly unreachable collector instead
-  of being dropped by the application.
+- A place to configure queueing, so logs can survive a briefly unreachable
+  collector instead of being dropped by the application. The generated config
+  uses rsyslog's defaults; add an action queue to it if you need more.
 - Standard syslog framing (`RSYSLOG_SyslogProtocol23Format`) without the
   application needing to know anything about the transport.
 
@@ -314,156 +505,317 @@ approach is `stunnel`: point `Sys::Syslog` at a local plaintext endpoint that
 stunnel wraps in TLS to the collector. That trades one auxiliary process
 (rsyslog) for another (stunnel) and loses the queueing, so rsyslog is
 preferred unless a deployment specifically cannot run it. No code change is
-needed for the stunnel path — it is purely a container/runtime arrangement.
+needed for the stunnel path - it is purely a container/runtime arrangement.
 
 ### Auth hook
 
 The auth hook controls who is permitted to run scripts and ping agents.
-When no hook is present, `api_auth_default` governs — `deny` rejects all
-requests, `allow` permits all requests.
 
-On first start the entrypoint copies the example hook to
-`/etc/ctrl-exec-dispatcher/auth-hook.example` on the volume for reference. It is not
-installed as the active hook — the operator must place a real policy hook
-at `/etc/ctrl-exec-dispatcher/auth-hook` when ready.
+The setting `api_auth_default` applies **only when no `auth_hook` is configured**.
+Once `ctrl-exec.conf` names a hook, the hook decides every request and
+`api_auth_default` is ignored. The consequence to be careful of: the example
+hook (`auth-hook.example`) ends with `exit 0`, so it authorises everything. The
+bare-metal package installs it as the active hook with `auth_hook` pointing at
+it, which means a fresh package install permits every API request regardless of
+`api_auth_default`. Do not rely on `deny` as a safety net with the example hook
+in place.
 
-To install a hook from the host:
+The container differs from that on purpose. The Dockerfile removes the packaged
+config and hook, and the entrypoint writes `auth_hook` into `ctrl-exec.conf` only
+if a hook file is already present on the data mount at first start. With no
+hook, `api_auth_default` governs, and the default is `deny`: the API refuses
+every request until you install a real hook.
 
-```yaml
-services:
-  dispatcher:
-    volumes:
-      - dispatcher-data:/etc/ctrl-exec-dispatcher
-      - dispatcher-registry:/var/lib/ctrl-exec
-      - ./auth-hook:/etc/ctrl-exec-dispatcher/auth-hook:ro
+On first start the entrypoint also copies the example hook to
+`auth-hook.example` on the data mount, for reference. It is never the active hook.
+
+Because `/etc/ctrl-exec-dispatcher` is itself the data mount, the hook lives on
+it: put your hook at `./dispatcher-data/auth-hook`. No separate file mount is
+needed. The API runs the hook as the `ctrl-exec` user, so it must be executable
+by that user - mode 755, or 750 with group `ctrl-exec`.
+
+The entrypoint adds `auth_hook =` to `ctrl-exec.conf` only if the hook is present
+at **first start**. If you add the hook later, the config does not mention it
+and `api_auth_default` carries on governing, so the hook is silently not used.
+Add the line to `ctrl-exec.conf` by hand and restart:
+
 ```
+auth_hook = /etc/ctrl-exec-dispatcher/auth-hook
+```
+
+For an unattended first start, create `./dispatcher-data/` and place the hook in
+it before running `docker compose up` for the first time. (The ownership
+settings in *Volumes and layout* apply to the directory either way; the
+entrypoint fixes the directory, not the hook's contents.)
 
 See `INSTALL.md` for the full auth hook interface and examples.
 
-### compose.yml (dispatcher only)
+
+## Volumes and layout
+
+The recommended layout keeps everything the deployment needs in one directory:
+the compose file, the build contexts, and two bind mounts beside them.
 
 ```yaml
+    volumes:
+      - ./dispatcher-data:/etc/ctrl-exec-dispatcher       # config, CA, certs, auth-hook
+      - ./dispatcher-registry:/var/lib/ctrl-exec          # paired-agent registry, runs, locks
+```
+
+The deployment is then a directory that can be backed up, or moved between
+hosts, as one unit. The CA key is in `dispatcher-data`; treat the directory
+accordingly (see *Encrypted Credentials*).
+
+Named volumes work as well. Declare `dispatcher-data` and `dispatcher-registry`
+under `volumes:` and mount them at the same two paths. Docker copies the image's
+content into an empty named volume on first use and keeps the image's ownership,
+which is why the Dockerfile removes the packaged config. The cost is that the
+state is out of sight under Docker's own directory, and moving it between hosts
+needs a copy step.
+
+### Ownership
+
+The entrypoint sets ownership and modes on the mounts at every start
+(`root:ctrl-exec`, 750 on the config directory, 2770 on the four state
+directories). On a plain Docker daemon that needs nothing from you.
+
+On a daemon running `userns-remap`, container root is an unprivileged UID on the
+host, so a bind-mounted directory must be owned by the *mapped* IDs before the
+first start, or the entrypoint's `chown` is refused. Container UID `n` maps to
+host UID `base + n`, where `base` is the first number in the remap user's line
+in `/etc/subuid`. With the fixed `ctrl-exec` UID and GID of 10001 and a base of
+100000, set once:
+
+```bash
+sudo chown 100000:110001 dispatcher-data dispatcher-registry
+```
+
+That is container `root:ctrl-exec`, and it is the reason the image fixes the
+UID: a number assigned at build time by the package would differ between builds.
+Named volumes are created with the right mapping by Docker and need nothing.
+
+The agent uses named volumes in the sample compose. The agent's service user has
+no fixed UID, which is the reason: a named volume carries the image's ownership
+with it.
+
+
+## Host and container hardening
+
+For operators running the dispatcher on a shared Docker host. The sample
+`compose.yml` applies the container flags; the daemon-level items are host
+configuration.
+
+`userns-remap`
+: Recommended. Container root maps to an unprivileged host UID, so the namespaced
+  capabilities in *Container privilege model* confer nothing on the host. Bind
+  mounts must be owned by the mapped IDs (see *Ownership*).
+
+Networking
+: Use bridge networking. `network_mode: host` is refused by a daemon running
+  `userns-remap` and is never needed: agents on other hosts connect to the
+  dispatcher's published API port, and the dispatcher connects out to each agent
+  on 7443. Publish 7444 only while pairing.
+
+Container flags
+: `read_only: true` with `tmpfs` on `/tmp` and `/run`; `cap_drop: [ALL]` with the
+  five capabilities back; `security_opt: [no-new-privileges:true]`; and a limit
+  on process count, memory and CPU (`pids_limit`, `mem_limit`, `cpus`). The
+  numbers in the sample suit a small fleet - set your own. `init: true` goes with
+  these flags, as described under the entrypoint.
+
+Rootless Docker
+: Not recommended. The settings above give the same practical isolation without
+  the per-user systemd, lingering and `slirp4netns` machinery that rootless
+  mode needs, which has proved fragile for a service that must stay up.
+
+Anyone with access to the Docker socket on the dispatcher host can read the CA key
+from the mount; see *Docker-Specific Security* in
+`SECURITY-OPERATIONS.md`.
+
+
+## compose.yml
+
+The full stack - dispatcher and one agent - with the hardening above:
+
+```yaml
+# Hardening shared by both services. See "Host and container hardening".
+x-hardened: &hardened
+  restart: unless-stopped
+  init: true
+  read_only: true
+  tmpfs: [/tmp, /run]
+  cap_drop: [ALL]
+  cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 200
+  mem_limit: 256m
+  cpus: "1.0"
+
 services:
   dispatcher:
-    build:
-      context: .
-      dockerfile: Dockerfile.dispatcher
-    container_name: dispatcher
-    restart: unless-stopped
+    <<: *hardened
+    build: ./dispatcher
+    image: ctrl-exec-dispatcher:local
+    hostname: dispatcher             # pin: see "dispatcher_id"
     environment:
-      API_BIND: 127.0.0.1       # set to 0.0.0.0 for external access
-      API_PORT: 7445
-      API_AUTH_DEFAULT: deny    # set to allow for isolated networks
-      # READ_TIMEOUT: 60
-      # SYSLOG_HOST: logs.example.com   # forward logs to a remote TLS collector
-      # SYSLOG_PORT: 6514
+      DISPATCHER_ID: dispatcher      # changing this after pairing invalidates all pairings
+      API_BIND: 0.0.0.0
+      API_AUTH_DEFAULT: deny
+      # MAINT_INTERVAL: 14400
+      # SYSLOG_HOST: logs.example.com
     ports:
-      - "7444:7444"   # pairing - expose only when actively pairing
-      - "7445:7445"   # API
+      - "7445:7445"                  # API
+      # - "7444:7444"                # pairing - publish only while pairing
     volumes:
-      - dispatcher-data:/etc/ctrl-exec-dispatcher
-      - dispatcher-registry:/var/lib/ctrl-exec
-      # - ./auth-hook:/etc/ctrl-exec-dispatcher/auth-hook:ro   # optional host-mounted hook
+      - ./dispatcher-data:/etc/ctrl-exec-dispatcher
+      - ./dispatcher-registry:/var/lib/ctrl-exec
+    networks: [ctrl-exec-net]
+
+  agent:
+    <<: *hardened
+    build: ./agent
+    image: ctrl-exec-agent:local
+    hostname: agent
+    restart: on-failure
+    environment:
+      DISPATCHER_HOST: dispatcher    # Docker DNS resolves the service name
+      # SYSLOG_HOST: logs.example.com
+    ports:
+      - "7443:7443"
+    volumes:
+      - agent-data:/etc/ctrl-exec-agent
+      - agent-state:/var/lib/ctrl-exec-agent
+      - agent-scripts:/opt/ctrl-exec-scripts
+    networks: [ctrl-exec-net]
 
 volumes:
-  dispatcher-data:
-  dispatcher-registry:
+  agent-data:
+  agent-state:
+  agent-scripts:
+
+networks:
+  ctrl-exec-net:
 ```
+
+To run the dispatcher alone, delete the `agent` service and the three agent
+volumes. To run an agent alone against a dispatcher elsewhere, delete the
+`dispatcher` service and set `DISPATCHER_HOST` to the dispatcher's hostname or
+address. The extension field `x-hardened` and the YAML merge (`<<: *hardened`)
+are plain compose features; copy the settings inline if you prefer.
 
 Port 7444 is the pairing port. If agents are on the same Docker network and
 pairing is done container-to-container, 7444 does not need to be published to
-the host. Publish it only when pairing agents on external hosts.
+the host. Publish it only while pairing agents on external hosts, which means
+editing the compose file and running `docker compose up -d dispatcher` to
+recreate the container. Nothing is lost by that: the identity is pinned and the
+state is on the mounts.
+
+`DISPATCHER_HOST: dispatcher` uses Docker's internal DNS to resolve the
+dispatcher service by name. No IP addresses required.
+
+The scheduler that calls the API, `run-jobs`, is a separate container. It is
+documented, with its own hardened compose service, in the `ctrl-exec-plugins`
+repository, under `ce-api-plugins/ctrl-exec-cli/run-jobs`. It needs only API
+access and holds no CA key; follow *Host and container hardening* above for the
+flags it shares with the dispatcher.
 
 
 ## Agent Container
 
 A containerised agent is useful for testing and proof-of-concept work.
-In production, agents typically run directly on the VM or host they manage —
-either installed via `install.sh --agent` on bare metal, or added to an
-existing container that already runs the workload the agent needs to reach.
-A standalone agent container makes most sense when the agent's scripts make
-calls to other services in the same Docker network.
+In production, agents typically run directly on the VM or host they manage -
+either installed from the packages (or `install.sh --agent`) on bare metal, or
+added to an existing container that already runs the workload the agent needs to
+reach. A standalone agent container makes most sense when the agent's scripts
+make calls to other services in the same Docker network.
 
-### Dockerfile.agent
+### Dockerfile
 
-The same release tarball used for the dispatcher build is used here. Ensure
-it is present in the build directory before building.
+`agent/Dockerfile`, with the common and agent debs and `entrypoint.sh` beside it:
 
 ```dockerfile
-FROM alpine:3.21
+FROM debian:trixie-slim
 
-WORKDIR /opt/ctrl-exec
+# The agent package is architecture-specific (it carries the C executor), so
+# use the .deb that matches the image platform.
+COPY ctrl-exec-common_*.deb ctrl-exec-agent_*.deb /tmp/
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        /tmp/ctrl-exec-common_*.deb /tmp/ctrl-exec-agent_*.deb \
+        rsyslog rsyslog-gnutls ca-certificates \
+ && rm -rf /var/lib/apt/lists/* /tmp/*.deb
 
-COPY ctrl-exec-*.tar.gz .
-RUN apk add --no-cache bash openssl perl perl-io-socket-ssl perl-json \
-    rsyslog rsyslog-tls ca-certificates \
-    && VERSION=$(ls ctrl-exec-*.tar.gz | sed 's/ctrl-exec-//;s/\.tar\.gz//') \
-    && tar xzf ctrl-exec-${VERSION}.tar.gz --strip-components=1 \
-    && ./install.sh --agent \
-    && rm ctrl-exec-${VERSION}.tar.gz
-
-COPY agent-entrypoint.sh /agent-entrypoint.sh
-RUN chmod 755 /agent-entrypoint.sh
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod 755 /entrypoint.sh
 
 EXPOSE 7443
-
-ENTRYPOINT ["/agent-entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]
 ```
 
-`install.sh` detects Alpine and verifies Perl module availability. The
-`apk add` step ensures `bash` and `openssl` are present — `install.sh`
-requires bash and checks for openssl before proceeding. The agent does not
-need `perl-libwww`. `rsyslog`, `rsyslog-tls`, and `ca-certificates` are for
-optional remote syslog forwarding (see below); inert unless `SYSLOG_HOST` is
-set at runtime.
+The agent needs no fixed UID: nothing of the agent's is bind-mounted, and its state lives
+on named volumes.
+
+### No executor in a container
+
+The agent package turns the privileged executor on in `agent.conf`
+(`executor_socket`), and on a host systemd runs `ctrl-exec-executor` as a second,
+root service. The executor needs `CAP_SYS_ADMIN` and full filesystem reach, and
+a container runs one process tree, so this deployment runs the agent alone. The
+entrypoint comments `executor_socket` out; an agent that is pointed at an
+executor that is not running fails every run.
+
+Without the executor, per-script profiles (`run_as`, capabilities, writable
+paths) are not enforced, and the agent warns about it at start if the allowlist
+names a profile. Scripts run as the agent's unprivileged user. Asynchronous runs, which
+the executor does not support, work. If you need profiles, run the agent on the
+host rather than in a container.
 
 ### Entrypoint script
 
-`agent-entrypoint.sh`:
+`agent/entrypoint.sh`:
 
 ```bash
 #!/bin/sh
-set -e
+# Runs as root to pair (the certificates are written into a root-owned
+# directory), then drops to the ctrl-exec-agent user to serve.
+set -eu
 
 CONF_DIR=/etc/ctrl-exec-agent
-CERT="$CONF_DIR/agent.crt"
+CONF="$CONF_DIR/agent.conf"
+
+log() { echo "[entrypoint] $*"; }
 
 # DISPATCHER_HOST must be set in the container environment or compose file.
-if [ -z "$DISPATCHER_HOST" ]; then
-    echo "[entrypoint] ERROR: DISPATCHER_HOST environment variable not set." >&2
+if [ -z "${DISPATCHER_HOST:-}" ]; then
+    log "ERROR: DISPATCHER_HOST environment variable not set." >&2
     exit 1
 fi
 
-# First start: no cert means we have not paired yet.
-# Request pairing and then exit. The operator approves on the dispatcher,
-# then the container is restarted to begin serving.
-if [ ! -f "$CERT" ]; then
-    echo "[entrypoint] No cert found - requesting pairing with $DISPATCHER_HOST..."
+# The package's agent.conf turns on the privileged executor, which is a
+# separate root service. A container runs the agent alone, so turn it off;
+# an agent pointed at an executor that is not there fails every run.
+sed -i 's/^executor_socket/# executor_socket/' "$CONF"
+
+# First start: no cert means we have not paired yet. request-pairing blocks
+# until the operator approves on the dispatcher (30 seconds by default), stores
+# the certificates, and returns; a denial or timeout exits non-zero, and the
+# restart policy then sends a fresh request.
+if [ ! -f "$CONF_DIR/agent.crt" ]; then
+    log "No cert found - requesting pairing with $DISPATCHER_HOST..."
     ctrl-exec-agent request-pairing --dispatcher "$DISPATCHER_HOST"
-    echo "[entrypoint] Pairing request sent. Approve on the dispatcher, then restart this container."
-    exit 0
+    log "Paired."
 fi
 
-# --- Remote syslog forwarding (optional) ---
-# Same approach as the dispatcher. When SYSLOG_HOST is set, run rsyslog to
-# receive the agent's local syslog (daemon facility) and forward it to a
-# remote TLS collector. Configured only in the serving path; the one-shot
-# pairing request above exits before reaching here. Skipped when unset.
-if [ -n "$SYSLOG_HOST" ]; then
+# Optional: forward the agent's syslog to a remote TLS collector.
+if [ -n "${SYSLOG_HOST:-}" ]; then
     SYSLOG_PORT="${SYSLOG_PORT:-6514}"
-    echo "[entrypoint] Configuring syslog forwarding to $SYSLOG_HOST:$SYSLOG_PORT..."
-    cat > /etc/rsyslog.conf << EOF
-# Generated by entrypoint on start. Receives the agent's local syslog and
-# forwards it to a remote TLS collector. Server-auth only (anon/x509 name);
-# the collector's Let's Encrypt cert validates against the system CA bundle.
+    log "forwarding daemon.* to $SYSLOG_HOST:$SYSLOG_PORT"
+    cat > /run/rsyslog.conf << EOC
 global(
     defaultNetstreamDriver="gtls"
     defaultNetstreamDriverCAFile="/etc/ssl/certs/ca-certificates.crt"
 )
-
-# Receive the agent's messages from the local /dev/log socket.
 module(load="imuxsock")
-
 daemon.* action(
     type="omfwd"
     target="$SYSLOG_HOST"
@@ -475,159 +827,90 @@ daemon.* action(
     StreamDriverPermittedPeers="$SYSLOG_HOST"
     template="RSYSLOG_SyslogProtocol23Format"
 )
-EOF
-    # Start rsyslog before exec so /dev/log exists when the agent opens
-    # syslog. ctrl-exec-agent remains PID 1.
-    rsyslogd
-    echo "[entrypoint] rsyslog started; forwarding daemon.* over TLS."
+EOC
+    rsyslogd -f /run/rsyslog.conf -i /run/rsyslogd.pid
 fi
 
-echo "[entrypoint] Cert found - starting ctrl-exec-agent serve..."
-exec ctrl-exec-agent serve
+# Adopt a renewed certificate staged while the agent was running (the deb's
+# unit does this as ExecStartPre), then serve as the unprivileged user.
+ctrl-exec-agent promote-cert || true
+log "Starting ctrl-exec-agent serve as ctrl-exec-agent"
+exec setpriv --reuid=ctrl-exec-agent --regid=ctrl-exec-agent --init-groups \
+             ctrl-exec-agent serve
 ```
 
-The two-phase entrypoint separates the pairing request (a one-shot operation
-that exits) from normal service operation. The container exits after requesting
-pairing - Docker's restart policy does not apply to a deliberate `exit 0`, so
-the container stays stopped until the operator approves and restarts it.
+The entrypoint runs as root only to pair, because the certificates are written
+into a root-owned directory, and then drops to `ctrl-exec-agent` for `serve`.
+`request-pairing` blocks until the operator approves on the dispatcher, 30
+seconds by default. If that time passes, or the request is denied, it exits
+non-zero and the restart policy (`on-failure`) starts the container again with a
+fresh request, so start `pairing-mode` first and approve promptly.
 
 For automated or orchestrated deployments, `--background` mode can be used
 instead. This prints the `reqid` to stdout and exits immediately, leaving a
-background process to wait for approval:
+background process to wait for approval (`--timeout`, up to 600 seconds):
 
 ```bash
 ctrl-exec-agent request-pairing --dispatcher "$DISPATCHER_HOST" --background
 ```
 
 The `reqid` can be captured by the orchestration layer and passed to
-`ctrl-exec-dispatcher approve <reqid>` on the dispatcher. See REFERENCE.md
+`ced approve <reqid>` on the dispatcher. See REFERENCE.md
 `### Orchestrated pairing` for the full flow.
+
+### Agent state
+
+The agent keeps three things that must survive the container being recreated:
+
+`/etc/ctrl-exec-agent` (`agent-data`)
+: Config, allowlist, and the agent certificate and key.
+
+`/var/lib/ctrl-exec-agent` (`agent-state`)
+: The trusted-dispatcher map, written at pairing, and the store for asynchronous
+  results. If this is lost the agent no longer trusts its dispatcher and must be
+  paired again, even though the certificate survived.
+
+`/opt/ctrl-exec-scripts` (`agent-scripts`)
+: The scripts the allowlist names.
 
 ### Remote syslog forwarding
 
 The agent forwards logs the same way as the dispatcher: set `SYSLOG_HOST`
 (and optionally `SYSLOG_PORT`, default `6514`) and the entrypoint runs rsyslog
 to forward the agent's `daemon.*` syslog to the collector over TLS, skipping
-the block entirely when unset. See *Remote syslog forwarding* under the
-dispatcher above for how it works and the TLS/CA expectations.
-
-### compose.yml (agent only)
-
-For testing or deployments where the dispatcher runs elsewhere, the agent
-can be run independently. Set `DISPATCHER_HOST` to the hostname or IP of
-the external dispatcher.
-
-```yaml
-services:
-  agent:
-    build:
-      context: .
-      dockerfile: Dockerfile.agent
-    container_name: agent
-    restart: on-failure
-    environment:
-      DISPATCHER_HOST: <dispatcher-hostname-or-ip>
-      # SYSLOG_HOST: logs.example.com   # forward logs to a remote TLS collector
-      # SYSLOG_PORT: 6514
-    ports:
-      - "7443:7443"
-    volumes:
-      - agent-data:/etc/ctrl-exec-agent
-      - agent-scripts:/opt/ctrl-exec-scripts
-    networks:
-      - ctrl-exec-net-agent
-
-volumes:
-  agent-data:
-  agent-scripts:
-
-networks:
-  ctrl-exec-net-agent:
-```
-
-### compose.yml (full stack)
-
-Both services in a single compose. `depends_on` is an implementation
-choice — the dispatcher functions without agents, and the agent connects
-to the dispatcher independently at pairing time. Omit or adjust
-`depends_on` to suit your startup sequencing requirements.
-
-```yaml
-services:
-  dispatcher:
-    build:
-      context: .
-      dockerfile: Dockerfile.dispatcher
-    container_name: dispatcher
-    restart: unless-stopped
-    environment:
-      API_BIND: 127.0.0.1
-      API_PORT: 7445
-      API_AUTH_DEFAULT: deny
-      # SYSLOG_HOST: logs.example.com   # forward logs to a remote TLS collector
-      # SYSLOG_PORT: 6514
-    ports:
-      - "7445:7445"
-    volumes:
-      - dispatcher-data:/etc/ctrl-exec-dispatcher
-      - dispatcher-registry:/var/lib/ctrl-exec
-    networks:
-      - ctrl-exec-net
-
-  agent:
-    build:
-      context: .
-      dockerfile: Dockerfile.agent
-    container_name: agent
-    restart: on-failure
-    environment:
-      DISPATCHER_HOST: dispatcher   # Docker DNS resolves service name
-      # SYSLOG_HOST: logs.example.com   # forward logs to a remote TLS collector
-      # SYSLOG_PORT: 6514
-    ports:
-      - "7443:7443"
-    volumes:
-      - agent-data:/etc/ctrl-exec-agent
-      - agent-scripts:/opt/ctrl-exec-scripts
-    networks:
-      - ctrl-exec-net
-
-volumes:
-  dispatcher-data:
-  dispatcher-registry:
-  agent-data:
-  agent-scripts:
-
-networks:
-  ctrl-exec-net:
-```
-
-`DISPATCHER_HOST: dispatcher` uses Docker's internal DNS to resolve the
-dispatcher service by name. No IP addresses required.
+the block entirely when unset. The host-socket option (`- /dev/log:/dev/log`)
+works for the agent too. See *Remote syslog forwarding* under the dispatcher
+above for how it works and the TLS/CA expectations.
 
 
 ## Networking
 
 Container-to-container communication works reliably in two configurations:
 
-- **Shared network** — both containers on the same Docker network. Use Docker DNS (service name) or container IP directly. This is the recommended approach for full-stack compose deployments.
-- **Different hosts** — dispatcher and agent on separate machines, each with ports published to the host. The agent connects to the dispatcher's host IP and published port. This is the intended production pattern.
+- **Shared network** - both containers on the same Docker network. Use Docker DNS (service name) or container IP directly. This is the recommended approach for full-stack compose deployments.
+- **Different hosts** - dispatcher and agent on separate machines, each with ports published to the host. The agent connects to the dispatcher's host IP and published port. This is the intended production pattern.
 
-Same-host, different networks (container → host → container) is not reliable with default Docker networking. Docker's NAT and iptables rules do not consistently route traffic from one bridge network to a published port on another. If the dispatcher and agent must run on the same host in separate compose projects, either connect them to a shared network explicitly:
+Same-host, different networks (container to host to container) is not reliable with default Docker networking. Docker's NAT and iptables rules do not consistently route traffic from one bridge network to a published port on another. If the dispatcher and agent must run on the same host in separate compose projects, either connect them to a shared network explicitly:
 
 ```bash
-docker network connect <dispatcher-network> agent
+docker network connect <dispatcher-network> <agent-container>
 ```
 
 Or set `DISPATCHER_HOST` to the dispatcher container's IP on the shared network rather than the host IP.
 
 This limitation does not affect real deployments where the dispatcher and agents run on separate hosts.
 
+The dispatcher connects out to each agent's port 7443, so every agent must be
+reachable from the dispatcher container. The source address the dispatcher sees at
+pairing is unreliable when Docker's NAT is in the way; see `approve` in
+`REFERENCE.md` for `--ip` and `--lookup-by`.
+
 
 ## Pairing Workflow in Docker
 
 Pairing between containers follows the same protocol as bare-metal but uses
-`docker exec` instead of separate terminal sessions.
+`docker compose exec` instead of separate terminal sessions. The commands run as
+root inside the container, which is what the CA key requires.
 
 ### Step 1 - Start the dispatcher
 
@@ -638,19 +921,20 @@ docker compose up -d dispatcher
 Wait for the first-start initialisation to complete:
 
 ```bash
-docker logs dispatcher
-# [entrypoint] First start: initialising CA...
-# [entrypoint] CA and dispatcher cert created.
-# [entrypoint] Starting ctrl-exec-api...
+docker compose logs dispatcher
+# CA created: ...
+# dispatcher cert created: ...
+# [entrypoint] starting ctrl-exec-api as ctrl-exec
 ```
 
 ### Step 2 - Start pairing mode on the dispatcher
 
 ```bash
-docker exec -it dispatcher ctrl-exec-dispatcher pairing-mode
+docker compose exec dispatcher ced pairing-mode
 ```
 
-This blocks, waiting for requests. Leave it running.
+This blocks, waiting for requests. Leave it running. If the agent is on another
+host, 7444 must be published (see `compose.yml`).
 
 ### Step 3 - Start the agent container
 
@@ -660,13 +944,11 @@ In another terminal:
 docker compose up agent
 ```
 
-The entrypoint finds no cert and sends a pairing request:
+The entrypoint finds no cert and sends a pairing request, then waits for you:
 
 ```
 [entrypoint] No cert found - requesting pairing with dispatcher...
 ```
-
-The agent container exits after sending the request. This is expected.
 
 ### Step 4 - Approve the request
 
@@ -678,33 +960,40 @@ Pairing request from agent (172.18.0.3) - ID: 00c9845e0001
 Accept, Deny, or Skip? [a/d/s]:
 ```
 
-Type `a` to approve.
+Type `a` to approve, within the agent's 30 seconds.
 
-Alternatively, from a third terminal without interactive pairing mode:
-
-```bash
-docker exec dispatcher ctrl-exec-dispatcher list-requests
-docker exec dispatcher ctrl-exec-dispatcher approve <reqid>
-```
-
-### Step 5 - Restart the agent
+Alternatively, run `pairing-mode` in the background
+(`docker compose exec -d dispatcher ced pairing-mode`) and approve from any
+terminal:
 
 ```bash
-docker compose up -d agent
+docker compose exec dispatcher ced list-requests
+docker compose exec dispatcher ced approve <reqid>
 ```
 
-The entrypoint finds the cert this time and starts serving:
+On approval the agent stores its certificate and carries straight on to serving:
 
 ```
-[entrypoint] Cert found - starting ctrl-exec-agent serve...
+[entrypoint] Paired.
+[entrypoint] Starting ctrl-exec-agent serve as ctrl-exec-agent
 ```
 
-### Step 6 - Verify
+No restart is needed. After the first pairing the volume holds the certificate
+and later starts go directly to serving.
+
+Press Ctrl-C in the pairing mode terminal (or stop the background one) when the
+agent is paired, and unpublish 7444 if you published it.
+
+### Step 5 - Verify
 
 ```bash
-docker exec dispatcher ctrl-exec-dispatcher ping agent
-docker exec dispatcher ctrl-exec-dispatcher run agent check-disk
+docker compose exec dispatcher ced ping agent
+docker compose exec dispatcher ced run agent check-disk
 ```
+
+The name the dispatcher knows the agent by is the hostname it reported when it
+paired; see *Multiple Agents*. `docker compose exec dispatcher ced list-agents`
+shows it.
 
 
 ## Agent Scripts
@@ -714,18 +1003,26 @@ script to a running agent container:
 
 ```bash
 # Copy script into the volume via the running container
-docker cp check-disk.sh agent:/opt/ctrl-exec-scripts/
-docker exec agent chmod 750 /opt/ctrl-exec-scripts/check-disk.sh
-docker exec agent chown root:ctrl-exec-agent /opt/ctrl-exec-scripts/check-disk.sh
+docker compose cp check-disk.sh agent:/opt/ctrl-exec-scripts/
+docker compose exec agent chmod 750 /opt/ctrl-exec-scripts/check-disk.sh
+docker compose exec agent chown root:ctrl-exec-agent /opt/ctrl-exec-scripts/check-disk.sh
 
 # Add to allowlist
-docker exec agent sh -c \
+docker compose exec agent sh -c \
     'echo "check-disk = /opt/ctrl-exec-scripts/check-disk.sh" \
     >> /etc/ctrl-exec-agent/scripts.conf'
 
-# Reload config without restart
-docker exec agent kill -HUP 1
+# Pick up the new allowlist
+docker compose restart agent
 ```
+
+The group `ctrl-exec-agent` is the one the agent package creates, so the agent
+user can execute the script but not change it. Restart the container to reload
+the allowlist: the usual `kill -HUP 1` does not work here. PID 1 is Docker's init
+process, which runs as root without `CAP_KILL` and so cannot signal the agent,
+which runs as another user; the attempt makes the init process exit and the
+container restart. Pairing and state are on the volumes, so a restart loses
+nothing.
 
 Alternatively, pre-populate scripts in the Dockerfile or bake them into the
 image for immutable deployments. For mutable agent fleets, maintain scripts
@@ -735,14 +1032,15 @@ starts.
 
 ## Encrypted Credentials
 
-Container volumes hold the CA key, dispatcher cert, and agent cert. For
-production deployments these should be protected at rest.
+The dispatcher's data mount holds the CA key and dispatcher cert, and the agent's
+volume holds the agent cert. For production deployments these should be
+protected at rest.
 
 ### Docker secrets
 
 Docker Swarm supports secrets natively. For standalone Docker, a common
-pattern is to populate the config volume from a secrets manager at container
-start via the entrypoint script:
+pattern is to populate the config mount from a secrets manager at container
+start via the entrypoint script, before `init_ca` runs:
 
 ```bash
 #!/bin/sh
@@ -759,7 +1057,8 @@ fi
 ```
 
 The specific mechanism depends on the secrets manager available in the
-deployment environment (Vault, AWS Secrets Manager, Azure Key Vault, etc.).
+deployment environment (Vault, AWS Secrets Manager, Azure Key Vault, etc.). The
+CA key stays `root` mode 0600; do not give it to the `ctrl-exec` user.
 
 ### Encrypted volumes
 
@@ -777,13 +1076,13 @@ key management.
 At minimum, ensure:
 
 - The host running the dispatcher container has restricted access
-- The `dispatcher-data` volume is not world-readable
+- The `dispatcher-data` directory is not world-readable
 - The CA key is backed up to encrypted offline storage immediately after
   first-start initialisation
 
 ```bash
 # Backup CA key after first start
-docker exec dispatcher cat /etc/ctrl-exec-dispatcher/ca.key \
+docker compose exec -T dispatcher cat /etc/ctrl-exec-dispatcher/ca.key \
     | gpg --symmetric --cipher-algo AES256 \
     > ca.key.gpg
 # Store ca.key.gpg in offline/offsite storage
@@ -792,43 +1091,47 @@ docker exec dispatcher cat /etc/ctrl-exec-dispatcher/ca.key \
 
 ## Multiple Agents
 
-To run multiple agent containers, give each a unique name and volume:
+To run multiple agent containers, give each a unique name and its own volumes:
 
 ```yaml
 services:
   agent-db:
-    build:
-      context: .
-      dockerfile: Dockerfile.agent
+    <<: *hardened
+    build: ./agent
+    image: ctrl-exec-agent:local
+    hostname: agent-db
+    restart: on-failure
     environment:
       DISPATCHER_HOST: dispatcher
     volumes:
       - agent-db-data:/etc/ctrl-exec-agent
+      - agent-db-state:/var/lib/ctrl-exec-agent
       - agent-db-scripts:/opt/ctrl-exec-scripts
-    networks:
-      - ctrl-exec-net
+    networks: [ctrl-exec-net]
 
   agent-web:
-    build:
-      context: .
-      dockerfile: Dockerfile.agent
+    <<: *hardened
+    build: ./agent
+    image: ctrl-exec-agent:local
+    hostname: agent-web
+    restart: on-failure
     environment:
       DISPATCHER_HOST: dispatcher
     volumes:
       - agent-web-data:/etc/ctrl-exec-agent
+      - agent-web-state:/var/lib/ctrl-exec-agent
       - agent-web-scripts:/opt/ctrl-exec-scripts
-    networks:
-      - ctrl-exec-net
+    networks: [ctrl-exec-net]
 ```
 
-Each agent pairs independently and appears separately in `ctrl-exec-dispatcher list-agents`.
-The agent hostname in the registry is taken from the hostname reported in the
-pairing request - set `hostname` in each container to something meaningful:
-
-```yaml
-agent-db:
-  hostname: agent-db
-```
+Each agent pairs independently and appears separately in `ced list-agents`.
+The agent hostname in the registry is the hostname the agent reports in the
+pairing request, which is its fully qualified name as the container resolves it,
+so the `hostname:` setting above is the start of it, not always the whole name
+(a search domain on the host can be appended). Check the name in
+`ced list-agents`, or the request in `ced list-requests`, and use `ced approve
+--lookup-by ip` or `ced edit-agent` if the dispatcher cannot resolve it (see
+`REFERENCE.md`).
 
 
 ## Agent Tags
@@ -842,8 +1145,8 @@ For container deployments, add a `[tags]` section to `agent.conf` on the
 config volume, or inject it via the entrypoint before starting the agent:
 
 ```bash
-# In agent-entrypoint.sh, before exec ctrl-exec-agent serve
-cat >> /etc/ctrl-exec-agent/agent.conf <<EOF
+# In agent/entrypoint.sh, before the exec of ctrl-exec-agent serve
+grep -q '^\[tags\]' "$CONF" || cat >> "$CONF" <<EOF
 
 [tags]
 env  = ${AGENT_ENV:-production}
@@ -851,6 +1154,7 @@ role = ${AGENT_ROLE:-agent}
 EOF
 ```
 
+The `grep` guard keeps the section from being appended again on every start.
 Then pass values via container environment:
 
 ```yaml
@@ -881,14 +1185,57 @@ plain strings; no reserved keys.
 
 ## Rebuilding Images
 
-Because all state is on volumes, images can be rebuilt without losing pairing
-or configuration:
+Because all state is on the mounts and volumes, images can be rebuilt without
+losing pairing or configuration:
 
 ```bash
 docker compose build dispatcher
 docker compose up -d dispatcher
-# Volumes are reattached - CA and registry are intact
+# Mounts are reattached - CA and registry are intact
 ```
 
-If a volume is deleted (e.g. `docker compose down -v`), the dispatcher loses
-its CA and all agents must be re-paired. The CA backup covers this case.
+If the data mount is deleted (e.g. removing `dispatcher-data`, or
+`docker compose down -v` with named volumes), the dispatcher loses its CA and
+all agents must be re-paired. The CA backup covers this case.
+
+To move to a new release, replace the `.deb` files in the build context and
+rebuild. Config and certificates are not touched, because the entrypoint seeds
+only what is missing.
+
+### Upgrading an existing container deployment
+
+Before 0.13 the dispatcher's config directory was `/etc/ctrl-exec`. From 0.13 it
+is `/etc/ctrl-exec-dispatcher`, to match `/etc/ctrl-exec-agent`. A package
+upgrade on a host moves the directory and rewrites the paths in `ctrl-exec.conf`,
+but a container image has nothing to upgrade in place, so a deployment with a
+volume mounted at `/etc/ctrl-exec` needs these steps once:
+
+1. Change the mount target in `compose.yml` from `/etc/ctrl-exec` to
+   `/etc/ctrl-exec-dispatcher`. The data on the host stays where it is.
+2. Edit `ctrl-exec.conf` on that mount, changing each path that begins
+   `/etc/ctrl-exec/` (`cert`, `key`, `ca`, and `auth_hook` if set) to begin
+   `/etc/ctrl-exec-dispatcher/`. Keep a copy of the file first.
+3. Rebuild the image from the 0.13 debs and recreate the container.
+
+Do not leave the mount at the old path. The ctrl-exec code does fall back to
+`/etc/ctrl-exec` with a warning when `/etc/ctrl-exec-dispatcher` does not exist,
+and a host that still has only the old directory keeps working that way. But an
+image built from the 0.13 package always contains the new directory, so inside
+the container the fallback never applies: the code would look in the empty new
+directory, and an entrypoint that creates the CA when none is found would create
+a second one and orphan every pairing. The entrypoint in this document refuses to
+start in that situation.
+
+The fallback, and the symlink that package upgrades leave at `/etc/ctrl-exec`,
+are removed in 0.14. Anything of yours that names `/etc/ctrl-exec` - a backup job,
+a `docker exec` script, a monitoring check - must use `/etc/ctrl-exec-dispatcher`
+before then.
+
+An agent container needs no such step: its directory, `/etc/ctrl-exec-agent`,
+did not change. An agent image from an earlier release was built on Alpine from
+the tarball; rebuild it on the new Dockerfile and keep the existing `agent-data`
+volume. Add an `agent-state` volume at `/var/lib/ctrl-exec-agent`. The old layout
+did not keep that directory on a volume, so the trusted-dispatcher map it holds
+is missing from the new volume. If `ced ping` is refused after the move, remove
+the agent with `ced unpair <hostname>` on the dispatcher, delete `agent.crt` and
+`agent.key` from `agent-data`, and pair it again.

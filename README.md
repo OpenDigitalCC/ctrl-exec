@@ -74,8 +74,9 @@ automatic cert renewal
   codes, OpenAPI spec endpoints, and the run result status store.
 
 `DOCKER.md`
-: Deploying dispatcher and agents in Alpine Docker containers, including
-  entrypoint patterns, volume mounts, and the pairing workflow in Docker.
+: Deploying dispatcher and agents in Docker containers built from the release
+  Debian packages, keeping the packages' privilege split: entrypoint patterns,
+  volume layout, host hardening, and the pairing workflow in Docker.
 
 `SECURITY.md`
 : Security model, trust boundaries, file permissions, and operational

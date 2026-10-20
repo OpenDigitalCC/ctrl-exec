@@ -470,19 +470,19 @@ rather than reloading if in-flight connections must also be terminated.
 
 Docker socket access
 : Any user or process with access to the Docker socket on the dispatcher host
-  can start a container with the `ctrl-exec-data` volume mounted and read the
-  CA private key. Restrict Docker socket access to root and any explicitly
+  can start a container with the dispatcher's data mount (its
+  `/etc/ctrl-exec-dispatcher`) and read the CA private key. Restrict Docker socket access to root and any explicitly
   designated operators. Do not grant Docker socket access to services running
   on the dispatcher host that do not require it. This is the most significant
   additional risk of a containerised deployment versus a bare-metal install.
 
 Stale pairing request
 : The dispatcher's pairing queue automatically cleans up requests older than
-  10 minutes. In the Docker workflow, the agent container exits after sending
-  its pairing request and must be restarted by the operator after approval.
-  If the 10-minute window expires before the container is restarted and
-  re-triggers the pairing, the request is silently deleted. Recovery: restart
-  the agent container; it will send a fresh pairing request.
+  10 minutes. In the Docker workflow, the agent container's entrypoint waits
+  for approval (30 seconds by default). If the operator does not approve in
+  that time the container exits non-zero and its `on-failure` restart policy
+  sends a fresh request; with a restart policy that does not restart on
+  failure, restart the container by hand.
 
 `DISPATCHER_HOST` trust
 : The `DISPATCHER_HOST` environment variable in the agent container determines
@@ -499,21 +499,24 @@ Stale pairing request
 : In a Docker network, all containers on the same network can reach port 7443
   on the agent container. Set `allowed_ips` in `agent.conf` to the dispatcher
   container's IP or subnet to limit which containers can connect to the agent.
-  The dispatcher container's IP is stable within a compose deployment (Docker
-  assigns IPs deterministically by service name). Example:
+  Docker does not promise the same address after a container is recreated, so
+  allow the compose network's subnet, or pin the address with `ipv4_address`
+  on a network that declares its subnet. Example:
 
   ```ini
   allowed_ips = 172.18.0.0/16
   ```
 
-  For tighter control, use Docker network policies or pin the dispatcher
-  container's IP in the compose file and use an exact IP in `allowed_ips`.
+  For tighter control, pin the dispatcher container's IP in the compose file
+  and use an exact IP in `allowed_ips`.
 
 Volume backup
-: All persistent state is on named volumes. Back up both `ctrl-exec-data`
-  (CA key, dispatcher cert) and `ctrl-exec-registry` (agent registry) on the
-  dispatcher side. On the agent side, `agent-data` contains the agent cert and
-  key. Loss of `agent-data` requires re-pairing that agent. Loss of
-  `ctrl-exec-data` requires regenerating the CA and re-pairing the entire
-  fleet. Treat volume backup with the same priority as the CA key backup
-  described in SECURITY.md.
+: All persistent state is on bind mounts or named volumes. Back up both the
+  dispatcher's data mount (`dispatcher-data` in the sample layout: CA key,
+  dispatcher cert, config) and its registry mount (`dispatcher-registry`: the
+  agent registry) on the dispatcher side. On the agent side, `agent-data`
+  contains the agent cert and key, and `agent-state` the trusted-dispatcher map.
+  Loss of `agent-data` requires re-pairing that agent. Loss of the dispatcher's
+  data mount requires regenerating the CA and re-pairing the entire fleet.
+  Treat volume backup with the same priority as the CA key backup described in
+  SECURITY.md.

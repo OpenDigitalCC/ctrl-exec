@@ -91,8 +91,16 @@ These variables are passed to auth hooks by the dispatcher and by the agent. The
 | `ENVEXEC_DISPATCHER` | string | Stable id of the authenticated dispatcher, resolved from the agent's trusted-dispatcher map. Per-dispatcher policy keys on this. Agent-side hooks only. |
 | `ENVEXEC_DISPATCHER_SERIAL` | string | Certificate serial of the authenticated dispatcher. Agent-side hooks only. |
 
-# Docker Environment Variable
+# Docker Environment Variables
 
-| Variable | Description |
-| --- | --- |
-| `DISPATCHER_HOST` | Hostname or IP of the dispatcher instance, used in agent container entrypoints during pairing |
+These are read by the container entrypoints in the Docker deployment guide, not by ctrl-exec itself. The dispatcher entrypoint uses them to write `ctrl-exec.conf` on first start; later changes to the compose file do not alter a config that already exists.
+
+| Variable | Container | Description |
+| --- | --- | --- |
+| `DISPATCHER_ID` | dispatcher | Written to `dispatcher_id`. Default `dispatcher`. Do not change it after agents have paired: every pairing is invalidated |
+| `API_BIND`, `API_PORT` | dispatcher | Written to `api_bind` and `api_port` |
+| `API_AUTH_DEFAULT` | dispatcher | Written to `api_auth_default`. Applies only when no `auth_hook` is configured |
+| `READ_TIMEOUT` | dispatcher | Written to `read_timeout` when set |
+| `MAINT_INTERVAL` | dispatcher | Seconds between certificate-maintenance runs. Default 14400 |
+| `DISPATCHER_HOST` | agent | Hostname or IP of the dispatcher instance, used in agent container entrypoints during pairing |
+| `SYSLOG_HOST`, `SYSLOG_PORT` | both | Remote TLS syslog collector. Unset: no forwarding |
