@@ -10,6 +10,7 @@ use Exec::CertInfo qw();
 use Exec::Random   qw();
 
 use Exec::Log qw();
+use Exec::DispatcherConfig qw();
 
 
 my $DEFAULT_PORT = 7443;
@@ -942,12 +943,12 @@ sub _renew_one (%opts) {
     # impersonates another host.
     my $cert_pem = Exec::CA::sign_csr(
         csr_pem     => $csr_pem,
-        ca_dir      => $config->{ca_dir} // '/etc/ctrl-exec',
+        ca_dir      => $config->{ca_dir} // Exec::DispatcherConfig::conf_dir(),
         days        => $config->{cert_days} // 365,
         expected_cn => $name,
     );
     my $ca_pem = Exec::CA::read_ca_cert(
-        ca_dir => $config->{ca_dir} // '/etc/ctrl-exec',
+        ca_dir => $config->{ca_dir} // Exec::DispatcherConfig::conf_dir(),
     );
 
     # Deliver new cert

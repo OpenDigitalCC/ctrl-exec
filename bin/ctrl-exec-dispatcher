@@ -23,7 +23,9 @@ use Sys::Hostname       qw(hostname);
 
 our $VERSION = 'UNINSTALLED';
 
-my $CONFIG_PATH = '/etc/ctrl-exec/ctrl-exec.conf';
+# Default: /etc/ctrl-exec-dispatcher/ctrl-exec.conf (the legacy /etc/ctrl-exec-dispatcher if
+# that is all there is) - resolved on first use by _load_config.
+my $CONFIG_PATH;
 my $PAIR_PORT   = 7444;
 my $PAIRING_PIDFILE = '/var/lib/ctrl-exec/pairing-mode.pid';
 
@@ -475,7 +477,7 @@ sub _pairing_serve ($opts, $config, $timeout) {
     # always reaches the reap below.
     Exec::Pairing::run_pairing_mode(
         port          => $opts->{port} // $PAIR_PORT,
-        ca_dir        => '/etc/ctrl-exec',
+        ca_dir        => Exec::DispatcherConfig::conf_dir(),
         cert          => $config->{cert},
         key           => $config->{key},
         max_queue     => $config->{pairing_max_queue} // 10,
@@ -644,7 +646,7 @@ sub mode_approve ($opts, $reqid = undef) {
     my $config = eval { _load_config() } // {};
     Exec::Pairing::approve_request(
         reqid           => $reqid,
-        ca_dir          => '/etc/ctrl-exec',
+        ca_dir          => Exec::DispatcherConfig::conf_dir(),
         lookup_by       => $lookup_by,
         ip              => $ip,
         port            => $agent_port,
@@ -664,7 +666,7 @@ sub mode_deny ($opts, $reqid = undef) {
 
 sub mode_setup_ca {
     print "Setting up dispatcher CA...\n";
-    my $result = Exec::CA::generate_ca(ca_dir => '/etc/ctrl-exec');
+    my $result = Exec::CA::generate_ca(ca_dir => Exec::DispatcherConfig::conf_dir());
     print "CA created:\n";
     print "  Key:  $result->{ca_key}\n";
     print "  Cert: $result->{ca_cert}\n";
@@ -672,7 +674,7 @@ sub mode_setup_ca {
 }
 
 sub mode_setup_dispatcher {
-    my $ca_dir   = '/etc/ctrl-exec';
+    my $ca_dir   = Exec::DispatcherConfig::conf_dir();
     # The cert/key paths are whatever ctrl-exec.conf declares - the one place
     # that names the dispatcher's identity files. Create them there so the cert
     # the dispatcher serves, and the one approve/rotate read the serial from, are
@@ -935,6 +937,7 @@ sub _lock_error ($lock, $json) {
 }
 
 sub _load_config {
+    $CONFIG_PATH //= Exec::DispatcherConfig::conf_path();
     return Exec::DispatcherConfig::load_config($CONFIG_PATH);
 }
 
@@ -1105,7 +1108,7 @@ Modes:
   unpair <hostname>          Remove a paired agent from the registry
 
 Options:
-  --config <path>            Path to ctrl-exec.conf
+  --config <path>            Path to ctrl-exec.conf (default /etc/ctrl-exec-dispatcher/ctrl-exec.conf)
   --json                     Output results as JSON
   --port <n>                 Override default port (7443)
   --username <name>          Username for auth hook (default: $USER)

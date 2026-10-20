@@ -15,10 +15,11 @@ use Exec::Registry qw();
 use Exec::Engine   qw();
 use Exec::Pairing  qw();
 use Exec::Log      qw();
+use Exec::DispatcherConfig qw();
 
 
 my $ROTATION_FILE  = '/var/lib/ctrl-exec/rotation.json';
-my $CA_DIR         = '/etc/ctrl-exec';
+sub _default_ca_dir () { return Exec::DispatcherConfig::conf_dir() }
 
 # Default configuration values - overridden by ctrl-exec.conf
 my $DEFAULT_CERT_DAYS       = 825;   # dispatcher cert lifetime (matches CA.pm default)
@@ -41,7 +42,7 @@ sub check_and_rotate (%opts) {
     my $config = $opts{config} or croak "config required";
 
     my $renewal_days = $config->{cert_renewal_days} // $DEFAULT_RENEWAL_DAYS;
-    my $ca_dir       = $config->{ca_dir}            // $CA_DIR;
+    my $ca_dir       = $config->{ca_dir}            // _default_ca_dir();
     # The cert this dispatcher serves with (ctrl-exec.conf 'cert') is the single
     # source of truth - never a hardcoded name.
     my $disp_crt     = $config->{cert}
@@ -346,7 +347,7 @@ sub run_check_loop (%opts) {
 
 sub _do_rotation (%opts) {
     my $config      = $opts{config};
-    my $ca_dir      = $config->{ca_dir}         // $CA_DIR;
+    my $ca_dir      = $config->{ca_dir}         // _default_ca_dir();
     my $cert_days   = $config->{cert_days}       // $DEFAULT_CERT_DAYS;
     my $overlap_days = $config->{cert_overlap_days} // $DEFAULT_OVERLAP_DAYS;
     # Re-key the cert this dispatcher actually serves with (ctrl-exec.conf

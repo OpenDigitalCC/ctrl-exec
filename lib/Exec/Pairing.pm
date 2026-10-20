@@ -19,6 +19,7 @@ use Exec::Pairing::Identity qw();
 
 use Exec::RateLimit qw();
 use Exec::Http      qw();
+use Exec::DispatcherConfig qw();
 
 
 my $PAIRING_DIR = '/var/lib/ctrl-exec/pairing';
@@ -101,7 +102,7 @@ sub resolve_dispatcher_id ($config = undef) {
 # Blocks until interrupted (SIGINT/SIGTERM)
 sub run_pairing_mode (%opts) {
     my $port      = $opts{port}      // 7444;
-    my $ca_dir    = $opts{ca_dir}    // '/etc/ctrl-exec';
+    my $ca_dir    = $opts{ca_dir}    // Exec::DispatcherConfig::conf_dir();
     my $cert      = $opts{cert}      or croak "cert required";
     my $key       = $opts{key}       or croak "key required";
     my $log_fn    = $opts{log_fn}    // sub {};
@@ -327,7 +328,7 @@ sub list_requests (%opts) {
 # The agent's connection is held in a response file keyed by reqid
 sub approve_request (%opts) {
     my $reqid       = $opts{reqid}       or croak "reqid required";
-    my $ca_dir      = $opts{ca_dir}      // '/etc/ctrl-exec';
+    my $ca_dir      = $opts{ca_dir}      // Exec::DispatcherConfig::conf_dir();
     my $pairing_dir = $opts{pairing_dir} // $PAIRING_DIR;
     my $log_fn      = $opts{log_fn}      // sub {};
     # This dispatcher's stable identity, delivered to the agent so it can key

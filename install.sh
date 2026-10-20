@@ -24,7 +24,7 @@ BIN_DIR="/usr/local/bin"
 SBIN_DIR="/usr/local/sbin"
 LIB_DIR="/usr/local/lib/ctrl-exec"
 AGENT_CONF_DIR="/etc/ctrl-exec-agent"
-EXEC_CONF_DIR="/etc/ctrl-exec"
+EXEC_CONF_DIR="/etc/ctrl-exec-dispatcher"
 SCRIPTS_DIR="/opt/ctrl-exec-scripts"
 PAIRING_DIR="/var/lib/ctrl-exec/pairing"
 AGENTS_DIR="/var/lib/ctrl-exec/agents"
@@ -679,7 +679,7 @@ install_ctrl_exec_dispatcher() {
 
     # ctrl-exec config
     if [[ ! -f "$EXEC_CONF_DIR/ctrl-exec.conf" ]]; then
-        safe_install 640 "$SOURCE_DIR/etc/ctrl-exec.conf.example" "$EXEC_CONF_DIR/ctrl-exec.conf"
+        safe_install 640 "$SOURCE_DIR/etc/ctrl-exec-dispatcher.conf.example" "$EXEC_CONF_DIR/ctrl-exec.conf"
         chown root:"$EXEC_GROUP" "$EXEC_CONF_DIR/ctrl-exec.conf"
         warn "ctrl-exec config written to $EXEC_CONF_DIR/ctrl-exec.conf - review before use."
     else

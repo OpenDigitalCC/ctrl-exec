@@ -25,6 +25,13 @@ task group, each adding its bullets to this entry.
   `/run/ctrl-exec-agent/exec.sock` are unchanged, so no `agent.conf` edit is
   needed. Existing installs are switched over on upgrade (see the migration note
   below). (T-008)
+- **Changed** the dispatcher's config directory from `/etc/ctrl-exec/` to
+  `/etc/ctrl-exec-dispatcher/`, to match `/etc/ctrl-exec-agent/`: the defaults in
+  `ctrl-exec-dispatcher`, `ctrl-exec-api`, the CA, pairing, rotation and engine
+  code, `etc/ctrl-exec.conf.example`, the units and the packaging. Where only the
+  old `/etc/ctrl-exec/` exists (a half-migrated host) it is still found, with a
+  warning; where both exist the new one wins (`Exec::DispatcherConfig::conf_dir`).
+  The `ctrl-exec` group and user, and `/var/lib/ctrl-exec/`, are unchanged. (T-008)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 

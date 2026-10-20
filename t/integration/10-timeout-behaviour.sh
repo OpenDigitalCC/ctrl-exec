@@ -26,7 +26,7 @@ source "${_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/lib.sh"
 
 require_agents 1
 
-ORIG_CONF="/etc/ctrl-exec/ctrl-exec.conf"
+ORIG_CONF="/etc/ctrl-exec-dispatcher/ctrl-exec.conf"
 TMP_CONF="/tmp/ctrl-exec-test-$$.conf"
 SSH_USER="${AGENT_SSH_USER:-root}"
 

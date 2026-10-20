@@ -6,7 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-# Runs as root: signing a renewal needs the CA private key (/etc/ctrl-exec/ca.key,
+# Runs as root: signing a renewal needs the CA private key (/etc/ctrl-exec-dispatcher/ca.key,
 # 0600 root) - the same privilege the manual `ced rotate-cert` / pairing-mode use.
 # Pings every registered agent (triggering renewal when a cert is past half-life)
 # and rotates/broadcasts the dispatcher's own cert when it nears expiry.

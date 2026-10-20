@@ -17,9 +17,9 @@ case "$1" in
         fi
 
         # Config directory.
-        mkdir -p /etc/ctrl-exec
-        chmod 750 /etc/ctrl-exec
-        chown root:ctrl-exec /etc/ctrl-exec
+        mkdir -p /etc/ctrl-exec-dispatcher
+        chmod 750 /etc/ctrl-exec-dispatcher
+        chown root:ctrl-exec /etc/ctrl-exec-dispatcher
 
         # Runtime state: pairing queue, agent registry, locks, run results.
         # setgid (2770) on the shared dirs so files created by the root CLI and by
@@ -39,16 +39,16 @@ case "$1" in
         find /var/lib/ctrl-exec/locks -type f -exec chmod g+w {} + 2>/dev/null || true
 
         # Seed config and example auth hook on first install only.
-        if [ ! -f /etc/ctrl-exec/ctrl-exec.conf ]; then
+        if [ ! -f /etc/ctrl-exec-dispatcher/ctrl-exec.conf ]; then
             cp /usr/share/ctrl-exec/examples/ctrl-exec.conf.example \
-               /etc/ctrl-exec/ctrl-exec.conf
-            chmod 640 /etc/ctrl-exec/ctrl-exec.conf
-            chown root:ctrl-exec /etc/ctrl-exec/ctrl-exec.conf
+               /etc/ctrl-exec-dispatcher/ctrl-exec.conf
+            chmod 640 /etc/ctrl-exec-dispatcher/ctrl-exec.conf
+            chown root:ctrl-exec /etc/ctrl-exec-dispatcher/ctrl-exec.conf
         fi
-        if [ ! -f /etc/ctrl-exec/auth-hook ]; then
+        if [ ! -f /etc/ctrl-exec-dispatcher/auth-hook ]; then
             cp /usr/share/ctrl-exec/examples/auth-hook.example \
-               /etc/ctrl-exec/auth-hook
-            chmod 755 /etc/ctrl-exec/auth-hook
+               /etc/ctrl-exec-dispatcher/auth-hook
+            chmod 755 /etc/ctrl-exec-dispatcher/auth-hook
         fi
 
         # Migration: hand an existing dispatcher private key to the ctrl-exec user
@@ -57,8 +57,8 @@ case "$1" in
         # before the de-rooting. Resolve the configured key path, default to
         # dispatcher.key, and chown only if it exists.
         key_path=$(sed -n 's/^[[:space:]]*key[[:space:]]*=[[:space:]]*//p' \
-                   /etc/ctrl-exec/ctrl-exec.conf 2>/dev/null | head -n1)
-        [ -n "$key_path" ] || key_path=/etc/ctrl-exec/dispatcher.key
+                   /etc/ctrl-exec-dispatcher/ctrl-exec.conf 2>/dev/null | head -n1)
+        [ -n "$key_path" ] || key_path=/etc/ctrl-exec-dispatcher/dispatcher.key
         if [ -f "$key_path" ]; then
             chown ctrl-exec:ctrl-exec "$key_path"
             chmod 600 "$key_path"

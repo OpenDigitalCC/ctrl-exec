@@ -16,17 +16,17 @@ chmod 755 /run/ctrl-exec-agent
 
 echo "[rig] nofile limits (soft/hard): $(ulimit -Sn)/$(ulimit -Hn)"
 
-cat > /etc/ctrl-exec/ctrl-exec.conf <<EOC
-cert = /etc/ctrl-exec/dispatcher.crt
-key  = /etc/ctrl-exec/dispatcher.key
-ca   = /etc/ctrl-exec/ca.crt
-auth_hook = /etc/ctrl-exec/auth-hook
+cat > /etc/ctrl-exec-dispatcher/ctrl-exec.conf <<EOC
+cert = /etc/ctrl-exec-dispatcher/dispatcher.crt
+key  = /etc/ctrl-exec-dispatcher/dispatcher.key
+ca   = /etc/ctrl-exec-dispatcher/ca.crt
+auth_hook = /etc/ctrl-exec-dispatcher/auth-hook
 api_bind = 0.0.0.0
 api_port = 7445
 api_auth_default = deny
 EOC
-chown root:ctrl-exec /etc/ctrl-exec/ctrl-exec.conf
-chmod 640 /etc/ctrl-exec/ctrl-exec.conf
+chown root:ctrl-exec /etc/ctrl-exec-dispatcher/ctrl-exec.conf
+chmod 640 /etc/ctrl-exec-dispatcher/ctrl-exec.conf
 
 cp /opt/rig/agent.conf /etc/ctrl-exec-agent/agent.conf
 if [ -n "${RIG_AGENT_EXTRA:-}" ]; then

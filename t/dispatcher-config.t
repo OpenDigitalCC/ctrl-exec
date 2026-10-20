@@ -26,16 +26,16 @@ sub write_conf {
 subtest 'load_config: parses keys and ignores comments/blanks' => sub {
     my $path = write_conf(<<'CONF');
 # a comment
-cert = /etc/ctrl-exec/dispatcher.crt
-key  = /etc/ctrl-exec/dispatcher.key
+cert = /etc/ctrl-exec-dispatcher/dispatcher.crt
+key  = /etc/ctrl-exec-dispatcher/dispatcher.key
 
-ca   = /etc/ctrl-exec/ca.crt
+ca   = /etc/ctrl-exec-dispatcher/ca.crt
 dispatcher_id = disp-1
 CONF
     my $c = Exec::DispatcherConfig::load_config($path);
-    is $c->{cert}, '/etc/ctrl-exec/dispatcher.crt', 'cert parsed';
-    is $c->{key},  '/etc/ctrl-exec/dispatcher.key', 'key parsed';
-    is $c->{ca},   '/etc/ctrl-exec/ca.crt',         'ca parsed';
+    is $c->{cert}, '/etc/ctrl-exec-dispatcher/dispatcher.crt', 'cert parsed';
+    is $c->{key},  '/etc/ctrl-exec-dispatcher/dispatcher.key', 'key parsed';
+    is $c->{ca},   '/etc/ctrl-exec-dispatcher/ca.crt',         'ca parsed';
     is $c->{dispatcher_id}, 'disp-1',               'extra key parsed';
 };
 

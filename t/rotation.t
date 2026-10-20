@@ -8,7 +8,7 @@
 # broadcast_serial) with filesystem I/O isolated via tempdir.
 #
 # Config key reference:
-#   ca_dir          => directory containing dispatcher.crt (default /etc/ctrl-exec)
+#   ca_dir          => directory containing dispatcher.crt (default /etc/ctrl-exec-dispatcher)
 #   rotation_file   => path to rotation.json state file (default /var/lib/ctrl-exec/rotation.json)
 #   registry_dir    => path to agent registry dir (default /var/lib/ctrl-exec/agents)
 #   cert_days       => new cert lifetime in days

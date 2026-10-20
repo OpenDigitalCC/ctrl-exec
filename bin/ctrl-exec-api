@@ -14,7 +14,9 @@ use Getopt::Long    qw(GetOptions);
 
 our $VERSION = 'UNINSTALLED';
 
-my $CONFIG_PATH = '/etc/ctrl-exec/ctrl-exec.conf';
+# Default: /etc/ctrl-exec-dispatcher/ctrl-exec.conf (the legacy /etc/ctrl-exec-dispatcher if
+# that is all there is) - resolved in main.
+my $CONFIG_PATH;
 
 main();
 
@@ -24,6 +26,7 @@ sub main {
 
     Exec::Log::init('ctrl-exec-api');
 
+    $CONFIG_PATH //= Exec::DispatcherConfig::conf_path();
     my $config = load_config($CONFIG_PATH);
 
     Exec::API::run(config => $config);
@@ -38,7 +41,7 @@ sub usage {
 Usage: ctrl-exec-api [options]
 
 Options:
-  --config <path>    Path to ctrl-exec.conf (default /etc/ctrl-exec/ctrl-exec.conf)
+  --config <path>    Path to ctrl-exec.conf (default /etc/ctrl-exec-dispatcher/ctrl-exec.conf)
 
 The API server reads its configuration from ctrl-exec.conf.
 Relevant keys:

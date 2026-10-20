@@ -9,12 +9,11 @@ use File::Path  qw(make_path);
 use Carp        qw(croak);
 use Exec::FileUtil qw(slurp);
 use Exec::Cmd      qw();
+use Exec::DispatcherConfig qw();
 
 
-my $CA_DIR   = '/etc/ctrl-exec';
-my $CA_KEY   = "$CA_DIR/ca.key";
-my $CA_CERT  = "$CA_DIR/ca.crt";
-my $SERIAL   = "$CA_DIR/ca.serial";
+# Default CA directory: the dispatcher config dir (see Exec::DispatcherConfig).
+sub _default_ca_dir () { return Exec::DispatcherConfig::conf_dir() }
 
 # One-time CA setup - generates ca.key and ca.crt
 # Dies if CA already exists unless force => 1
@@ -23,7 +22,7 @@ sub generate_ca (%opts) {
     my $bits  = $opts{bits}  // 4096;
     my $cn    = $opts{cn}    // 'ctrl-exec CA';
     my $force = $opts{force} // 0;
-    my $ca_dir = $opts{ca_dir} // $CA_DIR;
+    my $ca_dir = $opts{ca_dir} // _default_ca_dir();
 
     croak "days must be a positive integer"
         unless defined $days && $days =~ /^\d+$/ && $days > 0;
@@ -61,7 +60,7 @@ sub generate_ca (%opts) {
 sub generate_dispatcher_cert (%opts) {
     my $days   = $opts{days}   // 825;
     my $bits   = $opts{bits}   // 4096;
-    my $ca_dir = $opts{ca_dir} // $CA_DIR;
+    my $ca_dir = $opts{ca_dir} // _default_ca_dir();
     my $force  = $opts{force}  // 0;
 
     croak "days must be a positive integer"
@@ -131,7 +130,7 @@ sub generate_dispatcher_cert (%opts) {
 sub sign_csr (%opts) {
     my $csr_pem  = $opts{csr_pem}  or croak "csr_pem required";
     my $days     = $opts{days}     // 825;
-    my $ca_dir   = $opts{ca_dir}   // $CA_DIR;
+    my $ca_dir   = $opts{ca_dir}   // _default_ca_dir();
     my $out_path = $opts{out_path};
     # Optional: bind the CSR subject CN to a known identity. Callers that know
     # which agent they are signing for (cert renewal) pass this so a holder of
@@ -201,7 +200,7 @@ sub sign_csr (%opts) {
 
 # Read CA cert PEM - for distribution to agents during pairing
 sub read_ca_cert (%opts) {
-    my $ca_dir = $opts{ca_dir} // $CA_DIR;
+    my $ca_dir = $opts{ca_dir} // _default_ca_dir();
     return slurp("$ca_dir/ca.crt");
 }
 
