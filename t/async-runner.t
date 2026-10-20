@@ -230,4 +230,18 @@ sub write_script {
         'owned_by: false for a non-record';
 }
 
+# --- lock files: O_NOFOLLOW and sweep (T-024) ---
+
+subtest 'script lock: a symlink at the lock path is refused, target untouched' => sub {
+    my $dir = tempdir(CLEANUP => 1);
+    mkdir "$dir/.locks" or die $!;
+    my $target = "$dir/victim";
+    open my $v, '>', $target or die $!; print $v "keep\n"; close $v;
+    symlink $target, "$dir/.locks/evil.lock" or die $!;
+    my $fh = Exec::Agent::AsyncRunner::_acquire_script_lock($dir, 'evil');
+    ok !$fh, 'lock refused (undef) rather than following the symlink';
+    open my $r, '<', $target or die $!;
+    is scalar(<$r>), "keep\n", 'symlink target untouched';
+};
+
 done_testing;

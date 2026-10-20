@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
-use Test::More tests => 24;
+use Test::More tests => 29;
 use File::Temp qw(tempdir);
 use IPC::Open2  qw(open2);
 use FindBin    qw($Bin);
@@ -130,6 +130,32 @@ sub stop_holder {
         hosts   => ['host-a'],
         script  => 'backup',
     );
+}
+
+# --- lock files are opened with O_NOFOLLOW (T-024) ---
+# A symlink planted at the lock path must be refused, not followed, and its
+# target must not be created, truncated or chmod-ed.
+{
+    my $target = "$tmpdir/victim";
+    open my $v, '>', $target or die $!;
+    print $v "precious\n";
+    close $v;
+    chmod 0600, $target;
+    symlink $target, "$dir/ln--ln.lock" or die "symlink: $!";
+
+    eval { Exec::Lock::acquire(hosts => ['ln'], script => 'ln', lock_dir => $dir) };
+    like $@, qr/symlink|Too many levels/i, 'acquire: a symlinked lock path is refused';
+    eval { Exec::Lock::check_available(hosts => ['ln'], script => 'ln', lock_dir => $dir) };
+    like $@, qr/symlink|Too many levels/i, 'check_available: a symlinked lock path is refused';
+
+    is((stat $target)[2] & 07777, 0600, 'symlink target mode untouched');
+    open my $r, '<', $target or die $!;
+    is scalar(<$r>), "precious\n", 'symlink target content untouched';
+    close $r;
+
+    my $held = Exec::Lock::list_held(lock_dir => $dir);
+    ok !(grep { $_->{host} eq 'ln' } @$held), 'list_held: skips the symlink';
+    unlink "$dir/ln--ln.lock";
 }
 
 # --- conflict detection ---

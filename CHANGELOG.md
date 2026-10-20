@@ -85,6 +85,7 @@ task group, each adding its bullets to this entry.
   advanced (it remains as the signing lock file) and certificates already
   issued keep their serials. (T-023)
 - **Fixed** `/run` `args` are now type-checked: any element that is a reference or undef is rejected (agent: `exit -1` error before allowlist/auth/exec, the real boundary; dispatcher API: 400), so such values never reach the exec boundary. (T-024)
+- **Fixed** lock files (dispatcher `locks/`, agent `.locks/`, registry lock) are opened with `O_NOFOLLOW`, so a symlink planted at a lock path is refused with a clear error instead of being followed and its target created or chmod-ed. (T-024)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 

@@ -11,7 +11,7 @@ use File::Basename qw(dirname);
 use Fcntl      qw(LOCK_EX LOCK_NB);
 use POSIX      qw(setsid strftime);
 use Carp       qw(croak);
-use Exec::FileUtil qw(slurp_maybe);
+use Exec::FileUtil qw(slurp_maybe flock_path_nb);
 
 use Exec::Agent::Runner qw();
 use Exec::Log qw();
@@ -179,6 +179,9 @@ sub purge_expired ($runs_dir = undef, $ttl = undef) {
         closedir $top;
     }
 
+    # Idle per-script lock files are swept here too (release never unlinks).
+   ("$runs_dir/.locks", qr/\.lock\z/) if -d "$runs_dir/.locks";
+
     my $removed = 0;
     for my $dir (@dirs) {
         opendir my $dh, $dir or next;
@@ -205,8 +208,11 @@ sub _acquire_script_lock ($runs_dir, $script) {
     make_path($lock_dir) unless -d $lock_dir;
     (my $safe = $script) =~ s/[^\w.\-]/_/g;
     my $path = "$lock_dir/$safe.lock";
-    open my $fh, '>>', $path or return undef;
-    unless (flock $fh, LOCK_EX | LOCK_NB) {
+    # O_NOFOLLOW open: a symlink planted at the lock path is refused (undef, so
+    # the submit reports busy) rather than followed.
+    my ($fh, $got) = flock_path_nb($path);
+    return undef unless $fh;
+    unless ($got) {
         close $fh;
         return undef;
     }

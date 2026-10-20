@@ -8,7 +8,7 @@ use JSON      qw(encode_json decode_json);
 use File::Path qw(make_path);
 use Fcntl     qw(:flock);
 use Carp      qw(croak);
-use Exec::FileUtil qw(slurp write_atomic);
+use Exec::FileUtil qw(slurp write_atomic open_lock);
 
 
 my $REGISTRY_DIR = '/var/lib/ctrl-exec/agents';
@@ -82,7 +82,7 @@ sub register_agent (%opts) {
 # (rotation broadcast, renewal expiry, discovery tags) are infrequent, not hot.
 # Best-effort: if the lock file cannot be opened the update proceeds unlocked.
 sub _locked ($dir, $code) {
-    open my $lk, '>>', "$dir/.registry.lock" or return $code->();
+    my $lk = open_lock("$dir/.registry.lock") or return $code->();
     flock $lk, LOCK_EX;
     my @r = eval { $code->() };
     my $err = $@;

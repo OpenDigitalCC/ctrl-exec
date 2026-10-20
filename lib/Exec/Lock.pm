@@ -9,6 +9,7 @@ use File::Path qw(make_path);
 use Carp   qw(croak);
 
 use Exec::Log qw();
+use Exec::FileUtil qw(flock_path_nb);
 
 
 my $LOCK_DIR = '/var/lib/ctrl-exec/locks';
@@ -40,10 +41,10 @@ sub check_available (%opts) {
 
     for my $host (@$hosts) {
         my $path = _lock_path($dir, $host, $script);
-        my $fh   = _open_lock_file($path);
+        my ($fh, $got) = _lock_file($path);
 
         # Non-blocking attempt - if we can't get it, it's held
-        unless (flock $fh, LOCK_EX | LOCK_NB) {
+        unless ($got) {
             push @conflicts, "$host:$script";
         }
         # We don't hold the lock - release immediately
@@ -88,9 +89,9 @@ sub acquire (%opts) {
 
     for my $host (@$hosts) {
         my $path = _lock_path($dir, $host, $script);
-        my $fh   = _open_lock_file($path);
+        my ($fh, $got) = _lock_file($path);
 
-        if (flock $fh, LOCK_EX | LOCK_NB) {
+        if ($got) {
             push @handles, $fh;
             Exec::Log::log_action('INFO', {
                 ACTION => 'lock-acquire',
@@ -166,10 +167,9 @@ sub list_held (%opts) {
         next unless $f =~ /^(.+)--(.+)\.lock$/;
         my ($host, $script) = ($1, $2);
         my $path = "$dir/$f";
-        open my $fh, '>>', $path or next;
-        if (!flock $fh, LOCK_EX | LOCK_NB) {
-            push @held, { host => $host, script => $script };
-        }
+        my ($fh, $got) = flock_path_nb($path);
+        next unless $fh;   # unreadable or a symlink: not a lock we own
+        push @held, { host => $host, script => $script } unless $got;
         flock $fh, LOCK_UN;
         close $fh;
     }
@@ -188,17 +188,15 @@ sub _lock_path ($dir, $host, $script) {
     return "$dir/${safe_host}--${safe_script}.lock";
 }
 
-sub _open_lock_file ($path) {
-    my $existed = -e $path;
-    open my $fh, '>>', $path
-        or croak "Cannot open lock file '$path': $!";
-    # A lock is acquired by opening the file for write and flock-ing it. The root
-    # CLI and the unprivileged API server (both in the ctrl-exec group, via the
-    # setgid lock dir) must each be able to flock a lock the other created, so make
-    # a freshly-created lock file group-writable. Only the creator can chmod, and
-    # it is harmless if the file already existed (its creator set this).
-    chmod 0660, $path unless $existed;
-    return $fh;
+# Open and try to flock one lock file. Returns ($fh, $got): $got is 1 when we now
+# hold the lock. Dies with a clear message if the file cannot be opened, in
+# particular when the path is a symlink (opened with O_NOFOLLOW, never followed).
+sub _lock_file ($path) {
+    my ($fh, $got) = flock_path_nb($path);
+    return ($fh, $got) if $fh;
+    croak "Refusing lock file '$path': it is a symlink"
+        if $!{ELOOP};
+    croak "Cannot open lock file '$path': $!";
 }
 
 sub _ensure_dir ($dir) {
