@@ -362,6 +362,10 @@ MSG
         SSL_key_file     => $config->{key},
         SSL_ca_file      => $config->{ca},
         SSL_verify_mode  => IO::Socket::SSL::SSL_VERIFY_PEER(),
+        # accept() returns the bare TCP connection; the TLS handshake is run on
+        # it below (accept_SSL, with a timeout) so a failed or abandoned handshake
+        # is attributable to the peer's address.
+        SSL_startHandshake => 0,
         Exec::TLS::hardening(),
     ) or die "Cannot start server: $IO::Socket::SSL::SSL_ERROR\n";
 
@@ -405,25 +409,22 @@ MSG
             }
             next if $action eq 'retry';
 
-            # TLS handshake failure: a peer presented a bad/unsigned cert or an
-            # unsupported protocol, or reset mid-handshake. The listening socket
-            # carries no peer address, so these count under 'unknown' for the
-            # probe threshold.
-            my $peer = 'unknown';
-            Exec::RateLimit::record_failure($peer, \%rate_state);
+            # A failed TCP accept (EMFILE, a peer reset before accept returned,
+            # ...). There is no handshake and no peer here, so there is nothing
+            # to count for the probe limit: log it and keep serving.
             Exec::Log::log_action('WARNING', {
-                ACTION => 'tls-failure',
-                PEER   => $peer,
+                ACTION => 'accept-error',
                 REASON => ($ssl_err || $errstr),
             });
-            Exec::RateLimit::check($peer, \%rate_state, $rate_config);
             next;
         }
         $accept_failures = 0;
 
+        # $conn is a connected TCP socket with no TLS yet, so the peer address is
+        # known even if the handshake below fails.
         my $peer        = $conn->peerhost // 'unknown';
 
-        # IP allowlist check: before rate check, before fork, before peer serial
+        # IP allowlist check: before any TLS work, before rate check, before fork
         if ($config->{allowed_ips} &&
             !Exec::Agent::Config::ip_allowed($peer, $config->{allowed_ips})) {
             $conn->close(SSL_no_shutdown => 1);
@@ -431,6 +432,39 @@ MSG
                 ACTION => 'ip-block',
                 PEER   => $peer,
             });
+            next;
+        }
+
+        # TLS handshake, here in the parent: the volume check, the trusted-
+        # dispatcher exemption and the peer serial all need the client's
+        # certificate, and the rate state they update lives in this process, so
+        # the handshake cannot be deferred to the forked child. The cost is that
+        # a slow or silent client holds the accept loop; accept_SSL is therefore
+        # given HANDSHAKE_TIMEOUT seconds in total, after which the connection is
+        # dropped and counted as a failed handshake from that address (before this
+        # change the handshake inside accept() had no timeout at all). SIGHUP is
+        # held off across it: an interrupted select inside accept_SSL would be
+        # indistinguishable from a timeout and fail a legitimate client.
+        my $hup_only = POSIX::SigSet->new(POSIX::SIGHUP());
+        my $hup_prev = POSIX::SigSet->new;
+        POSIX::sigprocmask(POSIX::SIG_BLOCK(), $hup_only, $hup_prev);
+        my $shook = $conn->accept_SSL(Timeout => Exec::Agent::Server::HANDSHAKE_TIMEOUT());
+        my $errstr  = "$!";
+        my $ssl_err = $IO::Socket::SSL::SSL_ERROR // '';
+        POSIX::sigprocmask(POSIX::SIG_SETMASK(), $hup_prev);
+
+        unless ($shook) {
+            # A peer presented a bad/unsigned cert or an unsupported protocol,
+            # reset mid-handshake, or went silent. Count it against its address
+            # for the probe threshold.
+            Exec::RateLimit::record_failure($peer, \%rate_state);
+            Exec::Log::log_action('WARNING', {
+                ACTION => 'tls-failure',
+                PEER   => $peer,
+                REASON => ($ssl_err || $errstr),
+            });
+            Exec::RateLimit::check($peer, \%rate_state, $rate_config);
+            $conn->close(SSL_no_shutdown => 1);
             next;
         }
 

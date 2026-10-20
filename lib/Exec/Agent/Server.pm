@@ -702,6 +702,11 @@ sub peer_serial ($conn) {
     return lc $hex;
 }
 
+# Seconds the serve loop allows a connecting peer to complete the TLS handshake
+# (the whole handshake, not each read). It runs in the accept-loop parent, so
+# this is also the longest one silent client can hold the loop for everyone else.
+use constant HANDSHAKE_TIMEOUT => 5;
+
 # Classify a failed $server->accept for the serve loop. $errno is $!+0 captured
 # IMMEDIATELY after accept returned undef (any later call clobbers it), $ssl_err
 # is $IO::Socket::SSL::SSL_ERROR at that moment. Returns:

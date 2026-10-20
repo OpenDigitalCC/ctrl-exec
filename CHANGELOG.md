@@ -121,6 +121,19 @@ task group, each adding its bullets to this entry.
   stays in force and `reload-fail` is logged. `port`, `cert`, `key` and `ca` keep
   their running value and log `reload-note` (restart needed). A `scripts.conf` that
   cannot be read no longer empties the allowlist: the previous one is kept. (T-021)
+- **Fixed** the handshake-probe limit never blocking anyone: a TLS handshake failure
+  was recorded under the peer name `unknown` (the listening socket has no peer), so
+  the block applied to no real address. The listener now uses
+  `SSL_startHandshake => 0`; the agent accepts the TCP connection, checks
+  `allowed_ips` (before any TLS cost), then runs `accept_SSL` on it, so the failure
+  is counted under the prober's address and the fourth connection from it gets the
+  probe-block `429`. The trusted-dispatcher exemption, volume check, `max_children`
+  and `accept_failure_action` retry/fatal handling are unchanged. The handshake runs
+  in the accept-loop parent (it needs the peer serial and updates the rate state
+  there) with a 5 s limit (`Exec::Agent::Server::HANDSHAKE_TIMEOUT`), SIGHUP held off
+  across it; a silent client is dropped at the limit and counted as a failure, where
+  the old handshake inside `accept()` could stall the loop indefinitely. A failed TCP
+  accept is logged `accept-error` and no longer counted. (T-035)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 

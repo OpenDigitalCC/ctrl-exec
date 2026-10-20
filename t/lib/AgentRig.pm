@@ -14,6 +14,10 @@ use IO::Socket::SSL;
 use POSIX      qw(WNOHANG);
 use Time::HiRes qw(sleep time);
 
+# Pids of agents this process started, so a test that dies leaves none behind.
+my %LIVE;
+END { kill 'TERM', keys %LIVE if %LIVE; }
+
 sub available { return system('openssl version >/dev/null 2>&1') == 0 }
 
 sub _sh {
@@ -111,6 +115,7 @@ sub start {
             or die "exec: $!";
     }
     $self->{pid} = $pid;
+    $LIVE{$pid} = 1;
     my $deadline = time + 15;
     while (time < $deadline) {
         my $s = IO::Socket::INET->new(PeerAddr => '127.0.0.1', PeerPort => $self->{port});
@@ -128,6 +133,7 @@ sub stop {
     return unless $self->{pid};
     kill 'TERM', $self->{pid};
     waitpid($self->{pid}, 0);
+    delete $LIVE{ $self->{pid} };
     $self->{pid} = undef;
 }
 
@@ -150,13 +156,14 @@ sub wait_log {
 
 sub log_len { return length $_[0]->log_text }
 
-# request(as => 'trusted'|'untrusted'|'rogue', from => '127.0.0.x', path => '/ping')
+# request(as => 'trusted'|'untrusted'|'rogue', from => '127.0.0.x', read_first => 1)
 # Returns the HTTP status code, or undef when the handshake or read failed
 # (no HTTP reply: the agent dropped or rejected the connection).
 sub request {
     my ($self, %o) = @_;
     my $as = $o{as} // 'trusted';
     my $d  = $self->{dir};
+    local $SIG{PIPE} = 'IGNORE';   # the agent may close on us mid-write
     my $c = IO::Socket::SSL->new(
         PeerAddr        => '127.0.0.1',
         PeerPort        => $self->{port},
@@ -165,10 +172,14 @@ sub request {
         SSL_key_file    => "$d/$as.key",
         SSL_ca_file     => "$d/ca.crt",
         SSL_verify_mode => SSL_VERIFY_NONE,
-        Timeout         => 5,
+        Timeout         => 15,
     ) or return undef;
     my $body = '{}';
-    print $c "POST /ping HTTP/1.0\r\nContent-Length: " . length($body) . "\r\n\r\n$body";
+    # read_first: send nothing and read the agent's unsolicited reply (a 429).
+    # An agent that answers and closes without reading our request can reset the
+    # connection under a client that has already written, losing the reply.
+    print $c "POST /ping HTTP/1.0\r\nContent-Length: " . length($body) . "\r\n\r\n$body"
+        unless $o{read_first};
     my $line = <$c>;
     close $c;
     return undef unless defined $line && $line =~ m{^HTTP/\S+\s+(\d+)};

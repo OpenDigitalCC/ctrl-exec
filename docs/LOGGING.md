@@ -917,8 +917,11 @@ ACTION=revoked-cert PEER=10.0.0.1 SERIAL=deadbeef01234567
 ### tls-failure
 
 Emitted when a TLS handshake fails. The peer may be an unauthenticated
-host, a host with an expired cert, or a host whose cert was not signed by
-the deployment CA.
+host, a host with an expired cert, a host whose cert was not signed by
+the deployment CA, or a client that connected and never completed the
+handshake (the agent allows 5 seconds for it; the reason is then
+`Connection timed out`). The agent accepts the TCP connection before the
+handshake, so `PEER` is always the connecting host's address.
 
 Priority
 : WARNING
@@ -928,7 +931,7 @@ Fields
 | Field | Type | Description |
 | --- | --- | --- |
 | ACTION | string | `tls-failure` |
-| PEER | string | IP address of the connecting host (pre-handshake) |
+| PEER | string | IP address of the connecting host |
 | REASON | string | SSL error string from `IO::Socket::SSL` |
 
 ```
@@ -936,7 +939,27 @@ ACTION=tls-failure PEER=203.0.113.5 REASON="SSL accept attempt failed error:..."
 ```
 
 TLS failures also update the probe rate counter for the peer IP. If the
-probe threshold is crossed, a subsequent `rate-block` is emitted.
+probe threshold is crossed, a `rate-block` is emitted and later connections
+from that IP are answered `429` (a paired dispatcher is exempt). A plain TCP
+connect-and-close, such as a load balancer's TCP health check, is a failed
+handshake and counts the same way.
+
+### accept-error
+
+Emitted when the TCP `accept()` itself fails for a reason that is neither
+retried (`EINTR`, `EAGAIN`, `ECONNABORTED`) nor fatal - for example file
+descriptor exhaustion. There is no peer and no handshake, so nothing is counted
+for the probe limit.
+
+Priority
+: WARNING
+
+Fields
+
+| Field | Type | Description |
+| --- | --- | --- |
+| ACTION | string | `accept-error` |
+| REASON | string | System error string from `$!` |
 
 ### accept-fatal
 

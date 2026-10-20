@@ -819,6 +819,13 @@ in a minute from the one paired dispatcher tripped a 5-minute block. The
 volume threshold therefore governs CA-signed-but-unpaired peers; the probe
 threshold, `max_children` and `allowed_ips` apply to everyone.
 
+The agent accepts the TCP connection, applies `allowed_ips`, and only then runs
+the TLS handshake on the accepted socket, so a failed handshake is counted
+under the connecting peer's own address. The handshake has a 5-second limit;
+a client that connects and stays silent is dropped at that point and counted as
+a failure. The accept loop is single-threaded, so one silent client can delay
+other new connections by up to those 5 seconds.
+
 A blocked peer receives `HTTP/1.0 429 Too Many Requests` with a JSON body
 `{"status":"error","error":"rate limited","retry_after":<seconds>}` before the
 connection is closed (earlier releases closed it silently, which the
