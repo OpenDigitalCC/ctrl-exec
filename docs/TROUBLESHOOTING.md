@@ -54,9 +54,14 @@ which is configured once in the systemd unit, not per script.
 ### Profile questions that come up first
 
 profiles are optional?
-: Yes. A script with no `profile=` runs under the `default` profile (executor
-  mode) or the service sandbox (direct mode). You only define profiles for
-  scripts that need a context different from the default.
+: The `profile=` annotation on a script is optional; the `[profile default]`
+  block in `agent.conf` is not. A script with no `profile=` resolves to the
+  profile named `default`, and there is no built-in fallback: if `default` is
+  not defined, the agent refuses to start (exit 78, see *Agent exits 78 with
+  "script(s) reference an undefined profile"* below). This holds whether or
+  not the executor is enabled. Define `[profile default]` once, as the baseline,
+  and add further profiles only for scripts that need a different context
+  (executor mode applies them; in direct mode the service sandbox is used).
 
 can a script have more than one profile?
 : No. A script runs under exactly one profile - there is no stacking or
@@ -215,6 +220,41 @@ sudo ctrl-exec-agent self-check
 This parses both files and reports any error without touching the running
 service. It is the cheapest way to catch an inline comment or an undefined
 profile before it becomes a failed start.
+
+
+### Agent exits 78 with "script(s) reference an undefined profile"
+
+Symptom
+: The agent will not start. The framed `configuration error` block (and
+  `ctrl-exec-agent self-check`) reports a line such as:
+
+  ```
+  script(s) reference an undefined profile: check-disk -> default
+  ```
+
+  Each entry is `<script> -> <profile>`. Exit status is 78, so systemd does not
+  restart-loop.
+
+Cause
+: Profiles are fail-closed. A script with no `profile=` in `scripts.conf` uses
+  the profile named `default`, and `default` must be defined in `agent.conf`
+  like any other; there is no implicit one. The same error appears when
+  `profile=<name>` names a profile that has no `[profile <name>]` block (often a
+  typo). Only the `profile=` annotation is optional, not `[profile default]`.
+
+Fix
+: Add the block to `agent.conf` (this is the restrictive baseline shipped in
+  `etc/agent.conf.example`):
+
+  ```ini
+  [profile default]
+  run_as            = nobody
+  no_new_privileges = yes
+  ```
+
+  For a non-`default` entry, either define `[profile <name>]` or correct the
+  `profile=` in `scripts.conf`. Then run `sudo ctrl-exec-agent self-check` and
+  start the service.
 
 
 ## Installing and upgrading
