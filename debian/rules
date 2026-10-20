@@ -3,8 +3,23 @@ export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
 DEB_VERSION := $(shell dpkg-parsechangelog -S Version)
 
+# Generated unit files (rendered from the canonical templates in etc/systemd/).
+# debian/<package>.<name>.service is where dh_installsystemd looks for them.
+UNITS := \
+  ctrl-exec-agent.service=ctrl-exec-agent.service \
+  ctrl-exec-agent.ctrl-exec-agent-renew.service=ctrl-exec-agent-renew.service \
+  ctrl-exec-agent.ctrl-exec-agent-renew.timer=ctrl-exec-agent-renew.timer \
+  ctrl-exec-agent.ctrl-exec-exec.service=ctrl-exec-exec.service \
+  ctrl-exec-dispatcher.ctrl-exec-api.service=ctrl-exec-api.service \
+  ctrl-exec-dispatcher.ctrl-exec-maintenance.service=ctrl-exec-maintenance.service \
+  ctrl-exec-dispatcher.ctrl-exec-maintenance.timer=ctrl-exec-maintenance.timer
+
 %:
 	dh $@
+
+override_dh_clean:
+	dh_clean
+	for u in $(UNITS); do rm -f debian/$${u%%=*}; done
 
 # There is no build system; files are staged from the source tree with the
 # install-time substitutions (version stamp, packaged paths) applied here -
@@ -56,11 +71,15 @@ override_dh_auto_install:
 # after setup (see INSTALL.md / the post-install notes).
 #
 # Two invocations are required. The first installs default-named units (the
-# agent's debian/ctrl-exec-agent.service). The second installs the named unit
+# agent's debian/ctrl-exec-agent.service, rendered above). The second installs the named unit
 # debian/ctrl-exec-dispatcher.ctrl-exec-api.service as ctrl-exec-api.service:
 # dh_installsystemd only picks up a package.NAME.service file when given --name,
 # so without this call the API unit is silently dropped from the deb.
 override_dh_installsystemd:
+	# Render the canonical units (etc/systemd/) with the packaged prefixes.
+	for u in $(UNITS); do \
+	  sh etc/systemd/render-unit /usr/bin /usr/sbin etc/systemd/$${u#*=} debian/$${u%%=*}; \
+	done
 	# --no-stop-on-upgrade: leave running services alone during an upgrade; our
 	# postinst restarts the active ones itself. Without it, --no-start makes
 	# debhelper use the stop-on-upgrade model, whose preinst tries to stop every

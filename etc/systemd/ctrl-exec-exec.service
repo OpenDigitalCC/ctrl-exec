@@ -11,7 +11,7 @@ Type=simple
 # exec. The unprivileged front-end (ctrl-exec-agent.service) connects over the
 # socket below; the executor chowns the socket to that user, mode 0600, and an
 # SO_PEERCRED check rejects any other connector.
-ExecStart=/usr/local/sbin/ctrl-exec-exec serve /run/ctrl-exec-agent/exec.sock \
+ExecStart=@SBINDIR@/ctrl-exec-exec serve /run/ctrl-exec-agent/exec.sock \
     /etc/ctrl-exec-agent/agent.conf /etc/ctrl-exec-agent/scripts.conf ctrl-exec-agent
 Restart=on-failure
 RestartSec=5

@@ -1,0 +1,15 @@
+#!/bin/sh
+# Render a canonical systemd unit template: replace @BINDIR@ and @SBINDIR@ with
+# the install prefix of the target. This is the one place that does it - used by
+# install.sh (BINDIR=/usr/local/bin, SBINDIR=/usr/local/sbin) and by
+# debian/rules (BINDIR=/usr/bin, SBINDIR=/usr/sbin), and by t/units-render.t.
+#
+# Usage: render-unit BINDIR SBINDIR SRC [DST]     (DST omitted: stdout)
+set -eu
+[ $# -ge 3 ] || { echo "usage: render-unit BINDIR SBINDIR SRC [DST]" >&2; exit 2; }
+bindir=$1 sbindir=$2 src=$3 dst=${4:-}
+if [ -n "$dst" ]; then
+    sed -e "s|@BINDIR@|$bindir|g" -e "s|@SBINDIR@|$sbindir|g" "$src" > "$dst"
+else
+    sed -e "s|@BINDIR@|$bindir|g" -e "s|@SBINDIR@|$sbindir|g" "$src"
+fi

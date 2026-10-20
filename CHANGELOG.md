@@ -10,6 +10,14 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 The backlog line: every open task in todo/ lands here, one branch per task or
 task group, each adding its bullets to this entry.
 
+- **Changed** the seven systemd units to one canonical set in `etc/systemd/`
+  with `@BINDIR@` / `@SBINDIR@` placeholders, rendered by `etc/systemd/render-unit`
+  (install.sh with `/usr/local/{bin,sbin}`, `debian/rules` with `/usr/{bin,sbin}`)
+  in place of the hand-maintained `etc/` and `debian/` copies that had drifted
+  (the stale `yourorg` URL lived in both). The executor unit's `ExecStart` is now
+  `@SBINDIR@` (it was hard-coded in each copy). No hardening directive changed;
+  `t/units-render.t` checks both renderings. (T-014)
+
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 
 - **Fixed (CRITICAL)** the recurring `exit -1 / "no response from child"` outage.

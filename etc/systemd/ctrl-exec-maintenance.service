@@ -10,4 +10,4 @@ Type=oneshot
 # 0600 root) - the same privilege the manual `ced rotate-cert` / pairing-mode use.
 # Pings every registered agent (triggering renewal when a cert is past half-life)
 # and rotates/broadcasts the dispatcher's own cert when it nears expiry.
-ExecStart=/usr/local/bin/ctrl-exec-dispatcher maintain
+ExecStart=@BINDIR@/ctrl-exec-dispatcher maintain

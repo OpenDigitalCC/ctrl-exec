@@ -10,7 +10,7 @@ Type=simple
 # api_bind (default: 127.0.0.1) and api_port (default: 7445).
 # The server is not reachable from the network without explicitly setting
 # api_bind = 0.0.0.0 or a specific interface address in ctrl-exec.conf.
-ExecStart=/usr/bin/ctrl-exec-api
+ExecStart=@BINDIR@/ctrl-exec-api
 Restart=on-failure
 RestartSec=5
 

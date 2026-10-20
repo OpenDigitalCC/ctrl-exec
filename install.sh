@@ -21,6 +21,7 @@ EXEC_GROUP="ctrl-exec"
 EXEC_USER="ctrl-exec"
 
 BIN_DIR="/usr/local/bin"
+SBIN_DIR="/usr/local/sbin"
 LIB_DIR="/usr/local/lib/ctrl-exec"
 AGENT_CONF_DIR="/etc/ctrl-exec-agent"
 EXEC_CONF_DIR="/etc/ctrl-exec"
@@ -57,6 +58,16 @@ safe_install() {
     local mode="$1" src="$2" dst="$3"
     cp "$src" "$dst" || return 1
     chmod "$mode" "$dst"
+}
+
+# Install a canonical systemd unit template (etc/systemd/) with @BINDIR@ and
+# @SBINDIR@ resolved to this install's prefixes. The .deb build renders the
+# same templates with /usr/bin and /usr/sbin (debian/rules).
+install_unit() {
+    local unit="$1"
+    sh "$SOURCE_DIR/etc/systemd/render-unit" "$BIN_DIR" "$SBIN_DIR" \
+        "$SOURCE_DIR/etc/systemd/$unit" "$SYSTEMD_DIR/$unit" || return 1
+    chmod 644 "$SYSTEMD_DIR/$unit"
 }
 
 # Prefix for suggested commands in next-steps output. Cleared on OpenWRT
@@ -189,7 +200,7 @@ install_service_unit() {
     local unit="$1"
     if [[ "$HAS_SYSTEMD" == true ]]; then
         info "Installing systemd unit $unit..."
-        safe_install 644 "$SOURCE_DIR/etc/$unit" "$SYSTEMD_DIR/$unit"
+        install_unit "$unit"
         systemctl daemon-reload
     elif [[ "$HAS_PROCD" == true ]]; then
         local init_script="/etc/init.d/ctrl-exec-agent"
@@ -493,15 +504,14 @@ install_agent() {
     # Privileged executor (C). The agent uses it when 'executor_socket' is set in
     # agent.conf (privilege separation). Compiled here from src/; needs gcc and
     # libcap-dev. If absent, the agent still works in its legacy direct-run mode.
-    mkdir -p /usr/local/sbin
+    mkdir -p "$SBIN_DIR"
     if command -v gcc &>/dev/null; then
-        if gcc -O2 -o /usr/local/sbin/ctrl-exec-exec \
+        if gcc -O2 -o "$SBIN_DIR/ctrl-exec-exec" \
                "$SOURCE_DIR/src/ctrl-exec-exec.c" -lcap; then
-            chmod 755 /usr/local/sbin/ctrl-exec-exec
-            info "Built ctrl-exec-exec -> /usr/local/sbin/ctrl-exec-exec"
+            chmod 755 "$SBIN_DIR/ctrl-exec-exec"
+            info "Built ctrl-exec-exec -> $SBIN_DIR/ctrl-exec-exec"
             if [[ "$HAS_SYSTEMD" == true ]]; then
-                safe_install 644 "$SOURCE_DIR/etc/ctrl-exec-exec.service" \
-                    "$SYSTEMD_DIR/ctrl-exec-exec.service"
+                install_unit ctrl-exec-exec.service
                 systemctl daemon-reload
             fi
         else
@@ -599,10 +609,8 @@ install_agent() {
     # agent stages it; this timer restarts the agent (only when a cert is staged)
     # so the unit's ExecStartPre promotes it. Enabled now so renewal is hands-free.
     if [[ "$HAS_SYSTEMD" == true ]]; then
-        safe_install 644 "$SOURCE_DIR/etc/ctrl-exec-agent-renew.service" \
-            "$SYSTEMD_DIR/ctrl-exec-agent-renew.service"
-        safe_install 644 "$SOURCE_DIR/etc/ctrl-exec-agent-renew.timer" \
-            "$SYSTEMD_DIR/ctrl-exec-agent-renew.timer"
+        install_unit ctrl-exec-agent-renew.service
+        install_unit ctrl-exec-agent-renew.timer
         systemctl daemon-reload
         systemctl enable --now ctrl-exec-agent-renew.timer 2>/dev/null \
             || warn "Could not enable ctrl-exec-agent-renew.timer; enable it manually."
@@ -703,10 +711,8 @@ install_ctrl_exec_dispatcher() {
     # of any cert past half-life) and rotates the dispatcher's own cert. Runs as
     # root for CA-key access. Enabled now so cert lifecycle is hands-free.
     if [[ "$HAS_SYSTEMD" == true ]]; then
-        safe_install 644 "$SOURCE_DIR/etc/ctrl-exec-maintenance.service" \
-            "$SYSTEMD_DIR/ctrl-exec-maintenance.service"
-        safe_install 644 "$SOURCE_DIR/etc/ctrl-exec-maintenance.timer" \
-            "$SYSTEMD_DIR/ctrl-exec-maintenance.timer"
+        install_unit ctrl-exec-maintenance.service
+        install_unit ctrl-exec-maintenance.timer
         systemctl daemon-reload
         systemctl enable --now ctrl-exec-maintenance.timer 2>/dev/null \
             || warn "Could not enable ctrl-exec-maintenance.timer; enable it manually."

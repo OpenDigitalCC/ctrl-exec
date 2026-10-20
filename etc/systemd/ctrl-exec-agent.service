@@ -15,8 +15,8 @@ Group=ctrl-exec-agent
 # root-owned /etc/ctrl-exec-agent that the main process is denied (ProtectSystem
 # + ReadOnlyPaths below). It always succeeds: a missing or invalid staged cert
 # leaves the existing cert in place and the agent starts normally.
-ExecStartPre=+/usr/local/bin/ctrl-exec-agent promote-cert
-ExecStart=/usr/local/bin/ctrl-exec-agent serve
+ExecStartPre=+@BINDIR@/ctrl-exec-agent promote-cert
+ExecStart=@BINDIR@/ctrl-exec-agent serve
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
