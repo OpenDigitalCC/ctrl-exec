@@ -1177,8 +1177,11 @@ print_next_steps_api() {
     echo ""
     echo "       curl -s http://localhost:7445/discovery | python3 -m json.tool"
     echo ""
-    echo "  Note: To enable TLS, set api_cert and api_key in ctrl-exec.conf"
-    echo "        and restart the service."
+    echo "  Note: For same-host callers, set api_socket = /run/ctrl-exec-api/api.sock"
+    echo "        in ctrl-exec.conf (a 0660 unix socket; see api_socket_group). To"
+    echo "        enable TLS on the TCP port, set api_cert and api_key. Send"
+    echo "        confidential run input only over the socket or TLS. Restart the"
+    echo "        service after either change."
     echo ""
     echo "================================================================"
 }

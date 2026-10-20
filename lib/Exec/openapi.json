@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ctrl-exec API",
-    "description": "REST gateway for the ctrl-exec mTLS remote script execution system. Provides programmatic access to the run, ping, discovery, and health endpoints. Authentication is delegated to the configured auth hook on the ctrl-exec host; pass credentials in the request body. Under load the server may return 503 on any endpoint when it is at its concurrent-request cap (api_max_children).",
+    "description": "REST gateway for the ctrl-exec mTLS remote script execution system. Provides programmatic access to the run, ping, discovery, and health endpoints. Authentication is delegated to the configured auth hook on the ctrl-exec host; pass credentials in the request body. Under load the server may return 503 on any endpoint when it is at its concurrent-request cap (api_max_children). The same API is also served, when api_socket is configured, on a unix socket (mode 0660) for same-host callers, e.g. curl --unix-socket /run/ctrl-exec-api/api.sock http://localhost/health; OpenAPI server URLs cannot express a socket path. Confidential run input should travel only over the socket or TLS.",
     "version": "0.12.3",
     "license": {
       "name": "AGPL-3.0-only"
@@ -14,7 +14,7 @@
   "servers": [
     {
       "url": "http://{host}:{port}",
-      "description": "Plain HTTP (no api_cert/api_key configured)",
+      "description": "Plain HTTP (no api_cert/api_key configured). Do not send confidential run input over it across a network.",
       "variables": {
         "host": { "default": "localhost" },
         "port": { "default": "7445" }
@@ -22,7 +22,7 @@
     },
     {
       "url": "https://{host}:{port}",
-      "description": "TLS (api_cert and api_key configured)",
+      "description": "TLS (api_cert and api_key configured, operator-provided certificate)",
       "variables": {
         "host": { "default": "localhost" },
         "port": { "default": "7445" }

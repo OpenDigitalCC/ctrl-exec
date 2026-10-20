@@ -36,5 +36,13 @@ PrivateDevices=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/var/lib/ctrl-exec
 
+# /run/ctrl-exec-api, created at start (owned by the service user, writable
+# despite ProtectSystem) and removed at stop, is where the optional unix socket
+# goes: api_socket = /run/ctrl-exec-api/api.sock in ctrl-exec.conf. The socket is
+# mode 0660 in api_socket_group (default ctrl-exec); to use another group, make
+# the ctrl-exec user a member of it (or add SupplementaryGroups= here).
+RuntimeDirectory=ctrl-exec-api
+RuntimeDirectoryMode=0755
+
 [Install]
 WantedBy=multi-user.target

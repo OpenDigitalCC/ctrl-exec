@@ -16,9 +16,11 @@ current_page: /config
 | `key` | — | Path to the dispatcher private key |
 | `ca` | — | Path to the CA certificate |
 | `auth_hook` | — | Path to the auth hook executable. Not set in the shipped conf, so the API denies requests until you set one (see `api_auth_default`). |
-| `api_port` | `7445` | HTTP port for `ctrl-exec-api` |
-| `api_cert` | — | TLS certificate for the API server. Enables TLS when set. |
-| `api_key` | — | TLS private key for the API server |
+| `api_socket` | — | Unix socket for same-host API callers, mode 0660 (e.g. `/run/ctrl-exec-api/api.sock`) |
+| `api_socket_group` | API's group | Group of the `api_socket` file |
+| `api_port` | `7445` | TCP port for `ctrl-exec-api`; `off` for the socket only |
+| `api_cert` | — | TLS certificate for the API's TCP listener. With `api_key`, enables TLS; one without the other refuses start-up. |
+| `api_key` | — | TLS private key for the API's TCP listener |
 | `api_bind` | `127.0.0.1` | Address the API server binds to |
 | `api_auth_default` | `deny` | API behaviour when no hook is configured: `deny` or `allow` |
 | `auth_deny_generic` | `0` | When `1`/`yes`, API denials return a generic `403` (`forbidden`) without the specific reason or code |
@@ -86,7 +88,8 @@ These variables are passed to auth hooks by the dispatcher and by the agent. The
 | `ENVEXEC_ARGS_JSON` | JSON string | Arguments as a JSON array. Reliable for all argument values. |
 | `ENVEXEC_USERNAME` | string | Username from the request. Caller-supplied; not verified by the dispatcher. |
 | `ENVEXEC_TOKEN` | string | Auth token from the request |
-| `ENVEXEC_SOURCE_IP` | string | `127.0.0.1` for CLI callers; caller IP for API callers |
+| `ENVEXEC_SOURCE_IP` | string | `127.0.0.1` for CLI callers; caller IP for API callers; `unix:<path>` on the API's unix socket |
+| `ENVEXEC_PEER_UID` | string | Caller's uid on the API's unix socket; empty otherwise |
 | `ENVEXEC_TIMESTAMP` | string | ISO 8601 UTC timestamp of the request |
 | `ENVEXEC_DISPATCHER` | string | Stable id of the authenticated dispatcher, resolved from the agent's trusted-dispatcher map. Per-dispatcher policy keys on this. Agent-side hooks only. |
 | `ENVEXEC_DISPATCHER_SERIAL` | string | Certificate serial of the authenticated dispatcher. Agent-side hooks only. |

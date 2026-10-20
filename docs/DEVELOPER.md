@@ -97,7 +97,8 @@ function-based design
 7445
 : API port. The `ctrl-exec-api` HTTP server listens here. Plain HTTP by
   default; TLS enabled if `api_cert` and `api_key` are set in
-  `ctrl-exec.conf`. No mTLS - auth is delegated to the auth hook.
+  `ctrl-exec.conf`. No mTLS - auth is delegated to the auth hook. The API can
+  also (or instead, `api_port = off`) listen on a unix socket, `api_socket`.
 
 
 ## Certificate Layout
@@ -614,7 +615,8 @@ ENVEXEC_ARGS        space-joined args (lossy if args contain spaces - see below)
 ENVEXEC_ARGS_JSON   args as a JSON array string (reliable for all arg values)
 ENVEXEC_USERNAME    username from request (may be empty)
 ENVEXEC_TOKEN       token from request (may be empty)
-ENVEXEC_SOURCE_IP   originating IP address (the proxy's, not the client's, behind a reverse proxy - not client identity)
+ENVEXEC_SOURCE_IP   originating IP address (the proxy's, not the client's, behind a reverse proxy - not client identity); unix:<path> on the API's unix socket
+ENVEXEC_PEER_UID    API unix-socket caller's uid (SO_PEERCRED); empty otherwise
 ENVEXEC_TIMESTAMP   ISO8601 UTC timestamp
 ```
 
@@ -719,15 +721,23 @@ Functions:
 
 ### `Exec::API`
 
-HTTP API server. Listens on `api_port` (default 7445). TLS is enabled if
-`api_cert` and `api_key` are present in config; plain HTTP otherwise.
+HTTP API server. `listen_plan($config)` turns the listener keys into a plan or
+a refusal (bin/ctrl-exec-api exits 78 on a refusal): a unix socket
+(`api_socket`, mode 0660, group `api_socket_group`) and/or the TCP listener
+(`api_bind`:`api_port`, default 127.0.0.1:7445, `api_port = off` for none),
+TLS on it when `api_cert` and `api_key` are both set (and load).
 
-Fork-per-request model: the parent accepts connections and forks a child per
-request. The child handles the request and exits. The parent reaps children
-with a SIGCHLD handler calling `waitpid(-1, WNOHANG)`.
+Fork-per-request model: the parent waits on every listener with `IO::Select`,
+accepts, and forks a child per request. The child handles the request and
+exits. The parent reaps children with a SIGCHLD handler calling
+`waitpid(-1, WNOHANG)`. The TLS handshake runs in the child
+(`IO::Socket::SSL->start_SSL` with the context loaded at start-up), so a slow
+TLS client cannot hold up the accept loop. A socket caller is recorded as
+`unix:<path>` with its uid from `SO_PEERCRED`, passed to the auth hook as
+`peer_uid`.
 
-`SSL_no_shutdown => 1` is used on both parent and child connection close, for
-the same reason as in the pairing server - see the note in `Exec::Pairing`.
+`SSL_no_shutdown => 1` is used on the child's TLS connection close, for the
+same reason as in the pairing server - see the note in `Exec::Pairing`.
 
 Endpoints:
 

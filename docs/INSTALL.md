@@ -634,17 +634,42 @@ curl -s -X POST http://localhost:7445/run \
 curl -s http://localhost:7445/discovery | python3 -m json.tool
 ```
 
-### API TLS
+### API unix socket
 
-Add to `/etc/ctrl-exec-dispatcher/ctrl-exec.conf`:
+For callers on the dispatcher host, add to
+`/etc/ctrl-exec-dispatcher/ctrl-exec.conf`:
 
 ```ini
-api_cert = /etc/ctrl-exec-dispatcher/dispatcher.crt
-api_key  = /etc/ctrl-exec-dispatcher/dispatcher.key
+api_socket = /run/ctrl-exec-api/api.sock
+# api_socket_group = ctrl-exec   # default: the API's own group
+# api_port = off                 # socket only; leave unset to keep TCP as well
 ```
 
-Restart the API service. Clients use `--cacert /etc/ctrl-exec-dispatcher/ca.crt` or a
-certificate from a public CA if clients do not have the private CA cert.
+Restart the API service. The socket is mode 0660: the API's user and members of
+`api_socket_group` may call it. Callers use `ctrl-exec-cli --socket
+/run/ctrl-exec-api/api.sock` or `curl --unix-socket /run/ctrl-exec-api/api.sock
+http://localhost/health`. The auth hook applies as for TCP callers.
+
+### API TLS
+
+For callers on other hosts, give the TCP listener a certificate and key. Use a
+certificate whose subject alternative name is the host name clients connect to,
+from a CA the clients trust (a public CA or your organisation's). The
+dispatcher's own `dispatcher.crt` is not suitable: it names no host, so
+clients that verify (as they should) reject it; and do not sign API
+certificates with the ctrl-exec CA, which agents trust for dispatcher
+identities. Add to `/etc/ctrl-exec-dispatcher/ctrl-exec.conf`:
+
+```ini
+api_cert = /etc/ctrl-exec-dispatcher/api.crt
+api_key  = /etc/ctrl-exec-dispatcher/api.key
+```
+
+The key must be readable by the `ctrl-exec` user (`chown ctrl-exec api.key;
+chmod 600 api.key`). Restart the API service; it refuses to start (exit 78)
+if only one of the two is set or either cannot be read. Clients verify with
+`ctrl-exec-cli --ca FILE` or `curl --cacert FILE`. Send confidential run input
+only over the socket or TLS.
 
 
 ## Auth Hook
@@ -667,7 +692,8 @@ ENVEXEC_ARGS        space-joined args (ambiguous if args contain spaces)
 ENVEXEC_ARGS_JSON   args as a JSON array string (use this for arg inspection)
 ENVEXEC_USERNAME    username from request (may be empty)
 ENVEXEC_TOKEN       token from request (may be empty)
-ENVEXEC_SOURCE_IP   127.0.0.1 for CLI, caller IP for API (the proxy's address behind a reverse proxy - not client identity)
+ENVEXEC_SOURCE_IP   127.0.0.1 for CLI, caller IP for API (the proxy's address behind a reverse proxy - not client identity), unix:<path> for the API's unix socket
+ENVEXEC_PEER_UID    uid of an API caller on the unix socket (empty otherwise)
 ENVEXEC_TIMESTAMP   ISO 8601 UTC timestamp
 ```
 
@@ -741,9 +767,10 @@ cert      = /etc/ctrl-exec-dispatcher/dispatcher.crt
 key       = /etc/ctrl-exec-dispatcher/dispatcher.key
 ca        = /etc/ctrl-exec-dispatcher/ca.crt
 auth_hook = /etc/ctrl-exec-dispatcher/auth-hook     # optional
-api_port  = 7445                          # API server port
-api_cert  = /etc/ctrl-exec-dispatcher/dispatcher.crt  # optional, enables TLS on API
-api_key   = /etc/ctrl-exec-dispatcher/dispatcher.key  # optional
+api_port  = 7445                          # API TCP port (off = socket only)
+api_socket = /run/ctrl-exec-api/api.sock  # optional unix socket, mode 0660
+api_cert  = /etc/ctrl-exec-dispatcher/api.crt  # optional, enables TLS on API
+api_key   = /etc/ctrl-exec-dispatcher/api.key  # optional
 cert_days = 365                           # lifetime for new/renewed agent certs
 ```
 

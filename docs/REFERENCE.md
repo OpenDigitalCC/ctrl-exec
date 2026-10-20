@@ -620,12 +620,43 @@ Key settings:
   max_input_bytes = 1048576
   ```
 
+`api_socket`
+: Absolute path of a unix socket for same-host API callers. Optional; not set
+  by default. The socket is created mode 0660, so file permissions decide who
+  may call: the socket's owner (the API's user) and members of
+  `api_socket_group`. Requests on the socket are handled exactly as on TCP and
+  pass the same auth hook, which sees `source_ip` as `unix:<path>` and the
+  caller's uid (from the kernel, `SO_PEERCRED`) as `peer_uid` /
+  `ENVEXEC_PEER_UID`. The packaged systemd unit creates `/run/ctrl-exec-api`
+  for it. At start-up an existing socket nothing answers on (left by a crash)
+  is replaced; a socket another process answers on, or a path that is not a
+  socket (a file, directory or symlink), stops start-up and is left alone. The
+  file is removed when the API stops. Confidential run input (`input` on
+  `POST /run`) should travel only over this socket or TLS.
+
+  ```
+  api_socket = /run/ctrl-exec-api/api.sock
+  ```
+
+`api_socket_group`
+: Group of the `api_socket` file, by name or number. Default: the API's own
+  group (`ctrl-exec` under the packaged unit). The API's user must be a member
+  of the group. Setting it without `api_socket` is refused.
+
 `api_port`
-: Port for the `ctrl-exec-api` HTTP server. Default: 7445.
+: Port for the `ctrl-exec-api` TCP listener. Default: 7445. `off` turns the
+  TCP listener off, leaving only `api_socket` (which must then be set). The
+  socket and TCP listeners can run together.
 
 `api_cert`, `api_key`
-: TLS certificate and key for the API server. If both are present and
-  readable, the API server uses TLS. If absent, plain HTTP is used.
+: TLS certificate and key, provided by the operator, for the TCP listener.
+  Optional: with neither set the TCP listener is plain HTTP. With both set it
+  is HTTPS only. Setting one without the other, naming a file the API's user
+  cannot read, a certificate and key that do not match, or setting them with
+  `api_port = off` stops start-up with an error (exit 78) rather than falling
+  back to plain HTTP. Use a certificate whose subject alternative name matches
+  the host name clients connect to, from a CA the clients trust; clients
+  verify it (`ctrl-exec-cli --ca FILE`, `curl --cacert FILE`).
 
 `api_bind`
 : Network address the API server binds to. Default: `127.0.0.1` (localhost
@@ -1445,8 +1476,19 @@ Start manually for testing:
 ctrl-exec-api --config /etc/ctrl-exec-dispatcher/ctrl-exec.conf
 ```
 
-TLS is enabled if `api_cert` and `api_key` are set in `ctrl-exec.conf`
-and the files exist. Plain HTTP is used otherwise.
+It can also listen on a unix socket (`api_socket`) for same-host callers,
+alone (`api_port = off`) or beside the TCP port. TLS is enabled on the TCP
+port when `api_cert` and `api_key` are set in `ctrl-exec.conf`; plain HTTP is
+used when neither is. A listener configuration that is incomplete or
+contradictory (no listener, half a TLS pair, an unreadable TLS file, an
+unknown socket group) is refused at start-up with exit 78. See
+`api_socket`, `api_port` and `api_cert` above.
+
+Over the socket:
+
+```bash
+curl -s --unix-socket /run/ctrl-exec-api/api.sock http://localhost/health
+```
 
 Full endpoint documentation is in API.md. Summary:
 

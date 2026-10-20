@@ -119,6 +119,13 @@ Port 7445 - API
 
   The API binds to `127.0.0.1` by default (`api_bind` in `ctrl-exec.conf`).
   It is not reachable from the network unless `api_bind` is explicitly changed.
+
+  Same-host callers can use a unix socket instead (`api_socket`; `api_port =
+  off` closes the TCP port). The socket is created mode 0660, so only its
+  owner and members of `api_socket_group` can connect at all; the auth hook
+  still decides every request, and sees the caller's uid as reported by the
+  kernel (`ENVEXEC_PEER_UID`), which, unlike a token, a caller cannot forge.
+  Loopback TCP, by contrast, is open to every local user up to the hook.
   For internet-facing deployments, place the API behind a reverse proxy that
   handles authentication and TLS termination rather than binding directly to
   an external interface.
@@ -394,6 +401,12 @@ Confidential input
   to either auth hook (they see field names and the total size), never logged
   and never written to the run store. A script that echoes its input to
   stdout or stderr returns it in the result - that is the script's choice.
+
+  On the way in, input should travel only over the API's unix socket
+  (`api_socket`) or TLS (`api_cert`/`api_key`), never plain HTTP across a
+  network: the API body carries the values. The dispatcher-to-agent hop is
+  always mTLS. `ctrl-exec-cli` warns on stderr when `--input` or
+  `--input-fields` would be sent over plain HTTP to a non-loopback address.
 
 Confidential input at the executor
 : With `executor_socket` set, the agent hands the input to the executor in the
@@ -979,8 +992,13 @@ where the API is reachable from outside the dispatcher host:
   termination and request rate limiting. The API has no built-in rate limiting
   and no host count cap - a reverse proxy is the appropriate layer for both.
 - Enable TLS on the API by setting `api_cert` and `api_key` in
-  `ctrl-exec.conf` - use a cert from a public CA if external clients will
-  not have the private CA cert.
+  `ctrl-exec.conf`, with a certificate from a CA the clients trust whose
+  subject alternative name matches the API's host name, and have clients
+  verify it (`ctrl-exec-cli --ca FILE`). The API refuses to start rather than
+  fall back to plain HTTP when the pair is incomplete or unreadable. Do not
+  sign API certificates with the ctrl-exec CA: agents trust it for dispatcher
+  identities.
+- Send confidential run input only over the unix socket or TLS.
 
 `GET /health` bypasses auth and returns the API version string. This endpoint
 is publicly accessible on any externally-bound deployment. Version disclosure
@@ -1023,6 +1041,8 @@ limitations, Docker-specific notes), see SECURITY-OPERATIONS.md.
 | Namespace escape from agent process | `RestrictNamespaces=yes` in agent systemd unit |
 | Unauthorised API access (no hook) | `api_auth_default = deny` blocks all requests by default |
 | Unauthorised API access (network) | API binds to `127.0.0.1` by default; external bind is opt-in |
+| Unauthorised API access (local users) | Optional unix socket (`api_socket`), mode 0660 in `api_socket_group`; hook sees the caller's kernel-reported uid |
+| Confidential input read on the wire to the API | Unix socket or TLS (`api_cert`/`api_key`); incomplete TLS settings refuse start-up instead of falling back to plain HTTP; CLI warns on plain HTTP to a non-loopback address |
 | API script inventory exposure | All endpoints including `/openapi-live.json` pass through auth |
 | CA key theft | 0600 root-only, offline backup, host access controls |
 | Cert remaining valid after unpair | Revocation list on agent; add serial and reload |

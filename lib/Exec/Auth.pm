@@ -41,7 +41,10 @@ my %CODE_REASON = (
 #   args      => \@args            (default [])
 #   username  => $str              (default '')
 #   token     => $str              (default '')
-#   source_ip => $str              (default '127.0.0.1')
+#   source_ip => $str              (default '127.0.0.1'; 'unix:<path>' for an
+#                                   API caller on the unix socket)
+#   peer_uid  => $n                (the socket caller's uid from SO_PEERCRED;
+#                                   undef for TCP callers and the CLI)
 #   dispatcher        => $str      (calling dispatcher's stable identity, default '')
 #   dispatcher_serial => $str      (calling dispatcher's cert serial, default '')
 #   input_names => \@names         (names of the run's input fields, default [])
@@ -72,6 +75,7 @@ sub check (%opts) {
     my $submitter = $opts{submitter};   # hashref { username, source_ip } or undef
     my $input_names = $opts{input_names} // [];
     my $input_bytes = $opts{input_bytes} // 0;
+    my $peer_uid    = $opts{peer_uid};
 
     croak "hosts must be an arrayref" unless ref $hosts eq 'ARRAY';
     croak "args must be an arrayref"  unless ref $args  eq 'ARRAY';
@@ -150,6 +154,7 @@ sub check (%opts) {
         submitter         => $submitter,
         input_names       => $input_names,
         input_bytes       => $input_bytes,
+        peer_uid          => $peer_uid,
     );
 
     my $hook_timeout = $config->{auth_hook_timeout} // 10;
@@ -216,6 +221,7 @@ sub _build_context (%opts) {
         submitter         => $opts{submitter},
         input_names       => $opts{input_names} // [],
         input_bytes       => 0 + ($opts{input_bytes} // 0),
+        peer_uid          => (defined $opts{peer_uid} ? 0 + $opts{peer_uid} : undef),
         timestamp         => strftime('%Y-%m-%dT%H:%M:%SZ', gmtime),
     };
 }
@@ -238,6 +244,9 @@ sub _run_hook ($hook, $context, $timeout = undef) {
     $ENV{ENVEXEC_USERNAME}  = $context->{username};
     $ENV{ENVEXEC_TOKEN}     = $context->{token};
     $ENV{ENVEXEC_SOURCE_IP} = $context->{source_ip};
+    # The kernel-reported uid of a caller on the API's unix socket; empty for
+    # TCP callers, where no such identity exists.
+    $ENV{ENVEXEC_PEER_UID}  = $context->{peer_uid} // '';
     # The calling dispatcher's stable identity (and its cert serial). Hooks
     # author per-dispatcher policy against ENVEXEC_DISPATCHER, never the serial,
     # which rotates. Empty when the caller did not resolve a dispatcher.

@@ -42,6 +42,20 @@ sub main {
     $CONFIG_PATH //= Exec::DispatcherConfig::conf_path();
     my $config = load_config($CONFIG_PATH);
 
+    # Listener settings that name no listener, half a TLS pair, an unreadable
+    # TLS file or an unknown socket group are refused here, before anything is
+    # bound - 78 (EX_CONFIG), which systemd does not restart.
+    my $plan = Exec::API::listen_plan($config);
+    unless ($plan->{ok}) {
+        Exec::Log::log_action('ERR', {
+            ACTION => 'api-config',
+            RESULT => 'refused',
+            REASON => $plan->{error},
+        });
+        print STDERR "ctrl-exec-api: $plan->{error}\n";
+        exit 78;
+    }
+
     Exec::API::run(config => $config);
 }
 
@@ -58,9 +72,14 @@ Options:
 
 The API server reads its configuration from ctrl-exec.conf.
 Relevant keys:
-  api_port   Port to listen on (default 7445)
-  api_cert   TLS certificate (optional - plain HTTP if absent)
-  api_key    TLS private key  (optional - plain HTTP if absent)
-  auth_hook  Auth hook executable (optional)
+  api_socket        Unix socket path (optional; mode 0660)
+  api_socket_group  Group of the unix socket (default: the server's group)
+  api_bind          TCP address (default 127.0.0.1)
+  api_port          TCP port (default 7445; off = no TCP listener)
+  api_cert          TLS certificate for the TCP listener (optional, with api_key)
+  api_key           TLS private key for the TCP listener (optional, with api_cert)
+  auth_hook         Auth hook executable (optional)
+
+Confidential run input should only travel over the unix socket or TLS.
 END
 }

@@ -50,12 +50,28 @@ ca   = /etc/ctrl-exec-dispatcher/ca.crt
 # plus this value. At most 32 fields. Set the agent's max_input_bytes alike.
 # max_input_bytes = 1048576
 
-# API server port (default: 7445).
+# API listeners. The API can listen on a unix socket, on TCP, or on both at
+# once (same requests, same auth hook). Confidential run input should only
+# travel over the socket or TLS, never plain HTTP across a network.
+#
+# Unix socket for same-host callers (optional). Created mode 0660, so file
+# permissions decide who may call: members of api_socket_group (default: the
+# API's own group, ctrl-exec under the packaged service). The API's user must be
+# a member of any group named here. /run/ctrl-exec-api is created by the
+# packaged systemd unit. The auth hook still applies; it sees the caller as
+# source_ip unix:<path> with the caller's uid in ENVEXEC_PEER_UID.
+# api_socket = /run/ctrl-exec-api/api.sock
+# api_socket_group = ctrl-exec
+
+# API TCP port (default: 7445). Set api_port = off to listen on the socket only
+# (api_socket must then be set). See api_bind below for the address.
 # api_port = 7445
 
-# API server TLS (optional - plain HTTP if not set).
-# api_cert = /etc/ctrl-exec-dispatcher/dispatcher.crt
-# api_key  = /etc/ctrl-exec-dispatcher/dispatcher.key
+# TLS for the TCP listener (optional - plain HTTP if neither is set). Both must
+# be set and readable by the API's user, or the API refuses to start. Clients
+# verify the certificate (ctrl-exec-cli --ca FILE).
+# api_cert = /etc/ctrl-exec-dispatcher/api.crt
+# api_key  = /etc/ctrl-exec-dispatcher/api.key
 
 # ctrl-exec certificate rotation
 #

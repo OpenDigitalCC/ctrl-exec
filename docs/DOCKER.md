@@ -224,6 +224,11 @@ fix_perms() {
         mkdir -p "$STATE_DIR/$d"
         chown root:ctrl-exec "$STATE_DIR/$d" && chmod 2770 "$STATE_DIR/$d"
     done
+    # The optional API socket's directory, writable by the API's user.
+    if [ -n "${API_SOCKET:-}" ]; then
+        mkdir -p "${API_SOCKET%/*}"
+        chown ctrl-exec:ctrl-exec "${API_SOCKET%/*}" && chmod 755 "${API_SOCKET%/*}"
+    fi
 }
 
 # Seed ctrl-exec.conf from the environment on first start only. An existing
@@ -243,6 +248,7 @@ api_port         = ${API_PORT:-7445}
 api_auth_default = ${API_AUTH_DEFAULT:-deny}
 EOC
     [ -n "${READ_TIMEOUT:-}" ] && echo "read_timeout = $READ_TIMEOUT" >> "$CONF"
+    [ -n "${API_SOCKET:-}" ] && echo "api_socket = $API_SOCKET" >> "$CONF"
     # Reference the hook only if one is already present; see "Auth hook".
     [ -f "$CONF_DIR/auth-hook" ] && echo "auth_hook = $CONF_DIR/auth-hook" >> "$CONF"
     chown root:ctrl-exec "$CONF" && chmod 640 "$CONF"
@@ -347,7 +353,8 @@ it and let the entrypoint regenerate it from updated env vars on the next start.
   accept connections on all interfaces - required when accessing the API
   from the host, from other containers, or from external clients. The API is
   plain HTTP unless `api_cert` and `api_key` are set in `ctrl-exec.conf`, so
-  publish its port only on a network you trust.
+  publish its port only on a network you trust, and never send confidential
+  run input to it in plain HTTP across a network (see `API_SOCKET`).
 
   ```yaml
   API_BIND: 0.0.0.0
@@ -365,6 +372,22 @@ it and let the entrypoint regenerate it from updated env vars on the next start.
 
   ```yaml
   API_AUTH_DEFAULT: allow
+  ```
+
+`API_SOCKET`
+: Optional. Path of a unix socket for the API, written to `api_socket`, for
+  example `/run/ctrl-exec-api/api.sock`. Unset by default (TCP only). The
+  entrypoint creates the directory for the `ctrl-exec` user. The socket is
+  mode 0660 in the `ctrl-exec` group (GID `CE_UID`, 10001), so it serves
+  processes in the container, or on the host when the directory is a bind
+  mount and the caller is root or in a group with that GID. TCP stays on as
+  well unless `api_port = off` is added to `ctrl-exec.conf`.
+
+  ```yaml
+  environment:
+    API_SOCKET: /run/ctrl-exec-api/api.sock
+  volumes:
+    - ./api-run:/run/ctrl-exec-api
   ```
 
 `READ_TIMEOUT`

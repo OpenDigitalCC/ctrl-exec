@@ -7,6 +7,10 @@ no warnings      qw(experimental::signatures);
 use JSON       qw(encode_json decode_json);
 use POSIX      qw(WNOHANG);
 use Carp       qw(croak);
+use Socket     qw(SOL_SOCKET SOCK_STREAM);
+use IO::Select       ();
+use IO::Socket::INET ();
+use IO::Socket::UNIX ();
 
 use Exec::Http     qw();
 use Exec::Log      qw();
@@ -36,38 +40,143 @@ my $VERSION = do {
 };
 
 
+# Work out which listeners the configuration asks for, without opening any.
+# Returns { ok => 1, socket => {...} | undef, tcp => {...} | undef } or
+# { ok => 0, error => $message }. Pure apart from group lookups and loading the
+# TLS files, so bin/ctrl-exec-api can refuse a bad configuration (exit 78)
+# before binding.
+#
+# Listeners (T-013 piece 6):
+#   api_socket = <path>        a unix socket, mode 0660, for same-host callers.
+#   api_socket_group = <group> the socket's group (default: the server's own
+#                              group); file permissions decide who may call.
+#   api_bind / api_port        the TCP listener (default 127.0.0.1:7445).
+#                              api_port = off turns it off.
+#   api_cert / api_key         switch the TCP listener to TLS (both or neither).
+# Both listeners may run at once; they share one request handler and auth path.
+# A configuration that names no listener, half a TLS pair, an unreadable TLS
+# file or pair, or an unknown group is refused rather than guessed at.
+sub listen_plan ($config) {
+    my %c = map { my $v = $config->{$_}; ($_ => (defined $v && length $v ? $v : undef)) }
+            qw(api_socket api_socket_group api_port api_bind api_cert api_key);
+    my $fail = sub ($msg) { return { ok => 0, error => $msg } };
+
+    my $tcp_on = 1;
+    my $port   = $c{api_port} // 7445;
+    if ($port eq 'off') {
+        $tcp_on = 0;
+    }
+    elsif ($port !~ /^\d+$/ || $port < 1 || $port > 65535) {
+        return $fail->("api_port must be a port number (1-65535) or 'off', not '$port'");
+    }
+
+    my $socket;
+    if (defined(my $path = $c{api_socket})) {
+        return $fail->("api_socket must be an absolute path, not '$path'")
+            unless $path =~ m{^/} && $path !~ m{/$};
+        # sun_path holds 108 bytes including the terminating NUL.
+        return $fail->("api_socket path is too long (at most 107 bytes): '$path'")
+            if length($path) > 107;
+        my $gid;
+        if (defined(my $g = $c{api_socket_group})) {
+            $gid = $g =~ /^\d+$/ ? $g : getgrnam($g);
+            return $fail->("api_socket_group '$g' is not a known group")
+                unless defined $gid && defined getgrgid($gid);
+        }
+        $socket = { path => $path, group => $c{api_socket_group}, gid => $gid };
+    }
+    elsif (defined $c{api_socket_group}) {
+        return $fail->("api_socket_group is set but api_socket is not");
+    }
+
+    my $tls;
+    if (defined $c{api_cert} || defined $c{api_key}) {
+        return $fail->("api_cert and api_key must be set together (TLS needs both)")
+            unless defined $c{api_cert} && defined $c{api_key};
+        return $fail->("api_cert/api_key configure TLS for the TCP listener, but api_port = off")
+            unless $tcp_on;
+        for my $k (qw(api_cert api_key)) {
+            return $fail->("$k '$c{$k}' is not a readable file")
+                unless -f $c{$k} && -r _;
+        }
+        $tls = { cert => $c{api_cert}, key => $c{api_key} };
+        # Load the pair now: a certificate and key that do not match, or a file
+        # that is not PEM, is a configuration error like a missing file.
+        eval { _make_tls_context($tls); 1 } or do {
+            (my $e = $@) =~ s/\s+\z//;
+            return $fail->($e);
+        };
+    }
+
+    return $fail->("no API listener configured: set api_socket, or remove api_port = off")
+        unless $socket || $tcp_on;
+
+    my $tcp = $tcp_on
+        ? { bind => $c{api_bind} // '127.0.0.1', port => $port, tls => $tls }
+        : undef;
+    return { ok => 1, socket => $socket, tcp => $tcp };
+}
+
 # Start the API server. Blocks until SIGTERM or SIGINT.
 #
 # Required opts:
-#   config => \%config    (cert, key, ca, and optional api_port, api_cert, api_key)
+#   config => \%config    (cert, key, ca, and the listener keys above)
 #
-# The server listens on api_port (default 7445).
-# TLS is enabled if api_cert and api_key are both present in config.
-# Plain HTTP is used otherwise.
+# Listens on the unix socket and/or the TCP port that listen_plan describes.
 sub run (%opts) {
     my $config = $opts{config} or croak "config required";
 
-    my $port     = $config->{api_port}  // 7445;
-    my $bind     = $config->{api_bind}  // '127.0.0.1';
-    my $api_cert = $config->{api_cert}  // '';
-    my $api_key  = $config->{api_key}   // '';
-    my $use_tls  = ($api_cert && $api_key && -f $api_cert && -f $api_key);
+    my $plan = listen_plan($config);
+    die "ctrl-exec-api: $plan->{error}\n" unless $plan->{ok};
 
-    my $server = _make_server($port, $bind, $use_tls, $api_cert, $api_key);
+    # The "listening on" lines say the server is ready: write them at once,
+    # not when a buffer fills (stdout is a pipe or file under a supervisor).
+    STDOUT->autoflush(1);
 
-    Exec::Log::log_action('INFO', {
-        ACTION   => 'api-start',
-        PORT     => $port,
-        BIND     => $bind,
-        TLS      => ($use_tls ? 'yes' : 'no'),
-    });
+    # Each listener: { sock, kind => unix|tcp|tls, ... }.
+    my @listeners;
+    my $socket_id;    # [dev, ino] of the socket file we created, for removal
+    if (my $s = $plan->{socket}) {
+        my $srv = _make_unix_server($s->{path}, $s->{gid});
+        my @st  = stat $s->{path};
+        $socket_id = [ @st[0, 1] ];
+        push @listeners, { sock => $srv, kind => 'unix', path => $s->{path} };
+        Exec::Log::log_action('INFO', {
+            ACTION => 'api-start',
+            SOCKET => $s->{path},
+            GROUP  => scalar(getgrgid($st[5])) // $st[5],
+            MODE   => sprintf('%04o', $st[2] & 07777),
+        });
+        print "ctrl-exec API listening on unix socket $s->{path}\n";
+    }
+    if (my $t = $plan->{tcp}) {
+        my $srv = _make_server($t->{port}, $t->{bind});
+        my $ctx = $t->{tls} ? _make_tls_context($t->{tls}) : undef;
+        push @listeners, { sock => $srv, kind => ($ctx ? 'tls' : 'tcp'), ctx => $ctx };
+        Exec::Log::log_action('INFO', {
+            ACTION   => 'api-start',
+            PORT     => $t->{port},
+            BIND     => $t->{bind},
+            TLS      => ($ctx ? 'yes' : 'no'),
+        });
+        print "ctrl-exec API listening on $t->{bind}:$t->{port}"
+            . ($ctx ? " (TLS)" : " (plain HTTP)") . "\n";
+    }
 
-    print "ctrl-exec API listening on $bind:$port"
-        . ($use_tls ? " (TLS)" : " (plain HTTP)") . "\n";
-
+    # Remove our socket file on a clean stop - only in the parent (children
+    # inherit this handler) and only if the file is still the one we created.
+    my $parent = $$;
     $SIG{INT} = $SIG{TERM} = sub {
-        Exec::Log::log_action('INFO', { ACTION => 'api-stop' });
-        print "\nAPI server stopped.\n";
+        if ($$ == $parent) {
+            Exec::Log::log_action('INFO', { ACTION => 'api-stop' });
+            if ($socket_id) {
+                my $path = $plan->{socket}{path};
+                my @st = lstat $path;
+                unlink $path
+                    if @st && -S _ && $st[0] == $socket_id->[0] && $st[1] == $socket_id->[1];
+            }
+            print "\nAPI server stopped.\n";
+        }
         exit 0;
     };
 
@@ -85,45 +194,65 @@ sub run (%opts) {
         while (waitpid(-1, WNOHANG) > 0) { $live-- }
     };
 
+    my %by_fd = map { (fileno($_->{sock}) => $_) } @listeners;
+    my $select = IO::Select->new(map { $_->{sock} } @listeners);
+
     while (1) {
-        my $conn = $server->accept or next;
-        my $peer = $conn->peerhost;
-        $peer //= 'unknown';
+        # can_read returns empty when a signal (SIGCHLD) interrupts it.
+        for my $ready ($select->can_read) {
+            my $l    = $by_fd{ fileno $ready };
+            my $conn = $ready->accept or next;
 
-        if ($live >= $max_children) {
-            Exec::Log::log_action('WARNING',
-                { ACTION => 'api-overload', PEER => $peer, LIVE => $live });
-            _send_error($conn, 503, 'service unavailable',
-                        'too many concurrent requests');
-            $conn->close;
-            next;
-        }
-
-        my $pid = fork();
-        unless (defined $pid) {
-            warn "fork failed: $!\n";
-            _send_error($conn, 500, 'server error', 'fork failed');
-            $conn->close;
-            next;
-        }
-
-        if ($pid == 0) {
-            # Child: handle request and exit
-            $server->close;
-            _handle_connection($conn, $peer, $config);
-            if ($use_tls) {
-                $conn->close(SSL_no_shutdown => 1);
-            } else {
-                $conn->close;
+            # The caller: an IP for TCP; for the socket, the socket itself plus
+            # the peer's uid from the kernel (SO_PEERCRED), which the auth hook
+            # gets as ENVEXEC_PEER_UID.
+            my ($peer, $peer_uid);
+            if ($l->{kind} eq 'unix') {
+                $peer     = "unix:$l->{path}";
+                $peer_uid = _peer_uid($conn);
             }
-            exit 0;
-        }
+            else {
+                $peer = $conn->peerhost // 'unknown';
+            }
 
-        # Parent: count the live child and release our copy of the connection
-        $live++;
-        if ($use_tls) {
-            $conn->close(SSL_no_shutdown => 1);
-        } else {
+            if ($live >= $max_children) {
+                Exec::Log::log_action('WARNING',
+                    { ACTION => 'api-overload', PEER => $peer, LIVE => $live });
+                # A TLS caller cannot read a plain-text reply; just close it.
+                _send_error($conn, 503, 'service unavailable',
+                            'too many concurrent requests') unless $l->{kind} eq 'tls';
+                $conn->close;
+                next;
+            }
+
+            my $pid = fork();
+            unless (defined $pid) {
+                warn "fork failed: $!\n";
+                _send_error($conn, 500, 'server error', 'fork failed')
+                    unless $l->{kind} eq 'tls';
+                $conn->close;
+                next;
+            }
+
+            if ($pid == 0) {
+                # Child: handle request and exit. The TLS handshake happens here,
+                # not in the parent, so a slow or silent TLS client holds up only
+                # its own handler, never the accept loop.
+                $_->{sock}->close for @listeners;
+                if ($l->{kind} eq 'tls') {
+                    $conn = _start_tls($conn, $l->{ctx}, $peer) or exit 0;
+                }
+                _handle_connection($conn, $peer, $config, $peer_uid);
+                if ($l->{kind} eq 'tls') {
+                    $conn->close(SSL_no_shutdown => 1);
+                } else {
+                    $conn->close;
+                }
+                exit 0;
+            }
+
+            # Parent: count the live child and release our copy of the connection
+            $live++;
             $conn->close;
         }
     }
@@ -131,38 +260,110 @@ sub run (%opts) {
 
 # --- private ---
 
-sub _make_server ($port, $bind, $use_tls, $cert, $key) {
-
-    if ($use_tls) {
-        require IO::Socket::SSL;
-        require Exec::TLS;
-        my $srv = IO::Socket::SSL->new(
-            LocalAddr       => $bind,
-            LocalPort       => $port,
-            Listen          => 10,
-            ReuseAddr       => 1,
-            SSL_cert_file   => $cert,
-            SSL_key_file    => $key,
-            SSL_verify_mode => IO::Socket::SSL::SSL_VERIFY_NONE(),
-            Exec::TLS::hardening(),
-        ) or die "Cannot start TLS API server on $bind:$port: "
-               . "$IO::Socket::SSL::SSL_ERROR\n";
-        return $srv;
-    }
-    else {
-        require IO::Socket::INET;
-        my $srv = IO::Socket::INET->new(
-            LocalAddr => $bind,
-            LocalPort => $port,
-            Listen    => 10,
-            ReuseAddr => 1,
-            Proto     => 'tcp',
-        ) or die "Cannot start API server on $bind:$port: $!\n";
-        return $srv;
-    }
+sub _make_server ($port, $bind) {
+    my $srv = IO::Socket::INET->new(
+        LocalAddr => $bind,
+        LocalPort => $port,
+        Listen    => 10,
+        ReuseAddr => 1,
+        Proto     => 'tcp',
+    ) or die "Cannot start API server on $bind:$port: $!\n";
+    return $srv;
 }
 
-sub _handle_connection ($conn, $peer, $config) {
+# Load the operator's TLS certificate and key once at start-up, so a bad pair
+# stops the server with a clear error instead of failing every handshake.
+sub _make_tls_context ($tls) {
+    require IO::Socket::SSL;
+    require Exec::TLS;
+    my $ctx = IO::Socket::SSL::SSL_Context->new(
+        SSL_server      => 1,
+        SSL_cert_file   => $tls->{cert},
+        SSL_key_file    => $tls->{key},
+        SSL_verify_mode => IO::Socket::SSL::SSL_VERIFY_NONE(),
+        Exec::TLS::hardening(),
+    ) or die "Cannot load API TLS certificate/key ($tls->{cert}, $tls->{key}): "
+           . "$IO::Socket::SSL::SSL_ERROR\n";
+    return $ctx;
+}
+
+# Upgrade an accepted TCP connection to TLS (in the handler child). Returns the
+# TLS socket, or undef after logging when the handshake fails or times out.
+sub _start_tls ($conn, $ctx, $peer) {
+    my $ok = IO::Socket::SSL->start_SSL($conn,
+        SSL_server    => 1,
+        SSL_reuse_ctx => $ctx,
+        Timeout       => 30,
+    );
+    return $conn if $ok;
+    Exec::Log::log_action('WARNING', {
+        ACTION => 'api-tls',
+        RESULT => 'handshake-failed',
+        PEER   => $peer,
+        ERROR  => ($IO::Socket::SSL::SSL_ERROR // 'unknown'),
+    });
+    return undef;
+}
+
+# Create the unix socket listener at $path, mode 0660, group $gid (when given).
+#
+# An existing path is handled without guessing: a regular file, directory or
+# symlink (even one pointing at a socket) is never removed - start-up stops. A
+# socket that answers belongs to a running server - start-up stops. A socket
+# nothing answers (connection refused) was left by a crash and is replaced.
+sub _make_unix_server ($path, $gid) {
+    if (lstat $path) {
+        die "Cannot start API socket: $path exists and is not a socket; not removing it\n"
+            unless -S _;
+        my $probe = IO::Socket::UNIX->new(Peer => $path, Type => SOCK_STREAM);
+        if ($probe) {
+            close $probe;
+            die "Cannot start API socket: $path is in use by another process\n";
+        }
+        die "Cannot start API socket: cannot check existing socket $path: $!\n"
+            unless $!{ECONNREFUSED};
+        unlink $path
+            or die "Cannot start API socket: cannot remove stale socket $path: $!\n";
+        Exec::Log::log_action('INFO',
+            { ACTION => 'api-start', SOCKET => $path, RESULT => 'stale-socket-removed' });
+    }
+
+    # Created 0660 from the start (umask), never briefly wider.
+    my $old_umask = umask 0117;
+    my $srv = IO::Socket::UNIX->new(Local => $path, Type => SOCK_STREAM, Listen => 10);
+    my $err = $!;
+    umask $old_umask;
+    $srv or die "Cannot start API socket on $path: $err\n";
+
+    if (defined $gid && !chown(-1, $gid, $path)) {
+        my $e = $!;
+        unlink $path;
+        die "Cannot set group $gid on API socket $path: $e"
+          . " (the API's user must be a member of api_socket_group)\n";
+    }
+    unless (chmod 0660, $path) {
+        my $e = $!;
+        unlink $path;
+        die "Cannot set mode 0660 on API socket $path: $e\n";
+    }
+    return $srv;
+}
+
+# The connecting process's uid on a unix socket (Linux SO_PEERCRED: struct ucred
+# { pid_t pid; uid_t uid; gid_t gid; }), or undef where unavailable.
+sub _peer_uid ($conn) {
+    my $cred = eval { getsockopt($conn, SOL_SOCKET, Socket::SO_PEERCRED()) }
+        or return undef;
+    my (undef, $uid) = unpack 'iI', $cred;
+    return $uid;
+}
+
+# The connecting process's uid when the caller came in on the unix socket
+# (undef for TCP). Set per connection; every auth check passes it to the hook.
+our $PEER_UID;
+
+sub _handle_connection ($conn, $peer, $config, $peer_uid = undef) {
+    local $PEER_UID = $peer_uid;
 
     # Read request line
     my $request_line = <$conn>;
@@ -217,6 +418,7 @@ sub _handle_connection ($conn, $peer, $config) {
         METHOD => $method,
         PATH   => $path,
         PEER   => $peer,
+        (defined $peer_uid ? (UID => $peer_uid) : ()),
         LEN    => $content_length,
     });
 
@@ -235,6 +437,7 @@ sub _handle_connection ($conn, $peer, $config) {
             $b->{token} // ''
         } : ''),
         source_ip => $peer,
+        peer_uid  => $PEER_UID,
         config    => $config,
     );
     unless ($auth->{ok}) {
@@ -295,6 +498,7 @@ sub _handle_ping ($conn, $peer, $body, $config) {
         username  => $username,
         token     => $token,
         source_ip => $peer,
+        peer_uid  => $PEER_UID,
         config    => $config,
     );
     unless ($auth->{ok}) {
@@ -364,6 +568,7 @@ sub _handle_run ($conn, $peer, $body, $config) {
         username  => $username,
         token     => $token,
         source_ip => $peer,
+        peer_uid  => $PEER_UID,
         config    => $config,
     );
     unless ($auth->{ok}) {
@@ -455,6 +660,7 @@ sub _handle_discovery ($conn, $peer, $body, $config) {
         username  => $username,
         token     => $token,
         source_ip => $peer,
+        peer_uid  => $PEER_UID,
         config    => $config,
     );
     unless ($auth->{ok}) {
@@ -688,6 +894,7 @@ sub _handle_status ($conn, $reqid, $peer, $auth_token, $config) {
         submitter => $record->{submitter},
         token     => $auth_token,
         source_ip => $peer,
+        peer_uid  => $PEER_UID,
         config    => $config,
     );
     unless ($auth->{ok}) {

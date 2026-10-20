@@ -14,7 +14,10 @@
 #   ENVEXEC_TOKEN       token from request (may be empty)
 #   ENVEXEC_SOURCE_IP   originating IP address (behind a reverse proxy this is the
 #                       proxy's address, not the client's - do not use it for
-#                       client identity there)
+#                       client identity there); unix:<path> for an API
+#                       caller on the unix socket (api_socket)
+#   ENVEXEC_PEER_UID    uid of an API caller on the unix socket, from the
+#                       kernel (empty for TCP callers and the CLI)
 #   ENVEXEC_TIMESTAMP   ISO8601 UTC timestamp
 #
 # ENVEXEC_ARGS (space-joined) is also set for backward compatibility

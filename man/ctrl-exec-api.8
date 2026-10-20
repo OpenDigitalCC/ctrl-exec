@@ -28,20 +28,41 @@ Default:
 Relevant keys in
 .BR ctrl-exec.conf :
 .TP
+.B api_socket
+Unix socket path for same-host callers (optional), created mode 0660.
+Can run beside the TCP listener.
+.TP
+.B api_socket_group
+Group of the socket file (default: the server's own group).
+.TP
 .B api_port
-Port to listen on (default 7445).
+TCP port to listen on (default 7445);
+.B off
+for no TCP listener (then
+.B api_socket
+is required).
 .TP
 .B api_bind
 Bind address (default 127.0.0.1).
 .TP
 .B api_cert ", " api_key
-TLS certificate and key (plain HTTP if absent).
+TLS certificate and key for the TCP listener (plain HTTP if neither is set).
+Setting only one, or an unreadable file, is refused.
 .TP
 .B auth_hook
 Auth hook executable.
 .TP
 .B auth_deny_generic
 When set, denied requests return a generic 403 without the specific reason.
+.SH EXIT STATUS
+.TP
+.B 78
+Configuration refused: no listener, an incomplete or unreadable TLS pair, an
+unknown socket group, or an old
+.I /etc/ctrl-exec
+directory.
+.PP
+Confidential run input should only be sent over the unix socket or TLS.
 .SH SEE ALSO
 .BR ctrl-exec-dispatcher (8),
 .BR ctrl-exec-agent (8).

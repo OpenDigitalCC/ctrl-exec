@@ -31,8 +31,21 @@ Endpoints: `GET /`, `GET /health`, `POST /ping`, `POST /run`,
 `GET /discovery`, `POST /discovery`, `GET /status/{reqid}`,
 `GET /openapi.json`, `GET /openapi-live.json`.
 
-The server listens on `api_port` (default 7445). TLS is enabled if `api_cert`
-and `api_key` are set in `ctrl-exec.conf`; plain HTTP is used otherwise.
+The server listens on `api_bind`:`api_port` (default 127.0.0.1:7445), on a
+unix socket (`api_socket`, mode 0660, group `api_socket_group`), or on both;
+`api_port = off` leaves only the socket. TLS is enabled on the TCP port if
+`api_cert` and `api_key` are set in `ctrl-exec.conf`; plain HTTP is used when
+neither is. Requests on either listener are handled alike and pass the same
+auth hook; a socket caller's `source_ip` is `unix:<path>` and the hook also
+gets its uid (`peer_uid`, `ENVEXEC_PEER_UID`). See REFERENCE.md for the keys
+and the start-up refusals.
+
+Send confidential run input (`input` on `POST /run`) only over the socket or
+TLS. Over the socket, a client speaks the same HTTP:
+
+```bash
+curl -s --unix-socket /run/ctrl-exec-api/api.sock http://localhost/health
+```
 
 The server uses a fork-per-request model: the parent accepts connections and
 forks a child per request. The child handles the request and exits. The parent
