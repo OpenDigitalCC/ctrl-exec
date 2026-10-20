@@ -5,6 +5,11 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
+## 0.13.0 — (unreleased)
+
+The backlog line: every open task in todo/ lands here, one branch per task or
+task group, each adding its bullets to this entry.
+
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 
 - **Fixed (CRITICAL)** the recurring `exit -1 / "no response from child"` outage.
