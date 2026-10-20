@@ -1,0 +1,55 @@
+# bash completion for ctrl-exec-agent (short name: cea)
+#
+# Installed as ctrl-exec-agent, with cea a link to it, in the system
+# bash-completion directory. It completes the modes and options that
+# bin/ctrl-exec-agent accepts (t/completion-agent.t fails if a mode or option
+# is added to the bin without being added here).
+
+_ctrl_exec_agent() {
+    local cur=${COMP_WORDS[COMP_CWORD]}
+    local prev=${COMP_WORDS[COMP_CWORD-1]}
+    COMPREPLY=()
+
+    local modes="serve request-pairing pairing-status self-check self-ping
+        promote-cert cert-staged paired"
+    local opts="--config --allowlist --dispatcher --port --background --timeout
+        --lookup-by --version"
+
+    # "--opt=value": bash splits it into --opt, =, value.
+    if [[ $prev == = && $COMP_CWORD -ge 2 ]]; then
+        prev=${COMP_WORDS[COMP_CWORD-2]}
+    elif [[ $cur == = ]]; then
+        cur=
+    fi
+
+    case $prev in
+        --config|--allowlist)
+            COMPREPLY=($(compgen -f -- "$cur")); return 0 ;;
+        --lookup-by)
+            COMPREPLY=($(compgen -W "ip hostname" -- "$cur")); return 0 ;;
+        --dispatcher|--port|--timeout)
+            return 0 ;;
+    esac
+
+    # Is a mode already on the line (a word that is not an option or its value)?
+    local i w have_mode=0
+    for ((i = 1; i < COMP_CWORD; i++)); do
+        w=${COMP_WORDS[i]}
+        case $w in
+            =) ((i++)) ;;
+            --config|--allowlist|--dispatcher|--port|--timeout|--lookup-by)
+                [[ ${COMP_WORDS[i+1]} == = ]] || ((i++)) ;;
+            -*) ;;
+            *) have_mode=1 ;;
+        esac
+    done
+
+    if [[ $cur == -* ]]; then
+        COMPREPLY=($(compgen -W "$opts" -- "$cur"))
+    elif ((!have_mode)); then
+        COMPREPLY=($(compgen -W "$modes" -- "$cur"))
+    fi
+    return 0
+}
+
+complete -F _ctrl_exec_agent ctrl-exec-agent cea

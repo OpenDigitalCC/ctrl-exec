@@ -171,6 +171,7 @@ task group, each adding its bullets to this entry.
   `/tmp`, `/var/tmp` or a home directory will see them refused after the
   upgrade; run `sudo ctrl-exec-agent self-check` and fix them with `chown root`
   / `chmod go-w` (installed layout `root:ctrl-exec-agent 0750` passes). (T-045)
+- **Added** bash completion for `ctrl-exec-dispatcher` (`ced`), `ctrl-exec-agent` (`cea`) and `ctrl-exec-api` (`etc/bash-completion/`): modes and options taken from each bin's dispatch and option tables, `--lookup-by` values, and registered host names (and local allowlist script names for `run`) when those files are readable without root. `install.sh` and both packages install them (with `ced`/`cea` as links) into the system bash-completion directory, and `t/completion-*.t` fails if a mode or option is added to a bin without completion. (T-009)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 

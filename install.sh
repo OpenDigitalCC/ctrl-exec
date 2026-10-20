@@ -36,6 +36,15 @@ LOCKS_DIR="/var/lib/ctrl-exec/locks"
 RUNS_DIR="/var/lib/ctrl-exec/runs"
 AGENT_RUNS_DIR="/var/lib/ctrl-exec-agent/runs"
 SYSTEMD_DIR="/etc/systemd/system"
+# Bash completion: the lazily loaded directory if the system has one, else the
+# older source-everything directory. Empty (completion skipped) if neither exists.
+if [[ -d /usr/share/bash-completion/completions ]]; then
+    COMPLETION_DIR="/usr/share/bash-completion/completions"
+elif [[ -d /etc/bash_completion.d ]]; then
+    COMPLETION_DIR="/etc/bash_completion.d"
+else
+    COMPLETION_DIR=""
+fi
 AGENT_SERVICE="ctrl-exec-agent.service"
 API_SERVICE="ctrl-exec-api.service"
 EXECUTOR_SERVICE="ctrl-exec-executor.service"
@@ -63,6 +72,21 @@ safe_install() {
     local mode="$1" src="$2" dst="$3"
     cp "$src" "$dst" || return 1
     chmod "$mode" "$dst"
+}
+
+# Install bash completion for a command (etc/bash-completion/<cmd>), plus its
+# short name as a link where the completion directory loads files by command
+# name. Skipped quietly when the system has no bash-completion directory.
+install_completion() {
+    local cmd="$1" short="${2:-}"
+    [[ -n "$COMPLETION_DIR" ]] || return 0
+    [[ -f "$SOURCE_DIR/etc/bash-completion/$cmd" ]] || return 0
+    safe_install 644 "$SOURCE_DIR/etc/bash-completion/$cmd" "$COMPLETION_DIR/$cmd" \
+        || { warn "Could not install bash completion for $cmd."; return 0; }
+    if [[ -n "$short" && "$COMPLETION_DIR" == */completions ]]; then
+        ln -sf "$cmd" "$COMPLETION_DIR/$short"
+    fi
+    info "Bash completion: $COMPLETION_DIR/$cmd${short:+ (and $short)}"
 }
 
 # Install a canonical systemd unit template (etc/systemd/) with @BINDIR@ and
@@ -692,6 +716,7 @@ install_agent() {
     # Shortcut symlink
     ln -sf "$BIN_DIR/ctrl-exec-agent" "$BIN_DIR/cea"
     info "Shortcut: cea -> ctrl-exec-agent"
+    install_completion ctrl-exec-agent cea
 }
 
 # --- ctrl-exec installation ---
@@ -793,6 +818,7 @@ install_ctrl_exec_dispatcher() {
     # Shortcut symlink
     ln -sf "$BIN_DIR/ctrl-exec-dispatcher" "$BIN_DIR/ced"
     info "Shortcut: ced -> ctrl-exec-dispatcher"
+    install_completion ctrl-exec-dispatcher ced
 }
 
 # --- api installation ---
@@ -809,6 +835,7 @@ install_api() {
     install_service_unit "$API_SERVICE"
 
     info "ctrl-exec-api installed at $BIN_DIR/ctrl-exec-api"
+    install_completion ctrl-exec-api
 }
 
 # --- uninstall ---
@@ -854,6 +881,14 @@ uninstall() {
         "$SBIN_DIR/ctrl-exec-executor"
         "$SBIN_DIR/$LEGACY_EXECUTOR_BIN"
     )
+
+    if [[ -n "$COMPLETION_DIR" ]]; then
+        local c
+        # short-name links first: a link to a file already removed is dangling
+        for c in ced cea ctrl-exec-agent ctrl-exec-dispatcher ctrl-exec-api; do
+            files+=( "$COMPLETION_DIR/$c" )
+        done
+    fi
 
     if [[ "$HAS_SYSTEMD" == true ]]; then
         files+=(

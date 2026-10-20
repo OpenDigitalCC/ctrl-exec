@@ -48,6 +48,12 @@ override_dh_auto_install:
 	# Makefile; install the root daemon to /usr/sbin.
 	install -d debian/tmp/usr/sbin
 	install -m755 src/ctrl-exec-executor debian/tmp/usr/sbin/ctrl-exec-executor
+	# Bash completion (lazily loaded by command name; the short names ced and
+	# cea are links, see debian/*.links).
+	install -d debian/tmp/usr/share/bash-completion/completions
+	for c in ctrl-exec-agent ctrl-exec-dispatcher ctrl-exec-api; do \
+	  install -m644 etc/bash-completion/$$c debian/tmp/usr/share/bash-completion/completions/$$c; \
+	done
 	# Example configs -> /usr/share/ctrl-exec/examples (postinst seeds /etc).
 	install -d debian/tmp/usr/share/ctrl-exec/examples
 	install -m644 etc/agent.conf.example        debian/tmp/usr/share/ctrl-exec/examples/

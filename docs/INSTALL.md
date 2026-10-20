@@ -114,6 +114,9 @@ identical.
 ```
 /usr/local/bin/{ctrl-exec-dispatcher, ced, ctrl-exec-agent, ctrl-exec-api}
                                    the CLIs (packages: /usr/bin)
+/usr/share/bash-completion/completions/{ctrl-exec-dispatcher, ced, ctrl-exec-agent, cea, ctrl-exec-api}
+                                   bash completion (or /etc/bash_completion.d if that is
+                                   the system's directory; skipped if neither exists)
 /usr/local/sbin/ctrl-exec-executor the privileged executor, agent hosts (packages: /usr/sbin)
 /usr/local/lib/ctrl-exec/          Perl library (packages: /usr/share/perl5/Exec)
 /etc/ctrl-exec-dispatcher/         dispatcher config, CA material, auth hook
@@ -126,6 +129,13 @@ ctrl-exec-agent.service            systemd units (tarball: /etc/systemd/system;
 ctrl-exec-executor.service         packages: /usr/lib/systemd/system)
 ctrl-exec-api.service
 ```
+
+Tab completion for the modes and options of `ced`, `cea` and `ctrl-exec-api` is
+installed with them (it needs the `bash-completion` package; open a new shell to
+pick it up). `ced ping`, `unpair`, `edit-agent` and `run` also complete the
+registered agent names, and `run` the script names in a local
+`/etc/ctrl-exec-agent/scripts.conf`, when those files are readable by you;
+otherwise only the modes and options are offered.
 
 The tarball installer stamps the release version from the `VERSION` file into
 the binaries at install time (the source files carry the sentinel `UNINSTALLED`

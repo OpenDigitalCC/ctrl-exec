@@ -1,0 +1,138 @@
+# bash completion for ctrl-exec-dispatcher (short name: ced)
+#
+# Installed as ctrl-exec-dispatcher, with ced a link to it, in the system
+# bash-completion directory. It completes the modes and options that
+# bin/ctrl-exec-dispatcher accepts (t/completion-dispatcher.t fails if a mode
+# or option is added to the bin without being added here).
+#
+# Host names come from the agent registry and script names from the local agent
+# allowlist, but only when those files are readable by the person typing;
+# otherwise nothing is offered and no error is shown. Neither read needs root
+# on a host where the operator can already run `ced list-agents`.
+#
+# CTRL_EXEC_COMPLETION_REGISTRY_DIR and CTRL_EXEC_COMPLETION_ALLOWLIST override
+# the two locations (used by the tests).
+
+_ctrl_exec_dispatcher_hosts() {
+    local dir="${CTRL_EXEC_COMPLETION_REGISTRY_DIR:-/var/lib/ctrl-exec/agents}"
+    local f
+    for f in "$dir"/*.json; do
+        [[ -r $f ]] || continue
+        f=${f##*/}
+        printf '%s\n' "${f%.json}"
+    done 2>/dev/null
+}
+
+_ctrl_exec_dispatcher_scripts() {
+    local conf="${CTRL_EXEC_COMPLETION_ALLOWLIST:-/etc/ctrl-exec-agent/scripts.conf}"
+    [[ -r $conf ]] || return 0
+    # "<name> = <path> [profile=<p>]": the name is the left of the first '='.
+    sed -n 's/^[[:space:]]*\([A-Za-z0-9_-][A-Za-z0-9_-]*\)[[:space:]]*=.*/\1/p' \
+        "$conf" 2>/dev/null
+}
+
+_ctrl_exec_dispatcher() {
+    local cur=${COMP_WORDS[COMP_CWORD]}
+    local prev=${COMP_WORDS[COMP_CWORD-1]}
+    COMPREPLY=()
+
+    local modes="run status wait ping pairing-mode list-requests approve deny
+        setup-ca setup-ctrl-exec list-agents edit-agent list-locks rotate-cert
+        serial-status unpair maintain"
+    local global_opts="--config --json --port --username --token --version"
+
+    # "--opt=value": bash splits it into --opt, =, value.
+    if [[ $prev == = && $COMP_CWORD -ge 2 ]]; then
+        prev=${COMP_WORDS[COMP_CWORD-2]}
+    elif [[ $cur == = ]]; then
+        cur=
+    fi
+
+    # Value of an option that takes one.
+    case $prev in
+        --config)
+            COMPREPLY=($(compgen -f -- "$cur")); return 0 ;;
+        --lookup-by)
+            COMPREPLY=($(compgen -W "ip hostname" -- "$cur")); return 0 ;;
+        --port|--username|--token|--agent-port|--ip|--rename|--tags|--timeout)
+            return 0 ;;
+    esac
+
+    # Find the mode (first word that is not an option or an option's value) and
+    # collect the positional arguments after it.
+    local i w mode="" seen_dd=0
+    local -a pos=()
+    for ((i = 1; i < COMP_CWORD; i++)); do
+        w=${COMP_WORDS[i]}
+        if [[ $w == = ]]; then
+            ((i++)); continue
+        fi
+        case $w in
+            --config|--port|--username|--token|--lookup-by|--agent-port|--ip|--rename|--tags|--timeout)
+                # a value follows unless it was given as --opt=value
+                [[ ${COMP_WORDS[i+1]} == = ]] || ((i++))
+                continue ;;
+            --) seen_dd=1; continue ;;
+            -*) continue ;;
+        esac
+        if [[ -z $mode ]]; then mode=$w; else pos+=("$w"); fi
+    done
+
+    # Nothing is completed after "--" (arguments passed to the script).
+    ((seen_dd)) && return 0
+
+    if [[ -z $mode ]]; then
+        if [[ $cur == -* ]]; then
+            COMPREPLY=($(compgen -W "$global_opts" -- "$cur"))
+        else
+            COMPREPLY=($(compgen -W "$modes" -- "$cur"))
+        fi
+        return 0
+    fi
+
+    local mode_opts=""
+    case $mode in
+        run)          mode_opts="--async" ;;
+        wait)         mode_opts="--timeout" ;;
+        pairing-mode) mode_opts="--timeout" ;;
+        approve)      mode_opts="--lookup-by --ip --agent-port" ;;
+        edit-agent)   mode_opts="--rename --ip --agent-port --lookup-by" ;;
+        list-agents)  mode_opts="--tags" ;;
+    esac
+
+    if [[ $cur == -* ]]; then
+        COMPREPLY=($(compgen -W "$mode_opts $global_opts" -- "$cur"))
+        return 0
+    fi
+
+    local hosts words p h is_host
+    case $mode in
+        pairing-mode)
+            ((${#pos[@]} == 0)) && COMPREPLY=($(compgen -W "start stop" -- "$cur"))
+            ;;
+        ping)
+            COMPREPLY=($(compgen -W "$(_ctrl_exec_dispatcher_hosts)" -- "$cur"))
+            ;;
+        unpair|edit-agent)
+            ((${#pos[@]} == 0)) &&
+                COMPREPLY=($(compgen -W "$(_ctrl_exec_dispatcher_hosts)" -- "$cur"))
+            ;;
+        run)
+            # run <host>... <script> [-- args]: hosts first; once a word is not
+            # a registered host it is the script, and nothing more is offered.
+            hosts=$(_ctrl_exec_dispatcher_hosts)
+            for p in "${pos[@]}"; do
+                is_host=0
+                for h in $hosts; do
+                    [[ ${p%%:*} == "$h" ]] && is_host=1
+                done
+                ((is_host)) || return 0
+            done
+            words="$hosts $(_ctrl_exec_dispatcher_scripts)"
+            COMPREPLY=($(compgen -W "$words" -- "$cur"))
+            ;;
+    esac
+    return 0
+}
+
+complete -F _ctrl_exec_dispatcher ctrl-exec-dispatcher ced

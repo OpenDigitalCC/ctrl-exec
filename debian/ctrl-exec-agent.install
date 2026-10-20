@@ -5,3 +5,4 @@ usr/share/ctrl-exec/examples/scripts.conf.example
 usr/share/ctrl-exec/examples/auth-hook-args.example
 usr/share/ctrl-exec/examples/ctrl-exec-demonstrator.sh
 usr/share/ctrl-exec/sbom-agent.json
+usr/share/bash-completion/completions/ctrl-exec-agent

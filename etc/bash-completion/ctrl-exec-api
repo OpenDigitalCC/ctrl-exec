@@ -1,0 +1,26 @@
+# bash completion for ctrl-exec-api
+#
+# Installed in the system bash-completion directory. ctrl-exec-api takes no
+# modes; its only option is --config (t/completion-api.t fails if the bin gains
+# another without it being added here).
+
+_ctrl_exec_api() {
+    local cur=${COMP_WORDS[COMP_CWORD]}
+    local prev=${COMP_WORDS[COMP_CWORD-1]}
+    COMPREPLY=()
+
+    if [[ $prev == = && $COMP_CWORD -ge 2 ]]; then
+        prev=${COMP_WORDS[COMP_CWORD-2]}
+    elif [[ $cur == = ]]; then
+        cur=
+    fi
+
+    if [[ $prev == --config ]]; then
+        COMPREPLY=($(compgen -f -- "$cur"))
+    elif [[ $cur == -* ]]; then
+        COMPREPLY=($(compgen -W "--config" -- "$cur"))
+    fi
+    return 0
+}
+
+complete -F _ctrl_exec_api ctrl-exec-api

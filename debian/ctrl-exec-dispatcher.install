@@ -3,3 +3,5 @@ usr/bin/ctrl-exec-api
 usr/share/ctrl-exec/examples/ctrl-exec.conf.example
 usr/share/ctrl-exec/examples/auth-hook.example
 usr/share/ctrl-exec/sbom-dispatcher.json
+usr/share/bash-completion/completions/ctrl-exec-dispatcher
+usr/share/bash-completion/completions/ctrl-exec-api

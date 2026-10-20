@@ -139,6 +139,9 @@ if any are missing; see `INSTALL.md` for Alpine/OpenWrt notes.
 Either method gives you `ced` (dispatcher) and `cea` (agent) on `PATH`, the
 `ctrl-exec` system group, and the systemd units - installed but not started.
 
+Bash tab completion for `ced`, `cea` and `ctrl-exec-api` (modes, options, and
+registered agent names) is installed too, if the system has `bash-completion`.
+
 ### Set up
 
 These steps are the same whichever way you installed. Run each block on the

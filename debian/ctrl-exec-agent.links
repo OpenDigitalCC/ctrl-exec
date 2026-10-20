@@ -1,1 +1,2 @@
 usr/bin/ctrl-exec-agent usr/bin/cea
+usr/share/bash-completion/completions/ctrl-exec-agent usr/share/bash-completion/completions/cea
