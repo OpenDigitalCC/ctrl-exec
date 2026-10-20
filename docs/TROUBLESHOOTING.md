@@ -360,6 +360,7 @@ tone: medium
 ---
 Framed "configuration error", exit 78 | A fault in agent.conf or scripts.conf (inline comment, undefined profile, bad value). | Read the framed message - it names the file and the fault. Fix and run self-check.
 255/EXCEPTION, restart counter climbing | On current releases this should be a config error caught as exit 78. If it is not, the start is failing after config load. | journalctl for the exception text; confirm cert, key and CA paths exist and are readable.
+"... needs root - cannot read <file> (Permission denied)" from self-check, self-ping or pairing-status | The command was not run as root; the configuration and key files are root-only. | Re-run with sudo (for example, sudo ctrl-exec-agent self-check).
 Port 7443 not listening | Service not running, or bound elsewhere. | systemctl status; the port setting in agent.conf; self-ping.
 mTLS handshake error on self-ping | Cert/CA paths wrong or unreadable by the service. | self-ping output; cert file ownership and mode.
 Profiles set but never applied | executor_socket unset, so the executor is not in the path. | Startup warning in the log; confirm executor_socket is set and ctrl-exec-executor.service is running.

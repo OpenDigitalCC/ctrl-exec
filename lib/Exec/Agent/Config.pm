@@ -10,6 +10,20 @@ use Exec::Log qw();
 use Exec::RateLimit qw();
 
 
+# Return the first of the given paths that cannot be read because of a
+# permission error (EACCES - the file itself, or a directory on the way to it),
+# or undef when none is. Lets a CLI command that was not run as root say so,
+# rather than reporting a missing file or a configuration error. A path that
+# does not exist (ENOENT) is not a permission problem and is not reported.
+sub unreadable_path (@paths) {
+    for my $p (@paths) {
+        next unless defined $p && length $p;
+        if (open my $fh, '<', $p) { close $fh; next; }
+        return $p if $!{EACCES};
+    }
+    return undef;
+}
+
 # Load and validate agent.conf
 # Returns hashref of config values or dies with error
 sub load_config ($path = undef) {

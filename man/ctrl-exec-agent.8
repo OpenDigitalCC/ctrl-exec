@@ -40,11 +40,13 @@ Generate a key and CSR and submit a pairing request to a control host (see
 below). After the operator approves, the signed certificate is stored.
 .TP
 .B pairing-status
-Show pairing and certificate status.
+Show pairing and certificate status. Reads the root-only certificate files;
+run as root (sudo).
 .TP
 .B self-check
 Validate the local configuration, allowlist, and certificate files. No
-network connection is made.
+network connection is made. Reads the root-only configuration; run as root
+(sudo).
 .TP
 .B self-ping
 Connect to the running agent on the loopback address over mTLS and send a

@@ -1082,6 +1082,14 @@ ctrl-exec-agent pairing-status
 Exits 0 if paired, 1 if not paired. Suitable for use in scripts and
 health checks.
 
+The certificate directory is root-only. Run unprivileged, the command says so
+(`pairing-status needs root - cannot read <file> (Permission denied)`, exit 1)
+rather than reporting the agent as not paired. The same applies to
+`self-check` and `self-ping`: a permission error on `agent.conf`,
+`scripts.conf` or a certificate file is reported as "needs root - run it with
+sudo", not as a configuration error. A real configuration error is reported
+as before.
+
 ---
 
 ### Auth hook (agent-side)

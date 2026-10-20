@@ -44,6 +44,13 @@ task group, each adding its bullets to this entry.
   `install.sh --uninstall` now also stops and removes the executor. (T-008)
 - **Fixed** docs/SECURITY.md claimed the agent enforces "schema validation (constrained arguments)" and that the surface is "argument-constrained"; core never validates argument values (the schema sidecar is advertised data only). SECURITY.md now says so everywhere and points to the auth hooks (dispatcher hook and the agent's `auth_hook`, both given `ENVEXEC_ARGS_JSON`) as the place to constrain arguments. (T-010)
 - **Fixed** docs/TROUBLESHOOTING.md answered "profiles are optional?" with "Yes"; only the per-script `profile=` is optional, `[profile default]` in agent.conf is mandatory (an undefined profile exits 78). The answer is corrected and a troubleshooting entry added for "script(s) reference an undefined profile" with the `[profile default]` fix. (T-015)
+- **Fixed** `self-check`, `self-ping`, `pairing-status` and `serve` reported a
+  configuration error (or "not paired") when the real cause was a permission
+  error on a root-only file because they were not run as root. They now say the
+  command needs root, name the file and show the sudo form (`serve` exits 78
+  with the permission error named); real configuration errors are unchanged.
+  `pairing-status` and `self-check` now read the certificate directory beside
+  `--config` rather than a fixed path. (T-006)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 

@@ -26,6 +26,7 @@ our $VERSION = 'UNINSTALLED';
 # our (not my) so a unit test loading the modulino can redirect them.
 our $CONFIG_PATH    = '/etc/ctrl-exec-agent/agent.conf';
 our $ALLOWLIST_PATH = '/etc/ctrl-exec-agent/scripts.conf';
+our $CERT_DIR;   # certificate directory for pairing-status; defaults beside agent.conf
 
 # --- entry point ---
 # Modulino: run as a program normally, but when the file is loaded (require/do)
@@ -48,6 +49,10 @@ sub main {
     ) or die usage();
 
     $mode = shift @ARGV;
+
+    # The certificates live beside agent.conf (/etc/ctrl-exec-agent by default).
+    ($CERT_DIR = $CONFIG_PATH) =~ s{/[^/]*\z}{};
+    $CERT_DIR = '.' unless length $CERT_DIR;
 
     # No mode given: print help and exit rather than silently launching the
     # server. A bare invocation that blocks in the accept loop with no terminal
@@ -78,6 +83,18 @@ sub main {
 }
 
 # --- modes ---
+
+# Operator commands (self-check, self-ping, pairing-status) read root-only files
+# (agent.conf, the key). Run unprivileged they used to report a config error or
+# "not paired". If any of the given paths is unreadable for lack of permission,
+# say the command needs root, name the file, and exit 1.
+sub _need_root ($mode, @paths) {
+    my $p = Exec::Agent::Config::unreadable_path(@paths);
+    return unless defined $p;
+    print STDERR "ctrl-exec-agent: $mode needs root - cannot read $p (Permission denied).\n"
+               . "Run it with sudo: sudo ctrl-exec-agent $mode\n";
+    exit 1;
+}
 
 # Promote a validated staged cert into the live cert path. Run as root by the
 # service unit's ExecStartPre before the server starts, so a renewed cert
@@ -153,6 +170,16 @@ sub mode_serve ($opts) {
     # symptom an operator first sees is "restart counter is at 134"). Instead,
     # catch it, print exactly what and where, and exit EX_CONFIG (78), which the
     # unit lists in RestartPreventExitStatus: one clear failure, no loop.
+
+    # A permission error on these root-only files is not a configuration error:
+    # say so, and exit 78 for the same no-restart-loop reason.
+    if (defined(my $p = Exec::Agent::Config::unreadable_path($CONFIG_PATH, $ALLOWLIST_PATH))) {
+        print STDERR "ctrl-exec-agent: cannot start - cannot read $p (Permission denied).\n"
+                   . "serve must run as root or as the agent service user (the unit does this);\n"
+                   . "if starting it by hand, use: sudo ctrl-exec-agent serve\n";
+        exit 78;
+    }
+
     my ($config, $allowlist, $schemas);
     eval {
         $config    = Exec::Agent::Config::load_config($CONFIG_PATH);
@@ -606,7 +633,9 @@ sub _store_pairing_result ($result, $key_pem, $ctrl_exec_host) {
 }
 
 sub mode_pairing_status {
-    my $status = Exec::Agent::AgentPairing::pairing_status();
+    my $d = $CERT_DIR;
+    _need_root('pairing-status', "$d/agent.crt", "$d/agent.key", "$d/ca.crt");
+    my $status = Exec::Agent::AgentPairing::pairing_status(cert_dir => $d);
     if ($status->{paired}) {
         print "Paired. Certificate expires: $status->{expiry}\n";
     }
@@ -617,6 +646,8 @@ sub mode_pairing_status {
 }
 
 sub mode_self_check {
+    _need_root('self-check', $CONFIG_PATH, $ALLOWLIST_PATH,
+               "$CERT_DIR/agent.crt", "$CERT_DIR/agent.key", "$CERT_DIR/ca.crt");
     print "Checking config...\n";
     my $config = eval { Exec::Agent::Config::load_config($CONFIG_PATH) };
     if ($@) { print "Config error: $@\n"; exit 1; }
@@ -626,7 +657,7 @@ sub mode_self_check {
     if ($@) { print "Allowlist error: $@\n"; exit 1; }
     printf "  Allowlist OK (%d scripts)\n", scalar keys %$allowlist;
 
-    my $status = Exec::Agent::AgentPairing::pairing_status();
+    my $status = Exec::Agent::AgentPairing::pairing_status(cert_dir => $CERT_DIR);
     if ($status->{paired}) {
         print "  Certs OK (expires $status->{expiry})\n";
     }
@@ -652,14 +683,16 @@ sub mode_self_check {
 }
 
 sub mode_self_ping {
+    _need_root('self-ping', $CONFIG_PATH);
     print "Checking config...\n";
     my $config = eval { Exec::Agent::Config::load_config($CONFIG_PATH) };
     if ($@) { print "Config error: $@\n"; exit 1; }
     my $port = $config->{port} // 7443;
     print "  Config OK (port $port)\n";
+    _need_root('self-ping', $config->{cert}, $config->{key}, $config->{ca});
 
     # Pairing and cert status
-    my $status = Exec::Agent::AgentPairing::pairing_status();
+    my $status = Exec::Agent::AgentPairing::pairing_status(cert_dir => $CERT_DIR);
     if ($status->{paired}) {
         print "  Paired: yes (cert expires $status->{expiry})\n";
     }
