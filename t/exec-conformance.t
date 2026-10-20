@@ -65,7 +65,8 @@ sub perl_resolve {
     my $nnp   = $p->{no_new_privileges} // 1;
     my $caps  = join(',', @{ $p->{caps}     // [] });
     my $writ  = join(':', @{ $p->{writable} // [] });
-    return "OK path=$path|profile=$prof|run_as=$runas|nnp=$nnp|caps=$caps|writable=$writ";
+    my $input = Exec::Agent::Config::script_input_mode($name, $al);
+    return "OK path=$path|profile=$prof|run_as=$runas|nnp=$nnp|caps=$caps|writable=$writ|input=$input";
 }
 
 # --- fixtures: each names the scripts to resolve against one config pair -------
@@ -192,11 +193,8 @@ push @fixtures, (
         names   => [qw(l r rep rep2 emp unk upper num eqpath eqlead keyonly)],
     },
     {
-        # input= (T-013) is a Perl-front-end annotation until the executor
-        # parses it (piece 3); the C parser ignores unknown annotations, so
-        # valid values must not change the path/profile decision on either side.
-        # Bad values (Perl skips the script) are NOT here: the C side still
-        # resolves them, and piece 3 adds them once it rejects the same values.
+        # input= (T-013): both parsers accept the four forms and the executor
+        # re-derives the mode from its own scripts.conf.
         label   => 'scripts: input= valid values leave the decision unchanged',
         expect  => { c => 'OK path=/opt/c.sh|profile=a', r => 'OK path=/opt/r.sh|profile=a', rn => 'OK path=/opt/rn.sh|profile=a', f => 'OK path=/opt/f.sh|profile=a', first => 'OK path=/opt/first.sh|profile=a' },
         agent   => $REQUIRED . "[profile a]\nrun_as = nobody\n",
@@ -204,6 +202,46 @@ push @fixtures, (
                  . "rn = /opt/rn.sh input=raw:key profile=a\nf = /opt/f.sh profile=a input=fields\n"
                  . "first = input=fields profile=a /opt/first.sh\n",
         names   => [qw(c r rn f first)],
+    },
+    {
+        # A bad input= value skips the script in BOTH parsers: the executor must
+        # never run a script the front end refused, or deliver input in a form
+        # the operator did not write.
+        label   => 'scripts: input= bad values skip the script in both parsers',
+        expect  => { map({ $_ => 'DENY not-allowlisted' }
+                         qw(bogus empty upper rawempty rawslash rawdot rawdotdot raw65 rawsp ctxcolon fieldsx rawutf8 lastbad)),
+                     raw64 => 'OK path=/opt/r64.sh|profile=a', rawchars => 'OK path=/opt/rc.sh|profile=a',
+                     lastgood => 'OK path=/opt/lg.sh|profile=a', rawdots3 => 'OK path=/opt/d3.sh|profile=a' },
+        agent   => $REQUIRED . "[profile a]\nrun_as = nobody\n",
+        scripts => "bogus = /opt/b.sh profile=a input=bogus\n"
+                 . "empty = /opt/e.sh profile=a input=\n"
+                 . "upper = /opt/u.sh profile=a input=Raw\n"
+                 . "rawempty = /opt/re.sh profile=a input=raw:\n"
+                 . "rawslash = /opt/rs.sh profile=a input=raw:a/b\n"
+                 . "rawdot = /opt/rd.sh profile=a input=raw:.\n"
+                 . "rawdotdot = /opt/rdd.sh profile=a input=raw:..\n"
+                 . "rawdots3 = /opt/d3.sh profile=a input=raw:...\n"
+                 . "raw65 = /opt/r65.sh profile=a input=raw:" . ('k' x 65) . "\n"
+                 . "raw64 = /opt/r64.sh profile=a input=raw:" . ('k' x 64) . "\n"
+                 . "rawchars = /opt/rc.sh profile=a input=raw:A-z_0.9\n"
+                 . "rawsp = /opt/rsp.sh profile=a input=raw:a\x0bb\n"
+                 . "ctxcolon = /opt/cc.sh profile=a input=context:\n"
+                 . "fieldsx = /opt/fx.sh profile=a input=fieldsx\n"
+                 . "rawutf8 = /opt/ru.sh profile=a input=raw:caf\xc3\xa9\n"
+                 . "lastbad = /opt/lb.sh profile=a input=raw input=nope\n"
+                 . "lastgood = /opt/lg.sh profile=a input=nope input=fields\n",
+        names   => [qw(bogus empty upper rawempty rawslash rawdot rawdotdot rawdots3 raw65 raw64
+                       rawchars rawsp ctxcolon fieldsx rawutf8 lastbad lastgood)],
+    },
+    {
+        # The last profile= on a line wins in both parsers, including when an
+        # earlier one was too long to hold (the C used to skip the line).
+        label   => 'scripts: last profile= wins even after an over-long one',
+        expect  => { s => 'OK path=/opt/s.sh|profile=a', t => 'DENY not-allowlisted' },
+        agent   => $REQUIRED . "[profile a]\nrun_as = nobody\n",
+        scripts => "s = /opt/s.sh profile=" . ('p' x 200) . " profile=a\n"
+                 . "t = /opt/t.sh profile=a profile=" . ('p' x 200) . "\n",
+        names   => [qw(s t)],
     },
     {
         label   => 'scripts: script_dirs boundary (prefix, trailing slash, dots)',

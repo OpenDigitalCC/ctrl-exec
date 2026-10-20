@@ -357,15 +357,45 @@ static int parse_agent_conf(const char *path, config_t *c) {
     return rc;
 }
 
+/* ---- confidential run input (T-013): names and modes -------------------- */
+/* An input field name: [A-Za-z0-9_.-]{1,64}, and neither "." nor "..", exactly
+ * as Exec::Input (the API and the agent). It doubles as a file name in the
+ * per-run directory, so it can never hold '/' or name the directory itself. */
+#define INPUT_NAME_MAX   64
+#define INPUT_MODE_LEN   80              /* "raw:" + a 64-char name + NUL fits */
+
+static int input_name_ok(const char *s, size_t n) {
+    if (n < 1 || n > INPUT_NAME_MAX) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char ch = (unsigned char)s[i];
+        if (!(isalnum(ch) || ch == '_' || ch == '.' || ch == '-')) return 0;
+    }
+    if (n == 1 && s[0] == '.') return 0;
+    if (n == 2 && s[0] == '.' && s[1] == '.') return 0;
+    return 1;
+}
+
+/* A scripts.conf input= value: context, raw, raw:<name> or fields. Mirrors
+ * Exec::Agent::Config::input_mode_problem; anything else skips the script. */
+static int input_mode_ok(const char *v) {
+    if (strcmp(v, "context") == 0 || strcmp(v, "raw") == 0 || strcmp(v, "fields") == 0)
+        return 1;
+    if (strncmp(v, "raw:", 4) == 0) return input_name_ok(v + 4, strlen(v + 4));
+    return 0;
+}
+
 /* ---- scripts.conf lookup ---------------------------------------------- */
-/* Find one script by name. Returns 1 found (out_path/out_profile set),
- * 0 not present / skipped (matches a Perl-skipped entry: not allowlisted).
- * Mirrors load_allowlist: a skipped line never replaces an earlier valid one
- * and a later valid line replaces an earlier one (last valid entry wins). */
+/* Find one script by name. Returns 1 found (out_path/out_profile/out_input
+ * set), 0 not present / skipped (matches a Perl-skipped entry: not
+ * allowlisted). Mirrors load_allowlist: a skipped line never replaces an
+ * earlier valid one and a later valid line replaces an earlier one (last valid
+ * entry wins). Within a line the last profile= and the last input= win, as
+ * in the Perl annotation hash. */
 
 static int find_script(const char *path, const char *want,
                        char *out_path, size_t plen,
-                       char *out_profile, size_t prlen) {
+                       char *out_profile, size_t prlen,
+                       char *out_input, size_t inlen) {
     FILE *f = fopen(path, "r");
     if (!f) return 0;
     char *line = NULL; size_t cap = 0; ssize_t len; int found = 0;
@@ -390,6 +420,7 @@ static int find_script(const char *path, const char *want,
          * order-independent. Mirrors load_allowlist. */
         char *rest = trim(eq + 1);
         char scriptpath[VALLEN] = "", profile[NAMELEN] = "default";
+        const char *profv = NULL, *inputv = NULL;    /* last of each wins */
         int havepath = 0, twopaths = 0, toolong = 0;
         char *save = NULL, *tok = strtok_r(rest, " \t\r\n\v\f", &save);
         for (; tok; tok = strtok_r(NULL, " \t\r\n\v\f", &save)) {
@@ -400,10 +431,8 @@ static int find_script(const char *path, const char *want,
                     if (!(islower((unsigned char)*q) || *q == '_')) isannot = 0;
                 if (isannot) {
                     *te = '\0';
-                    if (strcmp(tok, "profile") == 0) {
-                        if (strlen(te + 1) >= sizeof(profile)) toolong = 1;
-                        else snprintf(profile, sizeof(profile), "%s", te + 1);
-                    }
+                    if (strcmp(tok, "profile") == 0)    profv  = te + 1;
+                    else if (strcmp(tok, "input") == 0) inputv = te + 1;
                     continue;
                 }
             }
@@ -411,10 +440,18 @@ static int find_script(const char *path, const char *want,
             else if (strlen(tok) >= sizeof(scriptpath)) { toolong = 1; havepath = 1; }
             else { snprintf(scriptpath, sizeof(scriptpath), "%s", tok); havepath = 1; }
         }
+        if (profv) {
+            if (strlen(profv) >= sizeof(profile)) toolong = 1;
+            else snprintf(profile, sizeof(profile), "%s", profv);
+        }
         if (!havepath || twopaths || toolong) continue;   /* skipped entry */
+        /* A bad input= value skips the script, as in the Perl parser: never
+         * deliver input in a form the operator did not write. */
+        if (inputv && !input_mode_ok(inputv)) continue;
         if (scriptpath[0] != '/') continue;               /* relative -> skipped */
         snprintf(out_path, plen, "%s", scriptpath);
         snprintf(out_profile, prlen, "%s", profile);
+        snprintf(out_input, inlen, "%s", inputv ? inputv : "context");
         found = 1;                                        /* a later one may replace it */
     }
     free(line);
@@ -654,8 +691,9 @@ static int cmd_resolve(const char *agent_conf, const char *scripts_conf,
     if (!c) { fprintf(stderr, "out of memory\n"); return 2; }
     if (parse_agent_conf(agent_conf, c) != 0) { free(c); return 2; }
 
-    char spath[VALLEN], pname[NAMELEN];
-    if (!find_script(scripts_conf, name, spath, sizeof(spath), pname, sizeof(pname))) {
+    char spath[VALLEN], pname[NAMELEN], imode[INPUT_MODE_LEN];
+    if (!find_script(scripts_conf, name, spath, sizeof(spath), pname, sizeof(pname),
+                     imode, sizeof(imode))) {
         printf("DENY not-allowlisted\n");
         free(c); return 0;
     }
@@ -684,8 +722,8 @@ static int cmd_resolve(const char *agent_conf, const char *scripts_conf,
         strncat(writ, p->writable[i], sizeof(writ) - strlen(writ) - 1);
     }
 
-    printf("OK path=%s|profile=%s|run_as=%s|nnp=%d|caps=%s|writable=%s\n",
-           spath, pname, p->run_as, p->nnp, caps, writ);
+    printf("OK path=%s|profile=%s|run_as=%s|nnp=%d|caps=%s|writable=%s|input=%s\n",
+           spath, pname, p->run_as, p->nnp, caps, writ, imode);
     free(c);
     return 0;
 }
@@ -1191,9 +1229,10 @@ static void handle_conn(int cfd, config_t *cfg, const char *scripts_conf,
          * exec, run_with_profile checks that the script and every directory on
          * its path are root-owned and not group/other-writable (T-045), and
          * that the path still names the file it checked. */
-        char spath[VALLEN], pname[NAMELEN];
+        char spath[VALLEN], pname[NAMELEN], imode[INPUT_MODE_LEN];
         profile_t *p = NULL;
-        if (!find_script(scripts_conf, script, spath, sizeof(spath), pname, sizeof(pname))) {
+        if (!find_script(scripts_conf, script, spath, sizeof(spath), pname, sizeof(pname),
+                         imode, sizeof(imode))) {
             buf_add(&err, "executor: script not permitted\n", 31);
         } else if (!path_in_dirs(spath, cfg)) {
             buf_add(&err, "executor: script not in script_dirs\n", 36);
