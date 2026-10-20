@@ -585,13 +585,21 @@ echo "$TARBALL_HASH  $TARBALL" > "${TARBALL}.sha256"
 
 if [[ "$BUILD_DEBS" -eq 1 ]]; then
     build_debs "$DIST_DIR" "$VERSION"
-    # Guard: every .deb produced must carry the release version.
-    for deb in "$DIST_DIR"/ctrl-exec*_"${VERSION}"_*.deb; do
-        [[ -e "$deb" ]] || continue
-        deb_ver=$(dpkg-deb -f "$deb" Version 2>/dev/null) || deb_ver=""
-        [[ "$deb_ver" == "$VERSION" ]] \
-            || die "Release check failed: $deb has Version '${deb_ver:-<unreadable>}', expected '$VERSION'. Nothing committed, tagged or pushed."
-    done
+    # Guard: every package in debian/control must be in dist/ at the release
+    # version. Look each one up by package name, not by a version-bearing
+    # filename glob - a mis-versioned build would not match such a glob and
+    # would pass unchecked. Skipped when build_debs skipped itself.
+    if [[ -f debian/control ]] && command -v dpkg-buildpackage >/dev/null 2>&1; then
+        while read -r pkg; do
+            deb=$(ls -t "$DIST_DIR/${pkg}"_*.deb 2>/dev/null | head -n 1 || true)
+            [[ -n "$deb" ]] \
+                || die "Release check failed: no .deb for package '$pkg' in $DIST_DIR. Nothing committed, tagged or pushed."
+            deb_ver=$(dpkg-deb -f "$deb" Version 2>/dev/null) || deb_ver=""
+            [[ "$deb_ver" == "$VERSION" ]] \
+                || die "Release check failed: $deb has Version '${deb_ver:-<unreadable>}', expected '$VERSION'. Nothing committed, tagged or pushed."
+        done < <(sed -n 's/^Package: *//p' debian/control)
+        info "Release check: every package in debian/control is $VERSION."
+    fi
 else
     info "Skipping .deb build (--no-deb)."
 fi
