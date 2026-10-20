@@ -641,8 +641,10 @@ For callers on the dispatcher host, add to
 
 ```ini
 api_socket = /run/ctrl-exec-api/api.sock
-# api_socket_group = ctrl-exec   # default: the API's own group
-# api_port = off                 # socket only; leave unset to keep TCP as well
+# Default: the API's own group.
+# api_socket_group = ctrl-exec
+# Socket only; leave unset to keep TCP as well.
+# api_port = off
 ```
 
 Restart the API service. The socket is mode 0660: the API's user and members of
@@ -762,16 +764,25 @@ validation in zero-trust or multi-dispatcher deployments.
 ### `/etc/ctrl-exec-dispatcher/ctrl-exec.conf`
 
 ```ini
-port      = 7443                          # mTLS port agents connect to
+# Comments go on their own line: the loader keeps anything after '='
+# (including '# ...') as part of the value.
+
+# mTLS port agents connect to
+port      = 7443
 cert      = /etc/ctrl-exec-dispatcher/dispatcher.crt
 key       = /etc/ctrl-exec-dispatcher/dispatcher.key
 ca        = /etc/ctrl-exec-dispatcher/ca.crt
-auth_hook = /etc/ctrl-exec-dispatcher/auth-hook     # optional
-api_port  = 7445                          # API TCP port (off = socket only)
-api_socket = /run/ctrl-exec-api/api.sock  # optional unix socket, mode 0660
-api_cert  = /etc/ctrl-exec-dispatcher/api.crt  # optional, enables TLS on API
-api_key   = /etc/ctrl-exec-dispatcher/api.key  # optional
-cert_days = 365                           # lifetime for new/renewed agent certs
+# Optional
+auth_hook = /etc/ctrl-exec-dispatcher/auth-hook
+# API TCP port (off = socket only)
+api_port  = 7445
+# Optional unix socket, mode 0660
+api_socket = /run/ctrl-exec-api/api.sock
+# Optional pair, enables TLS on the API
+api_cert  = /etc/ctrl-exec-dispatcher/api.crt
+api_key   = /etc/ctrl-exec-dispatcher/api.key
+# Lifetime for new/renewed agent certs
+cert_days = 365
 ```
 
 ### `/etc/ctrl-exec-agent/agent.conf`
