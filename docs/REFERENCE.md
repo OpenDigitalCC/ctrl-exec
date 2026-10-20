@@ -1183,9 +1183,15 @@ The hook receives a JSON object on stdin:
   "username":   "alice",
   "token":      "eyJ...",
   "source_ip":  "10.0.0.5",
+  "input_names": ["key"],
+  "input_bytes": 1704,
   "timestamp":  "2025-01-15T12:00:00Z"
 }
 ```
+
+`input_names` and `input_bytes` describe the run's confidential input: the
+field names and the total size of the values. The values themselves never
+reach a hook.
 
 `action` is always `"run"` on the agent side. The agent does not call the
 hook for `ping` requests - those are handled before the hook path is reached.
@@ -1206,6 +1212,12 @@ The same context is available as environment variables:
 
 `ENVEXEC_ARGS_JSON`
 : JSON array of arguments. Reliable for all argument values.
+
+`ENVEXEC_INPUT_NAMES_JSON`
+: JSON array of the run's input field names (`[]` when none).
+
+`ENVEXEC_INPUT_BYTES`
+: Total size in bytes of the input values (`0` when none).
 
 `ENVEXEC_USERNAME`
 : Username passed by the dispatcher in the request body.

@@ -44,6 +44,11 @@ my %CODE_REASON = (
 #   source_ip => $str              (default '127.0.0.1')
 #   dispatcher        => $str      (calling dispatcher's stable identity, default '')
 #   dispatcher_serial => $str      (calling dispatcher's cert serial, default '')
+#   input_names => \@names         (names of the run's input fields, default [])
+#   input_bytes => $n              (total bytes of the input values, default 0)
+#
+# Input values never reach a hook: a hook sees only the field names and the
+# total size. Passing the values (opt 'input') is a programming error.
 #
 # Returns:
 #   { ok => 1 }
@@ -65,9 +70,13 @@ sub check (%opts) {
     # submitted the run).
     my $reqid     = $opts{reqid}     // '';
     my $submitter = $opts{submitter};   # hashref { username, source_ip } or undef
+    my $input_names = $opts{input_names} // [];
+    my $input_bytes = $opts{input_bytes} // 0;
 
     croak "hosts must be an arrayref" unless ref $hosts eq 'ARRAY';
     croak "args must be an arrayref"  unless ref $args  eq 'ARRAY';
+    croak "input_names must be an arrayref" unless ref $input_names eq 'ARRAY';
+    croak "input values must never be passed to the auth hook" if exists $opts{input};
 
     my $hook = $config->{auth_hook} // '';
 
@@ -139,6 +148,8 @@ sub check (%opts) {
         dispatcher_serial => $dispatcher_serial,
         reqid             => $reqid,
         submitter         => $submitter,
+        input_names       => $input_names,
+        input_bytes       => $input_bytes,
     );
 
     my $hook_timeout = $config->{auth_hook_timeout} // 10;
@@ -203,6 +214,8 @@ sub _build_context (%opts) {
         dispatcher_serial => $opts{dispatcher_serial} // '',
         reqid             => $opts{reqid}             // '',
         submitter         => $opts{submitter},
+        input_names       => $opts{input_names} // [],
+        input_bytes       => 0 + ($opts{input_bytes} // 0),
         timestamp         => strftime('%Y-%m-%dT%H:%M:%SZ', gmtime),
     };
 }
@@ -236,6 +249,9 @@ sub _run_hook ($hook, $context, $timeout = undef) {
     $ENV{ENVEXEC_REQID}        = $context->{reqid} // '';
     $ENV{ENVEXEC_SUBMITTER}    = ($context->{submitter} && $context->{submitter}{username})  // '';
     $ENV{ENVEXEC_SUBMITTER_IP} = ($context->{submitter} && $context->{submitter}{source_ip}) // '';
+    # Confidential input (T-013): the field names and total size only.
+    $ENV{ENVEXEC_INPUT_NAMES_JSON} = encode_json($context->{input_names});
+    $ENV{ENVEXEC_INPUT_BYTES}      = $context->{input_bytes};
     $ENV{ENVEXEC_TIMESTAMP} = $context->{timestamp};
 
     # Fork: child execs hook with JSON on stdin, parent waits.

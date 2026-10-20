@@ -326,4 +326,32 @@ subtest 'hook receives ENVEXEC_ACTION=ping' => sub {
     }
 };
 
+# ---------------------------------------------------------------------------
+# Confidential input (T-013): names and size only, never values
+# ---------------------------------------------------------------------------
+
+subtest 'input names and bytes reach the hook; values cannot' => sub {
+    my $env_f   = "$DIR/env-input.txt";
+    my $stdin_f = "$DIR/stdin-input.txt";
+    my $hook = make_recording_hook($env_f, $stdin_f);
+    my $r = Exec::Auth::check(config => { auth_hook => $hook },
+        run_args(input_names => ['key', 'cert'], input_bytes => 2048));
+    is $r->{ok}, 1, 'authorised';
+    open my $ef, '<', $env_f or die; my $env = do { local $/; <$ef> }; close $ef;
+    like $env, qr/^ENVEXEC_INPUT_NAMES_JSON=\["key","cert"\]$/m, 'names in env';
+    like $env, qr/^ENVEXEC_INPUT_BYTES=2048$/m, 'bytes in env';
+    open my $sf, '<', $stdin_f or die; my $ctx = decode_json(do { local $/; <$sf> }); close $sf;
+    is_deeply $ctx->{input_names}, ['key', 'cert'], 'names in stdin JSON';
+    is $ctx->{input_bytes}, 2048, 'bytes in stdin JSON';
+
+    my $r2 = Exec::Auth::check(config => { auth_hook => $hook }, run_args());
+    open $ef, '<', $env_f or die; $env = do { local $/; <$ef> }; close $ef;
+    like $env, qr/^ENVEXEC_INPUT_NAMES_JSON=\[\]$/m, 'no input: empty names';
+    like $env, qr/^ENVEXEC_INPUT_BYTES=0$/m, 'no input: zero bytes';
+
+    ok !eval { Exec::Auth::check(config => { auth_hook => $hook },
+        run_args(input => { key => 'SECRET' })); 1 }, 'passing values croaks';
+    like $@, qr/never be passed/, 'with a clear reason';
+};
+
 done_testing;

@@ -183,6 +183,7 @@ task group, each adding its bullets to this entry.
   now fails with `ctrl-exec-executor is not available (<cause>: <socket>)` and
   how to start it, logged as `ACTION=executor-unavailable`, and `self-check`
   reports `Executor: NOT AVAILABLE` and exits non-zero. (T-028)
+- **Added** auth hooks receive `input_names` and `input_bytes` (env `ENVEXEC_INPUT_NAMES_JSON`, `ENVEXEC_INPUT_BYTES`) describing a run's confidential input, never its values, so policy can see what is sent without seeing it. (T-013)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 
