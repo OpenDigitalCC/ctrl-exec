@@ -102,7 +102,7 @@ subtest 'unknown script is refused by the executor (re-validation)' => sub {
 subtest 'transport error when the socket is gone' => sub {
     my $r = Exec::Agent::ExecClient::run(socket => "$TMP/nope.sock", script => 'echo');
     is $r->{exit}, -1, 'exit -1 on unreachable executor';
-    like $r->{error}, qr/unreachable/, 'reports a transport error';
+    like $r->{error}, qr/ctrl-exec-executor is not available/, 'reports a transport error';
 };
 
 subtest 'oversized output is capped, not buffered unboundedly (PERF-004)' => sub {

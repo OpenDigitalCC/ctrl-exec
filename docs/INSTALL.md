@@ -40,6 +40,21 @@ dispatcher (`--dispatcher`)
 API (`--api`)
 : No additional packages beyond the dispatcher role.
 
+Agent from the source tarball: build requirements for the executor
+: `install.sh --agent` compiles the privileged executor (`ctrl-exec-executor`)
+  from source, so the host needs `gcc` and the libcap headers - Debian/Ubuntu:
+  `apt-get install gcc libcap-dev`; Alpine: `apk add gcc musl-dev libcap-dev`.
+  The Debian packages ship the executor already built and need neither. Without
+  them the installer still completes, but it writes the new `agent.conf` with
+  `executor_socket` commented out, so scripts run directly as the unprivileged
+  agent user and **per-script profiles are not applied**. The installer says so
+  at the end, with the command to install the requirements. Install them and
+  re-run `./install.sh --agent`, then enable the executor with
+  `systemctl enable --now ctrl-exec-executor.service` and uncomment
+  `executor_socket` in `agent.conf`. An existing `agent.conf` is never edited: if
+  it sets `executor_socket` and the executor is missing, every run fails with an
+  error naming the executor, and `ctrl-exec-agent self-check` reports it.
+
 All roles require `openssl` (present on any standard installation) and `perl`.
 
 The installer checks all dependencies before making any changes and prints the

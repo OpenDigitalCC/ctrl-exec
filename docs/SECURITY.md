@@ -307,6 +307,16 @@ Privilege separation and per-script profiles (optional, recommended)
   (`[profile <name>]`) and referenced from `scripts.conf` (`profile=<name>`); see
   `agent.conf.example`.
 
+  Profiles must never be dropped silently. When `executor_socket` is set and the
+  executor is absent or refusing, a run **fails** with an error naming the
+  executor (it does not fall back to running unprofiled), and `self-check`
+  reports it. The one place the setting is changed for the operator is
+  `install.sh` on a host that cannot build the executor (no gcc or libcap
+  headers): it writes the new `agent.conf` with `executor_socket` commented out
+  and states at the end of the install that profiles are not applied; the agent
+  also warns at start when `scripts.conf` names profiles with no
+  `executor_socket`. An existing `agent.conf` is never edited.
+
   This split is what bounds a front-end compromise (e.g. an RCE in the
   network-facing code): the only thing that can act with privilege is the small,
   audited executor, and it can run only allowlisted scripts under their declared

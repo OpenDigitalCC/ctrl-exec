@@ -403,6 +403,15 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
             args          => $args,
             stdin         => encode_json($context),
         );
+        if ($r->{executor_unavailable}) {
+            Exec::Log::log_action('ERR', {
+                ACTION => 'executor-unavailable',
+                SCRIPT => $name,
+                PEER   => $peer,
+                REQID  => $reqid,
+                ERROR  => $r->{error},
+            });
+        }
         $result = {
             exit   => $r->{exit},
             stdout => $r->{stdout} // '',

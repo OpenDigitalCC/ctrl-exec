@@ -748,6 +748,7 @@ sub mode_pairing_status {
 sub mode_self_check {
     _need_root('self-check', $CONFIG_PATH, $ALLOWLIST_PATH,
                "$CERT_DIR/agent.crt", "$CERT_DIR/agent.key", "$CERT_DIR/ca.crt");
+    my $exec_problem = 0;
     print "Checking config...\n";
     my $config = eval { Exec::Agent::Config::load_config($CONFIG_PATH) };
     if ($@) { print "Config error: $@\n"; exit 1; }
@@ -795,7 +796,26 @@ sub mode_self_check {
               join(', ', @bad), "\n";
     }
 
+    # With executor_socket set every run goes through the executor; if it is
+    # absent or refusing, every run fails. Say so here, not on the first run.
+    if ($config->{executor_socket}) {
+        require Exec::Agent::ExecClient;
+        my $problem = Exec::Agent::ExecClient::probe($config->{executor_socket});
+        if (defined $problem) {
+            print "  Executor: NOT AVAILABLE - $problem\n";
+            $exec_problem = 1;
+        }
+        else {
+            print "  Executor: OK ($config->{executor_socket})\n";
+        }
+    }
+    else {
+        print "  Executor: not configured (executor_socket unset) - scripts run "
+            . "directly; per-script profiles are NOT applied\n";
+    }
+
     print "Self-check complete.\n";
+    exit 1 if $exec_problem;
 }
 
 sub mode_self_ping {

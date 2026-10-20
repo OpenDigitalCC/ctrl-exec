@@ -17,6 +17,34 @@ use feature      qw(signatures);
 no warnings      qw(experimental::signatures);
 use Carp qw(croak);
 use IO::Socket::UNIX qw();
+use Errno qw(ENOENT ECONNREFUSED EACCES EPERM);
+
+# The message for "cannot reach the executor". Names the executor, the socket and
+# the cause, and says how to start it - so an operator reading a failed run does
+# not have to guess that "connection refused" means the executor service is down.
+sub unavailable_message ($path, $errno) {
+    my $why = $errno == ENOENT       ? 'the socket does not exist'
+            : $errno == ECONNREFUSED ? 'nothing is listening on the socket'
+            : $errno == EACCES || $errno == EPERM
+                                     ? 'permission denied on the socket'
+            :                          do { local $! = $errno; "$!" };
+    return "ctrl-exec-executor is not available ($why: $path). This agent has "
+         . "executor_socket set, so every run goes through the executor and none "
+         . "can proceed without it. Start it: systemctl start "
+         . "ctrl-exec-executor.service (on a tarball install without gcc the "
+         . "executor was never built: install gcc and libcap-dev, re-run "
+         . "install.sh --agent). Or comment out executor_socket in agent.conf to "
+         . "run without per-script profiles.";
+}
+
+# probe($path): undef when the executor accepts a connection, otherwise the
+# unavailable_message. Used by self-check; opens and closes a connection only.
+sub probe ($path) {
+    my $sock = IO::Socket::UNIX->new(Peer => $path, Type => IO::Socket::UNIX::SOCK_STREAM());
+    return unavailable_message($path, $! + 0) unless $sock;
+    close $sock;
+    return undef;
+}
 
 sub _field ($s) { pack('N', length $s) . $s }
 
@@ -49,7 +77,8 @@ sub run (%o) {
     my $disp  = $o{dispatcher_id} // '';
 
     my $sock = IO::Socket::UNIX->new(Peer => $path, Type => IO::Socket::UNIX::SOCK_STREAM())
-        or return { exit => -1, error => "executor unreachable: $!" };
+        or return { exit => -1, error => unavailable_message($path, $! + 0),
+                    executor_unavailable => 1 };
     binmode $sock;
 
     my $inner = _field($reqid) . _field($disp) . _field($script) . _field($stdin)

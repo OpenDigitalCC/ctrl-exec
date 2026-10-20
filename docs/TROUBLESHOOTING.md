@@ -447,6 +447,7 @@ Framed "configuration error", exit 78 | A fault in agent.conf or scripts.conf (i
 Port 7443 not listening | Service not running, or bound elsewhere. | systemctl status; the port setting in agent.conf; self-ping.
 mTLS handshake error on self-ping | Cert/CA paths wrong or unreadable by the service. | self-ping output; cert file ownership and mode.
 Profiles set but never applied | executor_socket unset, so the executor is not in the path. | Startup warning in the log; confirm executor_socket is set and ctrl-exec-executor.service is running.
+Every run fails with "ctrl-exec-executor is not available" | executor_socket is set but the executor is not running, or was never built (a tarball install on a host without gcc or the libcap headers). | self-check shows "Executor: NOT AVAILABLE". systemctl start ctrl-exec-executor.service; if the unit or /usr/local/sbin/ctrl-exec-executor does not exist, install gcc and libcap-dev and re-run install.sh --agent. To run without profiles instead, comment out executor_socket.
 ```
 
 The two first-line tools both run on the agent host with no dispatcher access:

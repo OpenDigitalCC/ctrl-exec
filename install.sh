@@ -574,6 +574,114 @@ EOF
         || warn "Firewall rule queued in $uci_defaults - will apply on next boot."
 }
 
+# --- executor build (tarball installs) ---
+
+# EXECUTOR_PROBLEM is empty when an executor binary is in place after
+# build_executor, otherwise a short statement of what is missing. The
+# EXECUTOR_CONF_* flags record what settle_executor_conf did about agent.conf.
+EXECUTOR_PROBLEM=""
+EXECUTOR_CONF_DISABLED=false
+EXECUTOR_CONF_KEPT=false
+
+# Build the executor from src/ into $SBIN_DIR. An executor already installed by
+# an earlier run is kept when this host cannot build one.
+build_executor() {
+    EXECUTOR_PROBLEM=""
+    mkdir -p "$SBIN_DIR"
+    if ! command -v gcc &>/dev/null; then
+        if [[ -x "$SBIN_DIR/ctrl-exec-executor" ]]; then
+            info "gcc not found - keeping the installed $SBIN_DIR/ctrl-exec-executor."
+        else
+            EXECUTOR_PROBLEM="gcc (a C compiler) and the libcap development headers"
+            warn "gcc not found - cannot build ctrl-exec-executor."
+        fi
+        return 0
+    fi
+    if gcc -O2 -o "$SBIN_DIR/ctrl-exec-executor" \
+           "$SOURCE_DIR/src/ctrl-exec-executor.c" -lcap; then
+        chmod 755 "$SBIN_DIR/ctrl-exec-executor"
+        info "Built ctrl-exec-executor -> $SBIN_DIR/ctrl-exec-executor"
+        if [[ "$HAS_SYSTEMD" == true ]]; then
+            install_unit "$EXECUTOR_SERVICE"
+            systemctl daemon-reload
+        fi
+        migrate_legacy_executor
+    elif [[ -x "$SBIN_DIR/ctrl-exec-executor" ]]; then
+        warn "Could not compile ctrl-exec-executor; keeping the one already installed."
+    else
+        if echo '#include <sys/capability.h>' | gcc -E -x c - &>/dev/null; then
+            EXECUTOR_PROBLEM="a working build of src/ctrl-exec-executor.c (see the compiler output above)"
+        else
+            EXECUTOR_PROBLEM="the libcap development headers (sys/capability.h)"
+        fi
+        warn "Could not compile ctrl-exec-executor."
+    fi
+}
+
+# The packages that provide the build requirements, for this platform.
+executor_build_command() {
+    case "$PKG_MGR" in
+        apt)  echo "$SUDO_CMD apt-get install gcc libcap-dev" ;;
+        apk)  echo "$SUDO_CMD apk add gcc musl-dev libcap-dev" ;;
+        *)    echo "(install a C compiler and the libcap development headers with this system's package manager)" ;;
+    esac
+}
+
+# Decide what agent.conf says about the executor when it could not be built.
+#
+# A NEW agent.conf (from agent.conf.example, which enables executor_socket) gets
+# the line commented out: otherwise the agent would start, point every run at a
+# socket nobody listens on, and fail all of them. The consequence - per-script
+# profiles are not applied - is stated at the end of the install, and the agent
+# itself warns at start when scripts.conf names profiles with no executor_socket.
+# An EXISTING agent.conf is the operator's and is never edited; if it enables
+# executor_socket, runs fail with an error that names the executor (fail closed -
+# nothing runs unprofiled) and the end of the install says so.
+settle_executor_conf() {
+    local conf="$1" kind="$2"
+    [[ -n "$EXECUTOR_PROBLEM" ]] || return 0
+    grep -q '^[[:space:]]*executor_socket[[:space:]]*=' "$conf" || return 0
+    if [[ "$kind" == new ]]; then
+        sed -i -e 's|^\([[:space:]]*\)executor_socket\([[:space:]]*=\)|# executor_socket DISABLED by install.sh: the executor could not be built here.\n# Profiles are NOT applied until it is built; then uncomment the next line.\n\1# executor_socket\2|' "$conf"
+        EXECUTOR_CONF_DISABLED=true
+    else
+        EXECUTOR_CONF_KEPT=true
+    fi
+}
+
+# Printed at the end of an agent install. Silent when the executor is in place.
+print_executor_notice() {
+    [[ -n "$EXECUTOR_PROBLEM" ]] || return 0
+    echo ""
+    echo "================================================================"
+    echo " WARNING: ctrl-exec-executor was NOT built"
+    echo "================================================================"
+    echo ""
+    echo "  Missing: $EXECUTOR_PROBLEM."
+    echo "  The executor applies per-script security profiles (run_as,"
+    echo "  capabilities, read-only control directories)."
+    echo ""
+    if [[ "$EXECUTOR_CONF_DISABLED" == true ]]; then
+        echo "  $AGENT_CONF_DIR/agent.conf has executor_socket commented out, so"
+        echo "  the agent will run scripts directly as the unprivileged agent user."
+        echo "  Per-script profiles are NOT applied until the executor is built."
+    elif [[ "$EXECUTOR_CONF_KEPT" == true ]]; then
+        echo "  Your existing $AGENT_CONF_DIR/agent.conf still sets executor_socket"
+        echo "  and was not changed. Until the executor is built, every run fails"
+        echo "  with an error naming the executor (nothing runs unprofiled)."
+        echo "  Or comment out executor_socket to run without profiles."
+    fi
+    echo ""
+    echo "  To enable it, install the build requirements and re-run:"
+    echo "       $(executor_build_command)"
+    echo "       $SUDO_CMD ./install.sh --agent"
+    echo "  then enable the executor (and uncomment executor_socket in agent.conf"
+    echo "  if install.sh disabled it):"
+    echo "       $SUDO_CMD systemctl enable --now $EXECUTOR_SERVICE"
+    echo ""
+    echo "================================================================"
+}
+
 # --- agent installation ---
 
 install_agent() {
@@ -590,26 +698,10 @@ install_agent() {
 
     # Privileged executor (C). The agent uses it when 'executor_socket' is set in
     # agent.conf (privilege separation). Compiled here from src/; needs gcc and
-    # libcap-dev. If absent, the agent still works in its legacy direct-run mode.
-    mkdir -p "$SBIN_DIR"
-    if command -v gcc &>/dev/null; then
-        if gcc -O2 -o "$SBIN_DIR/ctrl-exec-executor" \
-               "$SOURCE_DIR/src/ctrl-exec-executor.c" -lcap; then
-            chmod 755 "$SBIN_DIR/ctrl-exec-executor"
-            info "Built ctrl-exec-executor -> $SBIN_DIR/ctrl-exec-executor"
-            if [[ "$HAS_SYSTEMD" == true ]]; then
-                install_unit "$EXECUTOR_SERVICE"
-                systemctl daemon-reload
-            fi
-            migrate_legacy_executor
-        else
-            warn "Could not compile ctrl-exec-executor (install libcap-dev). Privilege"
-            warn "separation will be unavailable until it is built."
-        fi
-    else
-        warn "gcc not found - skipping ctrl-exec-executor build. Install gcc + libcap-dev"
-        warn "and re-run to enable privilege separation (executor_socket)."
-    fi
+    # the libcap headers. If it cannot be built, a NEW agent.conf is written with
+    # executor_socket commented out (see settle_executor_conf) and the end of the
+    # install says so.
+    build_executor
 
     # Config directory - readable by agent group, not world
     mkdir -p "$AGENT_CONF_DIR"
@@ -620,8 +712,10 @@ install_agent() {
         safe_install 640 "$SOURCE_DIR/etc/agent.conf.example" "$AGENT_CONF_DIR/agent.conf"
         chown root:"$AGENT_GROUP" "$AGENT_CONF_DIR/agent.conf"
         warn "Agent config written to $AGENT_CONF_DIR/agent.conf - review before use."
+        settle_executor_conf "$AGENT_CONF_DIR/agent.conf" new
     else
         info "Agent config already exists, not overwriting."
+        settle_executor_conf "$AGENT_CONF_DIR/agent.conf" existing
     fi
 
     if [[ ! -f "$AGENT_CONF_DIR/scripts.conf" ]]; then
@@ -1006,6 +1100,7 @@ print_next_steps_agent() {
     echo -e "$svc_note"
     echo ""
     echo "================================================================"
+    print_executor_notice
 }
 
 print_next_steps_ctrl_exec_dispatcher() {

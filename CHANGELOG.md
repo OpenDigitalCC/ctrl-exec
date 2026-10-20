@@ -172,6 +172,17 @@ task group, each adding its bullets to this entry.
   upgrade; run `sudo ctrl-exec-agent self-check` and fix them with `chown root`
   / `chmod go-w` (installed layout `root:ctrl-exec-agent 0750` passes). (T-045)
 - **Added** bash completion for `ctrl-exec-dispatcher` (`ced`), `ctrl-exec-agent` (`cea`) and `ctrl-exec-api` (`etc/bash-completion/`): modes and options taken from each bin's dispatch and option tables, `--lookup-by` values, and registered host names (and local allowlist script names for `run`) when those files are readable without root. `install.sh` and both packages install them (with `ced`/`cea` as links) into the system bash-completion directory, and `t/completion-*.t` fails if a mode or option is added to a bin without completion. (T-009)
+- **Fixed** a tarball install on a host without gcc or the libcap headers left
+  a new `agent.conf` with `executor_socket` enabled and no executor: the agent
+  started, then every run failed with a bare `executor unreachable: No such file
+  or directory`, and the installer's only word was a mid-install warning. A new
+  `agent.conf` now has `executor_socket` commented out (an existing one is never
+  edited) and the end of the install states what is missing, the exact
+  `apt-get`/`apk` command, that per-script profiles are not applied, and to
+  re-run. With `executor_socket` set and the executor absent or refusing, a run
+  now fails with `ctrl-exec-executor is not available (<cause>: <socket>)` and
+  how to start it, logged as `ACTION=executor-unavailable`, and `self-check`
+  reports `Executor: NOT AVAILABLE` and exits non-zero. (T-028)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 

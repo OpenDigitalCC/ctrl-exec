@@ -67,6 +67,9 @@ ca   = /etc/ctrl-exec-agent/ca.crt
 # the package, and the standard, recommended posture is to run through it so
 # per-script profiles are enforced. Comment this out only if you specifically
 # need --async runs on this host (the two are mutually exclusive, above).
+# While it is set the executor MUST be running: if it is absent every run fails
+# with an error naming it. install.sh comments this line out in a NEW agent.conf
+# when it cannot build the executor (no gcc or libcap headers).
 executor_socket = /run/ctrl-exec-agent/exec.sock
 
 # Async result store (optional).
