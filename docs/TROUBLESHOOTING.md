@@ -377,11 +377,16 @@ existing install; no manual steps are needed.
   to the new directory for this release. **The symlink is removed in 0.14**, so
   update any script, mount or backup job that names `/etc/ctrl-exec`.
 
-If the dispatcher logs `using the legacy config directory /etc/ctrl-exec`, the
-move has not happened on this host: only the old directory exists. It still
-works; run the installer or package upgrade, or move the directory yourself and
-leave the symlink. If both directories exist, the new one is used and the old one
-is left alone - merge anything you still need from it and remove it.
+If `ced` or `ctrl-exec-api` exits 78 with `refusing to start: the old config
+directory /etc/ctrl-exec exists and is not a symlink to
+/etc/ctrl-exec-dispatcher`, a real `/etc/ctrl-exec` is still on this host (the
+move has not happened, both directories exist, or a mount or restore recreated
+it). It is refused rather than used so that the dispatcher never runs on the
+wrong config or creates a second CA. Move the directory to
+`/etc/ctrl-exec-dispatcher` (or merge it into the existing one and remove it),
+and change the paths inside `ctrl-exec.conf` from `/etc/ctrl-exec/` to
+`/etc/ctrl-exec-dispatcher/`. In a container, change the mount. The refusal is
+logged as `ACTION=config-dir RESULT=refused`.
 
 
 ### "Failed to stop ... Unit not loaded" during install

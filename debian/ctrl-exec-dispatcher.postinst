@@ -21,11 +21,13 @@ case "$1" in
         # leave a symlink at the old name for one release (removed in 0.14), and
         # point the paths inside ctrl-exec.conf at the new directory so nothing
         # depends on the symlink (previous file kept as ctrl-exec.conf.pre-0.13).
-        # If both exist the new one is used and the old one left for the operator.
+        # If both exist the old one is left for the operator, and the dispatcher
+        # refuses to run until it is merged and removed (T-047).
         if [ -d /etc/ctrl-exec ] && [ ! -L /etc/ctrl-exec ]; then
             if [ -e /etc/ctrl-exec-dispatcher ]; then
                 echo "ctrl-exec: both /etc/ctrl-exec and /etc/ctrl-exec-dispatcher exist;" >&2
-                echo "ctrl-exec: using the latter and leaving /etc/ctrl-exec alone." >&2
+                echo "ctrl-exec: leaving /etc/ctrl-exec alone. ced and ctrl-exec-api refuse to run" >&2
+                echo "ctrl-exec: until you merge it into /etc/ctrl-exec-dispatcher and remove it." >&2
             else
                 mv /etc/ctrl-exec /etc/ctrl-exec-dispatcher
                 ln -s /etc/ctrl-exec-dispatcher /etc/ctrl-exec

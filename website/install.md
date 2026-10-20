@@ -310,4 +310,4 @@ On first start, run `docker compose exec dispatcher ced pairing-mode`, start the
 
 ## Upgrading a container to 0.13
 
-The dispatcher's config directory is now `/etc/ctrl-exec-dispatcher` (it was `/etc/ctrl-exec`). A container image cannot migrate it for you: change the mount target in your compose file, edit the paths inside `ctrl-exec.conf` on the mount to match, and rebuild from the 0.13 packages. The old path stops working in 0.14. The deployment guide lists the steps.
+The dispatcher's config directory is now `/etc/ctrl-exec-dispatcher` (it was `/etc/ctrl-exec`). A container image cannot migrate it for you: change the mount target in your compose file, edit the paths inside `ctrl-exec.conf` on the mount to match, and rebuild from the 0.13 packages. A real directory left at the old path makes the dispatcher refuse to start (exit 78, with both paths named), and the symlink the packages leave goes in 0.14. The deployment guide lists the steps.

@@ -13,6 +13,9 @@ Type=simple
 ExecStart=@BINDIR@/ctrl-exec-api
 Restart=on-failure
 RestartSec=5
+# 78 (EX_CONFIG) is a configuration refusal, such as a real /etc/ctrl-exec left
+# beside /etc/ctrl-exec-dispatcher: restarting cannot fix it.
+RestartPreventExitStatus=78
 
 # Run as the unprivileged ctrl-exec service user - NOT root. It owns the
 # dispatcher private key (0600), so it can read it to mTLS to agents, and it is in

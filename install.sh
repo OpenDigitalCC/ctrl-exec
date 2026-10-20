@@ -106,13 +106,15 @@ install_unit() {
 # symlink at the old name for one release (removed in 0.14), and point the paths
 # inside ctrl-exec.conf at the new directory so nothing depends on the symlink.
 # The previous file is kept as ctrl-exec.conf.pre-0.13. If both exist the new one
-# is used and the old one is left untouched for the operator to reconcile.
+# is left untouched for the operator to reconcile, and the dispatcher refuses to
+# run until they have (T-047).
 migrate_dispatcher_conf_dir() {
     local old="$LEGACY_EXEC_CONF_DIR" new="$EXEC_CONF_DIR"
     [[ -d "$old" && ! -L "$old" ]] || return 0
     if [[ -e "$new" ]]; then
-        warn "Both $old and $new exist; using $new and leaving $old alone."
-        warn "Merge anything you still need from $old, then remove it."
+        warn "Both $old and $new exist; leaving $old alone."
+        warn "ced and ctrl-exec-api refuse to run until you merge anything you still"
+        warn "need from $old into $new and remove $old."
         return 0
     fi
     mv "$old" "$new" || die "Could not move $old to $new."

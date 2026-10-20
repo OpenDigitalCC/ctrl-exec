@@ -157,6 +157,26 @@ the binaries at install time (the source files carry the sentinel `UNINSTALLED`
 until then); `ced --version` then reports the installed release. Packages carry
 their version in the `.deb` itself.
 
+### Upgrading: the dispatcher config directory
+
+Before 0.13 the dispatcher's config directory was `/etc/ctrl-exec`. From 0.13
+it is `/etc/ctrl-exec-dispatcher`. The packages and `install.sh` move an
+existing directory, rewrite the paths inside `ctrl-exec.conf` (keeping the old
+file as `ctrl-exec.conf.pre-0.13`) and leave `/etc/ctrl-exec` as a symlink to the
+new directory (removed in 0.14).
+
+A real directory still at `/etc/ctrl-exec` is never used silently. `ced` and
+`ctrl-exec-api` refuse to run, exit 78, print both paths on stderr and log
+`ACTION=config-dir RESULT=refused`. This is the case when both directories
+exist (the installer leaves them alone and says so) or when a mount or backup
+restore recreated the old one. To fix it: stop `ctrl-exec-api`, move the
+directory (`mv /etc/ctrl-exec /etc/ctrl-exec-dispatcher`, or merge what you
+need into the existing new directory and remove the old one), and change the
+paths inside `/etc/ctrl-exec-dispatcher/ctrl-exec.conf` (`cert`, `key`, `ca`,
+`auth_hook`, ...) from `/etc/ctrl-exec/` to `/etc/ctrl-exec-dispatcher/`. In a
+container, change the volume mount to `/etc/ctrl-exec-dispatcher` instead; see
+`DOCKER.md`.
+
 ### ctrl-exec group
 
 Both methods create a `ctrl-exec` system group. Add yourself to it to run the

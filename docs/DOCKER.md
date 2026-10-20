@@ -204,10 +204,11 @@ MAINT_INTERVAL="${MAINT_INTERVAL:-14400}"    # seconds; the deb timer's 4h
 log() { echo "[entrypoint] $*"; }
 
 # A volume still mounted at the pre-0.13 path would be ignored, and a second
-# CA created beside it. Refuse to start instead.
-if [ -f /etc/ctrl-exec/ctrl-exec.conf ] && [ ! -f "$CONF" ]; then
-    log "ERROR: a config is mounted at /etc/ctrl-exec; mount it at $CONF_DIR." >&2
-    exit 1
+# CA created beside it. Stop before seeding anything. ced and ctrl-exec-api
+# refuse the same thing themselves (exit 78); this check just stops early.
+if [ -d /etc/ctrl-exec ] && [ ! -L /etc/ctrl-exec ]; then
+    log "ERROR: /etc/ctrl-exec exists; mount the config at $CONF_DIR instead." >&2
+    exit 78
 fi
 
 fix_perms() {
@@ -310,9 +311,11 @@ Each first-start block is guarded: restarts are safe and any file already
 present on the volume is never overwritten. Config generated on first start
 persists on the data mount and is reused on subsequent starts.
 
-The entrypoint stops with an error if it finds a config at `/etc/ctrl-exec`
-and none at `/etc/ctrl-exec-dispatcher`, which is what a mount left at the
-pre-0.13 path looks like (see *Upgrading an existing container deployment*).
+The entrypoint stops with an error if `/etc/ctrl-exec` exists as a real
+directory, which is what a mount left at the pre-0.13 path looks like (see
+*Upgrading an existing container deployment*). The check is belt and braces:
+`ced` and `ctrl-exec-api` refuse to run in that state anyway (exit 78), but the
+entrypoint stops before it seeds a config or creates a CA.
 
 
 ## Dispatcher Configuration
@@ -1219,19 +1222,17 @@ volume mounted at `/etc/ctrl-exec` needs these steps once:
    `/etc/ctrl-exec-dispatcher/`. Keep a copy of the file first.
 3. Rebuild the image from the 0.13 debs and recreate the container.
 
-Do not leave the mount at the old path. The ctrl-exec code does fall back to
-`/etc/ctrl-exec` with a warning when `/etc/ctrl-exec-dispatcher` does not exist,
-and a host that still has only the old directory keeps working that way. But an
-image built from the 0.13 package always contains the new directory, so inside
-the container the fallback never applies: the code would look in the empty new
-directory, and an entrypoint that creates the CA when none is found would create
-a second one and orphan every pairing. The entrypoint in this document refuses to
-start in that situation.
+Do not leave the mount at the old path. An image built from the 0.13 package
+always contains the new directory, so an entrypoint that creates the CA when
+none is found would create a second one beside your mounted config and orphan
+every pairing. The ctrl-exec code refuses this state itself: if `/etc/ctrl-exec`
+exists and is not a symlink to `/etc/ctrl-exec-dispatcher`, `ced` and
+`ctrl-exec-api` print both paths, log `ACTION=config-dir RESULT=refused` and
+exit 78. The entrypoint in this document stops earlier, for the same reason.
 
-The fallback, and the symlink that package upgrades leave at `/etc/ctrl-exec`,
-are removed in 0.14. Anything of yours that names `/etc/ctrl-exec` - a backup job,
-a `docker exec` script, a monitoring check - must use `/etc/ctrl-exec-dispatcher`
-before then.
+The symlink that package upgrades leave at `/etc/ctrl-exec` is removed in 0.14.
+Anything of yours that names `/etc/ctrl-exec` - a backup job, a `docker exec`
+script, a monitoring check - must use `/etc/ctrl-exec-dispatcher` before then.
 
 An agent container needs no such step: its directory, `/etc/ctrl-exec-agent`,
 did not change. An agent image from an earlier release was built on Alpine from
