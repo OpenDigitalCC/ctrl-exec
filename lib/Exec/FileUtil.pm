@@ -75,7 +75,7 @@ sub write_atomic ($path, $content, %opts) {
 sub open_lock ($path) {
     my $existed = -e $path;
     sysopen(my $fh, $path, O_CREAT | O_RDWR | O_NOFOLLOW, 0660) or return undef;
-    chmod 0660, $path unless $existed;
+    chmod 0660, $fh unless $existed;    # by handle: a path chmod would follow a swapped-in symlink
     return $fh;
 }
 
