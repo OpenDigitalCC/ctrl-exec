@@ -58,6 +58,20 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
   `VERSION` and `sbom.json` back out of the finished tarball (and `Version` from
   each `.deb`) before writing the `.sha256`, stopping before any commit, tag or
   push on a mismatch.
+- **Fixed** the intermittent `exit -1` / `executor closed before responding` on
+  runs through the executor (T-034; about 2-10% of runs, serialised or
+  concurrent). The executor's per-connection handler writes the request context
+  to the action's stdin after fork; when the action had already exited without
+  reading stdin (any short script that ignores its context), that write hit a
+  pipe with no reader and the default SIGPIPE killed the handler before it
+  wrote a response. Whether the action won the race decided each run. The
+  handler now ignores SIGPIPE, so the write fails with `EPIPE` and the run's
+  real exit status and output are returned. The action is reset to the default
+  SIGPIPE disposition before `execve`, so it starts with `SIG_DFL` whatever the
+  executor was started with (under systemd's default `IgnoreSIGPIPE=yes`,
+  actions previously inherited `SIG_IGN`). Nothing else at the privilege
+  boundary changed: request parsing, re-derivation from root-owned config and
+  the privilege-drop order are as before. Test: `t/exec-sigpipe.t`.
 
 ## 0.12.3 — fix agent crash on every connection (0.12.2 regression)
 

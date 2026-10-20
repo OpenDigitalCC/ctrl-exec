@@ -33,6 +33,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <errno.h>
+#include <signal.h>
 #include <fcntl.h>
 #include <pwd.h>
 #include <grp.h>
@@ -646,6 +647,11 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
     pid_t pid = fork();
     if (pid < 0) return -1;
     if (pid == 0) {
+        /* The handler ignores SIGPIPE (see handle_conn); an ignored disposition
+         * survives execve, so restore the default before anything else. The
+         * action always starts with SIGPIPE at SIG_DFL, whatever the executor
+         * itself was started with (systemd sets SIG_IGN, OpenRC does not). */
+        signal(SIGPIPE, SIG_DFL);
         dup2(in[0], 0); dup2(o[1], 1); dup2(e[1], 2);
         close(in[0]); close(in[1]); close(o[0]); close(o[1]); close(e[0]); close(e[1]);
         if (apply_profile(p, allow_unpriv) != 0) _exit(126);
@@ -674,6 +680,11 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
         _exit(127);
     }
     close(in[0]); close(o[1]); close(e[1]);
+    /* An action that exits (or closes stdin) without reading its context makes
+     * this write fail with EPIPE. That is normal, not an error: the run's result
+     * is still its exit status and output. SIGPIPE is ignored in the handler, so
+     * the write returns EPIPE here instead of killing the handler before it can
+     * send the response. */
     if (indata && inlen) (void)!write_all(in[1], indata, inlen);
     close(in[1]);
 
@@ -719,6 +730,13 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
  * never from the message. */
 static void handle_conn(int cfd, config_t *cfg, const char *scripts_conf,
                         int allow_unpriv) {
+    /* A write to a pipe or socket whose reader has gone must fail with EPIPE,
+     * not kill this handler: the stdin write to an action that exited without
+     * reading it raced the action's exit, and the default SIGPIPE killed the
+     * handler before it wrote any response, so the front-end saw "executor
+     * closed before responding" for a run that had succeeded (T-034). The
+     * action itself gets SIG_DFL back in run_with_profile before execve. */
+    signal(SIGPIPE, SIG_IGN);
     uint32_t total;
     if (read_u32(cfd, &total) != 0 || total == 0 || total > MAX_FRAME) return;
     unsigned char *frame = malloc(total);
