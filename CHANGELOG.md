@@ -56,6 +56,12 @@ task group, each adding its bullets to this entry.
   first (a plain loopback TCP connect, no root needed) and says "ctrl-exec-agent
   is not running" with the start command for the host's init system; `self-check`
   adds an informational running / not-running line. (T-007)
+- **Fixed** the executor deadlocking on an action that writes more than a pipe
+  buffer of output before reading its stdin, or never reads it: the handler
+  wrote the whole stdin payload with a blocking write before draining stdout
+  and stderr, so each side waited on its own write. stdin is now written
+  non-blocking from the same `select` loop that drains the output, and closed
+  once written or on EPIPE. (T-036)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 

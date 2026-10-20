@@ -680,23 +680,43 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
         _exit(127);
     }
     close(in[0]); close(o[1]); close(e[1]);
-    /* An action that exits (or closes stdin) without reading its context makes
-     * this write fail with EPIPE. That is normal, not an error: the run's result
+
+    /* Feed stdin from the same select loop that drains stdout and stderr, with
+     * non-blocking writes. A blocking write of the whole payload first would
+     * deadlock against an action that fills its output pipe before reading
+     * stdin, or never reads it: each side waits on its own write (T-036).
+     * stdin is closed once the payload is written, or as soon as a write fails.
+     * An action that exits (or closes stdin) without reading its context makes
+     * the write fail with EPIPE. That is normal, not an error: the run's result
      * is still its exit status and output. SIGPIPE is ignored in the handler, so
      * the write returns EPIPE here instead of killing the handler before it can
      * send the response. */
-    if (indata && inlen) (void)!write_all(in[1], indata, inlen);
-    close(in[1]);
+    int infd = in[1];
+    size_t inoff = 0;
+    if (!indata || inlen == 0 || fcntl(infd, F_SETFL, O_NONBLOCK) != 0) {
+        /* Nothing to send - or, if the fd cannot be made non-blocking, send
+         * nothing rather than risk the deadlock: the action sees EOF. */
+        close(infd); infd = -1;
+    }
 
     int fds[2] = { o[0], e[0] };
     buf_t *bufs[2] = { out, err };
     int trunc[2] = { 0, 0 };
     int open_n = 2;
-    while (open_n > 0) {
-        fd_set rd; FD_ZERO(&rd); int mx = -1;
+    while (open_n > 0 || infd >= 0) {
+        fd_set rd, wr; FD_ZERO(&rd); FD_ZERO(&wr); int mx = -1;
         for (int i = 0; i < 2; i++) if (fds[i] >= 0) { FD_SET(fds[i], &rd); if (fds[i] > mx) mx = fds[i]; }
+        if (infd >= 0) { FD_SET(infd, &wr); if (infd > mx) mx = infd; }
         if (mx < 0) break;
-        if (select(mx + 1, &rd, NULL, NULL, NULL) < 0) { if (errno == EINTR) continue; break; }
+        if (select(mx + 1, &rd, &wr, NULL, NULL) < 0) { if (errno == EINTR) continue; break; }
+        if (infd >= 0 && FD_ISSET(infd, &wr)) {
+            ssize_t w = write(infd, indata + inoff, inlen - inoff);
+            if (w > 0) inoff += (size_t)w;
+            if ((w < 0 && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
+                || inoff >= inlen) {
+                close(infd); infd = -1;
+            }
+        }
         for (int i = 0; i < 2; i++) {
             if (fds[i] >= 0 && FD_ISSET(fds[i], &rd)) {
                 char tmp[8192];
