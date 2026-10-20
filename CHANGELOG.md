@@ -51,6 +51,11 @@ task group, each adding its bullets to this entry.
   with the permission error named); real configuration errors are unchanged.
   `pairing-status` and `self-check` now read the certificate directory beside
   `--config` rather than a fixed path. (T-006)
+- **Fixed** `self-ping` failed obscurely, or with an unrelated "not paired"
+  complaint, when the agent was not running. It now probes the configured port
+  first (a plain loopback TCP connect, no root needed) and says "ctrl-exec-agent
+  is not running" with the start command for the host's init system; `self-check`
+  adds an informational running / not-running line. (T-007)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 

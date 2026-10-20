@@ -96,6 +96,32 @@ sub _need_root ($mode, @paths) {
     exit 1;
 }
 
+# Is the agent listening on its port? A plain TCP connect to loopback: needs no
+# root and no TLS material, and works the same under systemd, OpenRC, procd or a
+# hand-started process.
+sub _agent_listening ($port) {
+    require IO::Socket::INET;
+    my $probe = IO::Socket::INET->new(
+        PeerHost => '127.0.0.1',
+        PeerPort => $port,
+        Proto    => 'tcp',
+        Timeout  => 3,
+    );
+    return $probe ? 1 : 0;
+}
+
+# The command that starts the agent on this host, for the not-running message.
+sub _start_command {
+    return 'sudo systemctl start ctrl-exec-agent' if -d '/run/systemd/system';
+    return 'sudo /etc/init.d/ctrl-exec-agent start' if -e '/etc/init.d/ctrl-exec-agent';
+    return 'sudo ctrl-exec-agent serve';
+}
+
+sub _not_running_message ($port) {
+    return "ctrl-exec-agent is not running (nothing is listening on port $port).\n"
+         . "Start it with:\n    " . _start_command() . "\n";
+}
+
 # Promote a validated staged cert into the live cert path. Run as root by the
 # service unit's ExecStartPre before the server starts, so a renewed cert
 # delivered while the agent was running is adopted on the next start. Always
@@ -653,6 +679,17 @@ sub mode_self_check {
     if ($@) { print "Config error: $@\n"; exit 1; }
     print "  Config OK (port $config->{port})\n";
 
+    # Informational only: self-check is a local check and its result does not
+    # depend on the agent running.
+    if (defined $config->{port} && $config->{port} =~ /^\d+$/) {
+        if (_agent_listening($config->{port})) {
+            print "  Agent: running (listening on port $config->{port})\n";
+        }
+        else {
+            print "  Agent: " . _not_running_message($config->{port});
+        }
+    }
+
     my $allowlist = eval { Exec::Agent::Config::load_allowlist($ALLOWLIST_PATH) };
     if ($@) { print "Allowlist error: $@\n"; exit 1; }
     printf "  Allowlist OK (%d scripts)\n", scalar keys %$allowlist;
@@ -690,6 +727,14 @@ sub mode_self_ping {
     my $port = $config->{port} // 7443;
     print "  Config OK (port $port)\n";
     _need_root('self-ping', $config->{cert}, $config->{key}, $config->{ca});
+
+    # self-ping talks to the running agent: say so plainly if it is not there,
+    # before any pairing or TLS detail that would only obscure the cause.
+    unless (_agent_listening($port)) {
+        STDOUT->flush;
+        print STDERR _not_running_message($port);
+        exit 1;
+    }
 
     # Pairing and cert status
     my $status = Exec::Agent::AgentPairing::pairing_status(cert_dir => $CERT_DIR);

@@ -46,7 +46,7 @@ run as root (sudo).
 .B self-check
 Validate the local configuration, allowlist, and certificate files. No
 network connection is made. Reads the root-only configuration; run as root
-(sudo).
+(sudo). Also notes whether the agent is running.
 .TP
 .B self-ping
 Connect to the running agent on the loopback address over mTLS and send a
@@ -54,7 +54,8 @@ ping. A 403 serial-mismatch response is expected and reported as success: the
 agent's own cert serial is not in its trusted-dispatcher map, so the request is
 rejected - confirming the port is listening, the TLS stack works, and the agent
 is enforcing its trusted-dispatcher policy. Requires the agent to be running and
-paired.
+paired; if nothing is listening on the configured port it reports that the agent
+is not running and how to start it, and exits 1.
 .SH OPTIONS
 .TP
 .BI \-\-config " path"

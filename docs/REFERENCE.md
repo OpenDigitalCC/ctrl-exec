@@ -1253,6 +1253,21 @@ Contrast with `self-check`: that mode validates configuration, allowlist,
 and cert files locally with no network connection. `self-ping` requires
 the agent to be running and paired and exercises the live network path.
 
+If nothing is listening on the configured port, `self-ping` stops before any
+pairing or TLS check and says so plainly, exiting 1:
+
+```
+ctrl-exec-agent is not running (nothing is listening on port 7443).
+Start it with:
+    sudo systemctl start ctrl-exec-agent
+```
+
+The start command shown matches the host's init system (systemd, `/etc/init.d`,
+or `ctrl-exec-agent serve`). The check is a plain TCP connect to loopback, so it
+needs no root. `self-check` makes no network connection for its checks, but adds
+an informational `Agent: running` or `Agent: ctrl-exec-agent is not running`
+line.
+
 Use `self-ping` after installation to confirm the agent is reachable and
 policy enforcement is active before the dispatcher attempts its first
 connection.
