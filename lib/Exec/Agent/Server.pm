@@ -14,6 +14,8 @@ use feature                   qw(signatures);
 no warnings                   qw(experimental::signatures);
 use JSON                      qw(encode_json decode_json);
 use Sys::Hostname             qw(hostname);
+use POSIX                      qw();
+use Time::HiRes               qw();
 use Errno                     qw(EINTR EAGAIN EWOULDBLOCK ECONNABORTED EBADF EINVAL ENOTSOCK);
 
 use Exec::Agent::Config       qw();
@@ -700,6 +702,43 @@ sub peer_serial ($conn) {
     } // '';
     Net::SSLeay::X509_free($cert);
     return lc $hex;
+}
+
+# Bounds for draining a refused connection (see drain_refused).
+use constant DRAIN_MAX_BYTES => 65536;
+use constant DRAIN_TIMEOUT   => 1;
+
+# After a refusal (the 429) has been written on $conn: send close_notify, half-
+# close the write side, then read and discard whatever the client already sent
+# until it closes, DRAIN_MAX_BYTES have arrived or DRAIN_TIMEOUT seconds (in
+# total, not per read) have passed. Closing a socket with unread data makes the
+# kernel send a reset, which can discard the reply before the client reads it.
+# This runs in the accept-loop parent, so the bound is also the longest one
+# refused client can hold the loop. The raw descriptor is read, not the SSL
+# handle: the bytes are discarded, so they need not be decrypted.
+sub drain_refused ($conn) {
+    my $fd = fileno($conn);
+    return unless defined $fd;
+    my $ssl = eval { $conn->_get_ssl_object };
+    eval { Net::SSLeay::shutdown($ssl) } if $ssl;
+    shutdown($conn, 1);
+    my $got = 0;
+    my $buf;
+    my $deadline = Time::HiRes::time() + DRAIN_TIMEOUT;
+    while ($got < DRAIN_MAX_BYTES) {
+        my $left = $deadline - Time::HiRes::time();
+        last if $left <= 0;
+        my $rin = '';
+        vec($rin, $fd, 1) = 1;
+        my $n = select(my $rout = $rin, undef, undef, $left);
+        next if $n < 0 && $! == EINTR;
+        last if $n <= 0;
+        my $r = POSIX::read($fd, $buf, 4096);
+        last if !defined $r && $! != EINTR && $! != EAGAIN;
+        last if defined $r && $r == 0;
+        $got += $r if $r;
+    }
+    return;
 }
 
 # Seconds the serve loop allows a connecting peer to complete the TLS handshake

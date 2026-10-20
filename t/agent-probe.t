@@ -43,7 +43,7 @@ like $log, qr/ACTION=tls-failure PEER=127\.0\.0\.5\b/,
     'each failed handshake is logged under the prober\'s address';
 unlike $log, qr/PEER=unknown/, 'nothing is recorded under "unknown"';
 
-is $rig->request(as => 'untrusted', from => '127.0.0.5', read_first => 1), 429,
+is $rig->request(as => 'untrusted', from => '127.0.0.5'), 429,
     'the fourth connection from the prober is refused for the probe block (429)';
 is $rig->request(as => 'untrusted', from => '127.0.0.6'), 403,
     'another address is unaffected';

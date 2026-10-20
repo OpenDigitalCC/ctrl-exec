@@ -156,7 +156,7 @@ sub wait_log {
 
 sub log_len { return length $_[0]->log_text }
 
-# request(as => 'trusted'|'untrusted'|'rogue', from => '127.0.0.x', read_first => 1)
+# request(as => 'trusted'|'untrusted'|'rogue', from => '127.0.0.x')
 # Returns the HTTP status code, or undef when the handshake or read failed
 # (no HTTP reply: the agent dropped or rejected the connection).
 sub request {
@@ -175,11 +175,7 @@ sub request {
         Timeout         => 15,
     ) or return undef;
     my $body = '{}';
-    # read_first: send nothing and read the agent's unsolicited reply (a 429).
-    # An agent that answers and closes without reading our request can reset the
-    # connection under a client that has already written, losing the reply.
-    print $c "POST /ping HTTP/1.0\r\nContent-Length: " . length($body) . "\r\n\r\n$body"
-        unless $o{read_first};
+    print $c "POST /ping HTTP/1.0\r\nContent-Length: " . length($body) . "\r\n\r\n$body";
     my $line = <$c>;
     close $c;
     return undef unless defined $line && $line =~ m{^HTTP/\S+\s+(\d+)};

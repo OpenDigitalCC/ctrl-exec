@@ -494,6 +494,10 @@ MSG
                         retry_after => $retry,
                     });
                 };
+                # Drain the request the client already wrote (bounded: this is
+                # the accept-loop parent) so closing does not reset the connection
+                # under the reply.
+                Exec::Agent::Server::drain_refused($conn);
                 $conn->close(SSL_no_shutdown => 1);
                 next;
             }

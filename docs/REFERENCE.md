@@ -830,6 +830,9 @@ A blocked peer receives `HTTP/1.0 429 Too Many Requests` with a JSON body
 `{"status":"error","error":"rate limited","retry_after":<seconds>}` before the
 connection is closed (earlier releases closed it silently, which the
 dispatcher reported as `no response from child`).
+The agent half-closes after the reply and discards what the client already sent
+(at most 64 KiB and 1 second in all) before closing, so the reply is not lost to a
+TCP reset.
 
 The volume threshold blocks IPs that open an unusually high number of
 connections in a short window — consistent with port scanning or connection

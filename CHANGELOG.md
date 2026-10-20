@@ -134,6 +134,13 @@ task group, each adding its bullets to this entry.
   across it; a silent client is dropped at the limit and counted as a failure, where
   the old handshake inside `accept()` could stall the loop indefinitely. A failed TCP
   accept is logged `accept-error` and no longer counted. (T-035)
+- **Fixed** the agent's `429` reply being lost to a TCP reset: it answered and closed without
+  reading the request, so a client that had already written its request could get a
+  reset instead of the reply and report a connection error rather than "rate
+  limited". After the reply the agent now sends `close_notify`, half-closes and drains
+  what the client sent, then closes, bounded to 64 KiB and 1 s in total
+  (`Exec::Agent::Server::drain_refused`), so a slow or silent client cannot hold the
+  accept loop longer. (T-043)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 
