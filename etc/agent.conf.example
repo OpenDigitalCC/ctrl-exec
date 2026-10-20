@@ -166,6 +166,12 @@ executor_socket = /run/ctrl-exec-agent/exec.sock
 # e.g. a script owned root:prosody mode 0750 works with run_as=prosody. A run_as
 # user that cannot exec the script gets a clear error (not a silent failure).
 #
+# Environment: the script gets a fixed PATH and, under run_as, HOME, USER and
+# LOGNAME from the run_as user's passwd entry (none of the three for a numeric
+# run_as with no passwd entry). Nothing else from the executor or the request.
+# HOME is not created: give the run_as user a real home if its tools write
+# there, and list that home in writable when the profile sets writable.
+#
 # Define only the profiles you need; reference them from scripts.conf. Naming a
 # profile in scripts.conf that is not defined here makes the agent refuse to
 # serve (fail-closed).

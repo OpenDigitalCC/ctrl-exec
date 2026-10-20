@@ -469,13 +469,46 @@ static int mount_ro_recursive(const char *path) {
 }
 
 /* ---- privileged child setup ------------------------------------------- */
+/* The run_as user's identity for the action's environment: HOME, USER and
+ * LOGNAME, taken from the agent host's own passwd entry for that user (as su -
+ * and systemd User= do). Filled by apply_profile only when the profile has a
+ * run_as with a passwd entry; otherwise `set` stays 0 and the action gets PATH
+ * alone. Nothing here comes from the request. */
+#define ENV_STR_MAX (PATH_MAX + 16)
+typedef struct {
+    int  set;
+    char home[ENV_STR_MAX];
+    char user[ENV_STR_MAX];
+    char logname[ENV_STR_MAX];
+} user_env_t;
+
+/* Copy pw into ue. The passwd entry lives in libc static storage that later
+ * lookups (initgroups) may overwrite, so copy it at once. Returns 0, or -1 if a
+ * field does not fit: fail closed rather than hand the action a truncated HOME
+ * that names a different directory. */
+static int user_env_from(const struct passwd *pw, user_env_t *ue) {
+    ue->set = 0;
+    if (!pw || !pw->pw_dir || !pw->pw_name) return 0;
+    int a = snprintf(ue->home,    sizeof(ue->home),    "HOME=%s",    pw->pw_dir);
+    int b = snprintf(ue->user,    sizeof(ue->user),    "USER=%s",    pw->pw_name);
+    int c = snprintf(ue->logname, sizeof(ue->logname), "LOGNAME=%s", pw->pw_name);
+    if (a < 0 || b < 0 || c < 0 || (size_t)a >= sizeof(ue->home) ||
+        (size_t)b >= sizeof(ue->user) || (size_t)c >= sizeof(ue->logname)) {
+        fprintf(stderr, "executor: run_as passwd entry too long for the environment\n");
+        return -1;
+    }
+    ue->set = 1;
+    return 0;
+}
+
 /* Apply the profile in the forked child just before exec. Returns 0 or -1.
  * COMPILE-VERIFIED; the namespace/cap/setuid paths require root + CAP_SYS_ADMIN
  * and are exercised on a real host (see the on-host test plan). With
  * allow_unpriv and a non-root euid (test only), the privileged steps are
  * skipped and only no_new_privileges is applied. */
-static int apply_profile(const profile_t *p, int allow_unpriv) {
+static int apply_profile(const profile_t *p, int allow_unpriv, user_env_t *ue) {
     int is_root = (geteuid() == 0);
+    ue->set = 0;
 
     if (!is_root) {
         if (!allow_unpriv) { fprintf(stderr, "executor: must run as root\n"); return -1; }
@@ -551,8 +584,10 @@ static int apply_profile(const profile_t *p, int allow_unpriv) {
     if (p->run_as[0]) {
         uid_t uid; gid_t gid;
         struct passwd *pw = getpwnam(p->run_as);
-        if (pw) { uid = pw->pw_uid; gid = pw->pw_gid; }
-        else {
+        if (pw) {
+            uid = pw->pw_uid; gid = pw->pw_gid;
+            if (user_env_from(pw, ue) != 0) return -1;
+        } else {
             /* Numeric uid. run_as is validated at config load as a name or all
              * digits; here it is digits. Parse manually rather than strtol -
              * under _GNU_SOURCE, strtol redirects to the C23 __isoc23_strtol,
@@ -579,6 +614,11 @@ static int apply_profile(const profile_t *p, int allow_unpriv) {
                 return -1;
             }
             uid = (uid_t)v; gid = (gid_t)v;
+            /* HOME/USER/LOGNAME for a numeric run_as come from that uid's passwd
+             * entry if it has one; with none they are left unset. Only the
+             * environment uses this lookup: supplementary groups for a numeric
+             * run_as are unchanged (none). */
+            if (user_env_from(getpwuid(uid), ue) != 0) return -1;
         }
         if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) != 0) return -1;
         if (setgroups(0, NULL) != 0) return -1;
@@ -654,7 +694,8 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
         signal(SIGPIPE, SIG_DFL);
         dup2(in[0], 0); dup2(o[1], 1); dup2(e[1], 2);
         close(in[0]); close(in[1]); close(o[0]); close(o[1]); close(e[0]); close(e[1]);
-        if (apply_profile(p, allow_unpriv) != 0) _exit(126);
+        user_env_t ue;
+        if (apply_profile(p, allow_unpriv, &ue) != 0) _exit(126);
         /* Clear diagnostic instead of a silent exit-127: a run_as user that
          * cannot read+exec the script is the most common cause. The script's
          * permissions must allow the profile's run_as user (e.g. a script owned
@@ -667,14 +708,22 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
         }
         /* Sanitised environment: the executor never trusts its own inherited
          * env for the action. The script receives request context on stdin
-         * (not via the environment), so a minimal PATH avoids passing the
+         * (not via the environment), so a fixed PATH avoids passing the
          * loader and shell variables (LD_PRELOAD, LD_LIBRARY_PATH, BASH_ENV,
          * IFS, PERL5LIB, ...) as attack surface to script interpreters running
-         * under the profile. */
-        char *const clean_env[] = {
-            (char *)"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            NULL
-        };
+         * under the profile. Under a run_as user with a passwd entry, HOME,
+         * USER and LOGNAME are added from that entry (T-004), so the user's
+         * tools (docker, git, ssh) find their home; nothing caller-controlled
+         * enters the environment. */
+        char *clean_env[5];
+        int ne = 0;
+        clean_env[ne++] = (char *)"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+        if (ue.set) {
+            clean_env[ne++] = ue.home;
+            clean_env[ne++] = ue.user;
+            clean_env[ne++] = ue.logname;
+        }
+        clean_env[ne] = NULL;
         execve(path, argv, clean_env);
         dprintf(2, "executor: exec '%s' failed: %s\n", path, strerror(errno));
         _exit(127);

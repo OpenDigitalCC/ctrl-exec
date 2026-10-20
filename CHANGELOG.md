@@ -62,6 +62,13 @@ task group, each adding its bullets to this entry.
   and stderr, so each side waited on its own write. stdin is now written
   non-blocking from the same `select` loop that drains the output, and closed
   once written or on EPIPE. (T-036)
+- **Changed** the executor to give a `run_as` action `HOME`, `USER` and
+  `LOGNAME` from the run_as user's passwd entry, so its tools (docker, git,
+  ssh) find their home; before, the action got `PATH` alone and such tools
+  failed or fell back. A numeric `run_as` with no passwd entry and a profile
+  without `run_as` are unchanged; `PATH` stays fixed and nothing from the
+  request or the executor's own environment is passed. The home is not
+  created, and a `writable` profile must list it. (T-004)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 

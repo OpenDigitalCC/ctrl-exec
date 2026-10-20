@@ -241,6 +241,25 @@ Privilege separation and per-script profiles (optional, recommended)
   audited executor, and it can run only allowlisted scripts under their declared
   profiles. The privileged surface is kept deliberately tiny.
 
+The action's environment under the executor
+: The executor never passes its own environment to an action, and nothing in
+  the request enters it (request context reaches the script on stdin). The
+  action gets a fixed `PATH`
+  (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`). Under a
+  profile with `run_as`, it also gets `HOME`, `USER` and `LOGNAME` from the
+  agent host's own passwd entry for that user (`pw_dir`, `pw_name`), as `su -`
+  and systemd's `User=` set them, so the user's tools (docker, git, ssh) find
+  their configuration. A numeric `run_as` with no passwd entry gets none of the
+  three, and a profile without `run_as` gets `PATH` alone. Loader and shell
+  variables that are attack surface for script interpreters (`LD_*`,
+  `BASH_ENV`, `IFS`, `PERL5LIB`, and the rest) are never passed.
+
+  Setting `HOME` does not create it: a `run_as` user needs a real home
+  directory if its tools write there. A profile with `writable` runs on a
+  read-only filesystem, so it must also list that home (or the parts of it the
+  tools write) in `writable`. The executor unit sets no `ProtectHome`, so home
+  directories are visible to actions.
+
 Schema sidecars are advertised, never executed
 : A script's optional `<script>.schema.json` sidecar (see REFERENCE.md) is read
   only for allowlisted scripts, capped at 64 KiB, and treated as opaque data:

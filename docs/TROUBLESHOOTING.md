@@ -160,6 +160,15 @@ the `writable` field - per-profile read-only filesystem
   is unaffected - write access then follows filesystem ownership and the
   capability set, as above.
 
+a `run_as` user's home
+: Under a profile with `run_as`, the executor sets `HOME`, `USER` and
+  `LOGNAME` from that user's passwd entry (a numeric `run_as` with no passwd
+  entry gets none of them). It does not create the home. A tool that writes
+  there (docker's config folder, git, ssh's `known_hosts`) fails with an error
+  such as `mkdir /home/<user>: permission denied` when the home does not exist:
+  create it, owned by the user. Under a profile with `writable`, list the home
+  in `writable` too, or the write fails with `EROFS`.
+
 
 ## Configuration pitfalls
 
