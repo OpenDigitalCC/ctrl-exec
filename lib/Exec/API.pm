@@ -24,8 +24,8 @@ my $VERSION_FILE = '/usr/local/lib/ctrl-exec/VERSION';
 # these an attacker-supplied Content-Length or a flood of header lines is read
 # into memory before the auth gate runs - a pre-authentication DoS.
 my $MAX_HEADERS = 32;
-my $MAX_BODY    = 1_048_576;   # 1 MiB; the largest legitimate body is well under
-                               # (confidential run input adds max_input_bytes, see _max_body)
+# The body limit is Exec::Input::max_body: 1 MiB plus max_input_bytes, so a run
+# carrying the largest permitted input is not refused before it is validated.
 
 my $VERSION = do {
     if (open my $fh, '<', $VERSION_FILE) {
@@ -162,15 +162,6 @@ sub _make_server ($port, $bind, $use_tls, $cert, $key) {
     }
 }
 
-# The body limit: the base limit plus room for confidential run input
-# (max_input_bytes, default 1 MiB), so a run carrying the largest permitted
-# input is not refused as too large before it is validated.
-sub _max_body ($config) {
-    my $input_max = $config->{max_input_bytes} // Exec::Input::DEFAULT_MAX_BYTES;
-    $input_max = Exec::Input::DEFAULT_MAX_BYTES unless $input_max =~ /^\d+$/;
-    return $MAX_BODY + $input_max;
-}
-
 sub _handle_connection ($conn, $peer, $config) {
 
     # Read request line
@@ -208,7 +199,7 @@ sub _handle_connection ($conn, $peer, $config) {
         }
     }
 
-    my $max_body = _max_body($config);
+    my $max_body = Exec::Input::max_body($config);
     if ($content_length > $max_body) {
         _send_error($conn, 413, 'payload too large',
                     "body exceeds $max_body bytes");
@@ -353,7 +344,7 @@ sub _handle_run ($conn, $peer, $body, $config) {
     # values travel only to the agents; everything else here sees the field
     # names and a total size.
     my $input = $req->{input};
-    my $iv    = Exec::Input::validate($input, $config->{max_input_bytes});
+    my $iv    = Exec::Input::validate($input, Exec::Input::max_bytes($config));
     unless ($iv->{ok}) {
         _send_error($conn, 400, 'bad request', $iv->{error});
         return;
