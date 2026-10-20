@@ -174,6 +174,16 @@ Filesystem      Size  Used Avail Use% Mounted on
 /dev/sda1        40G   12G   26G  32% /
 ```
 
+# Using the API (optional)
+
+Everything above works as installed: `ced` is gated by system permissions and needs no auth hook. The HTTP API does not. A fresh install enables no hook, so the API answers every request with 403 (`no auth hook configured`). To enable it, make one change: copy or edit `/etc/ctrl-exec-dispatcher/auth-hook` (the seeded example allows everything, so add real rules for anything beyond a localhost trial), then uncomment this line in `/etc/ctrl-exec-dispatcher/ctrl-exec.conf` and restart `ctrl-exec-api`:
+
+```ini
+auth_hook = /etc/ctrl-exec-dispatcher/auth-hook
+```
+
+On an isolated network you can instead set `api_auth_default = allow` and restart.
+
 # Next Steps
 
 [Install](/install)

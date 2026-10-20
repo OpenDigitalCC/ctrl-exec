@@ -75,6 +75,14 @@ case "$1" in
                /etc/ctrl-exec-dispatcher/auth-hook
             chmod 755 /etc/ctrl-exec-dispatcher/auth-hook
         fi
+        # Tell the operator, once, why the API will say "no auth hook configured".
+        if [ -z "$2" ] && ! grep -q '^[[:space:]]*auth_hook[[:space:]]*=' \
+                /etc/ctrl-exec-dispatcher/ctrl-exec.conf 2>/dev/null; then
+            echo "ctrl-exec: ced (CLI) works as installed. The API denies every request until"
+            echo "ctrl-exec: you enable authorisation: edit /etc/ctrl-exec-dispatcher/auth-hook"
+            echo "ctrl-exec: (the example allows everything), then uncomment the auth_hook line in"
+            echo "ctrl-exec: /etc/ctrl-exec-dispatcher/ctrl-exec.conf and restart ctrl-exec-api."
+        fi
 
         # Migration: hand an existing dispatcher private key to the ctrl-exec user
         # (still 0600) so the now-unprivileged API can read it. setup-ctrl-exec /

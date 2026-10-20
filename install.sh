@@ -881,7 +881,8 @@ install_ctrl_exec_dispatcher() {
     if [[ ! -f "$EXEC_CONF_DIR/auth-hook" ]]; then
         safe_install 755 "$SOURCE_DIR/etc/auth-hook.example" "$EXEC_CONF_DIR/auth-hook"
         info "Example auth hook installed at $EXEC_CONF_DIR/auth-hook (allows everything; NOT active)."
-        info "API requests are denied until you edit it and set auth_hook in ctrl-exec.conf."
+        info "ced (CLI) works as installed. The API denies every request until you edit the hook"
+        info "and uncomment the auth_hook line in $EXEC_CONF_DIR/ctrl-exec.conf, then restart ctrl-exec-api."
     else
         info "Auth hook already exists, not overwriting."
     fi
