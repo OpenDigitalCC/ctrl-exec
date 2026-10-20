@@ -368,6 +368,14 @@
             "description": "Positional arguments passed to the script. Evaluated on the ctrl-exec host before dispatch.",
             "example": ["--database", "myapp"]
           },
+          "input": {
+            "type": "object",
+            "writeOnly": true,
+            "description": "Confidential input for the script: named string fields, sent once to every host in the request. The receiving agent decides how its script gets them (scripts.conf input=). The values are never an argument or environment variable of the script, never passed to an auth hook (hooks receive only the field names and the total size), never logged and never stored in the run record. Field names match [A-Za-z0-9_.-]{1,64}; at most 32 fields; total value size at most max_input_bytes (default 1048576). Anything else is a 400. Send it only over the unix socket or TLS, not plain HTTP across a network.",
+            "additionalProperties": { "type": "string", "writeOnly": true },
+            "maxProperties": 32,
+            "example": { "cert": "-----BEGIN CERTIFICATE-----...", "key": "-----BEGIN PRIVATE KEY-----..." }
+          },
           "username": { "type": "string", "example": "alice" },
           "token":    { "type": "string", "example": "mytoken" },
           "async": {

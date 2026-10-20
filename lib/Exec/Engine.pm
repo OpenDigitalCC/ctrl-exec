@@ -30,6 +30,10 @@ my $DEFAULT_PORT = 7443;
 #   username => $str            (forwarded to agent for downstream use)
 #   token    => $str            (forwarded to agent for downstream use)
 #   async    => $bool           (submit detached; collect acceptance, not result)
+#   input    => \%fields       (confidential named string fields, already
+#                               validated by Exec::Input; sent unchanged to
+#                               every host as the request body's 'input'; never
+#                               logged or recorded)
 #
 # Returns arrayref of result hashrefs. Synchronous (default):
 #   { host, script, exit, stdout, stderr, reqid, rtt }
@@ -49,9 +53,11 @@ sub dispatch_all (%opts) {
     my $username = $opts{username} // '';
     my $token    = $opts{token}    // '';
     my $async    = $opts{async}    // 0;
+    my $input    = $opts{input};
 
     croak "hosts must be an arrayref" unless ref $hosts eq 'ARRAY';
     croak "args must be an arrayref"  unless ref $args  eq 'ARRAY';
+    croak "input must be a hashref"   if defined $input && ref $input ne 'HASH';
 
     my $max_hosts = $opts{max_hosts} // 500;
     croak "too many hosts (max $max_hosts)" if @$hosts > $max_hosts;
@@ -79,6 +85,7 @@ sub dispatch_all (%opts) {
             username => $username,
             token    => $token,
             async    => $async,
+            (defined $input ? (input => $input) : ()),
         );
     });
 
@@ -477,6 +484,7 @@ sub _dispatch_one (%opts) {
         token    => $opts{token}    // '',
     );
     $body{async} = JSON::true if $async;
+    $body{input} = $opts{input} if defined $opts{input};
     my $payload = encode_json(\%body);
 
     my $resp = eval {

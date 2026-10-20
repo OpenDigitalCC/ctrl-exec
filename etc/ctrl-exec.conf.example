@@ -35,6 +35,12 @@ auth_hook = /etc/ctrl-exec-dispatcher/auth-hook
 # fleet does not exhaust file descriptors; hosts beyond the cap queue.
 # max_parallel = 64
 
+# Largest total size in bytes of a run's confidential 'input' (the named string
+# fields POST /run accepts for scripts that take secrets; default: 1048576). The
+# API refuses a larger input with a 400, and its request body limit is 1 MiB
+# plus this value. At most 32 fields. Set the agent's max_input_bytes alike.
+# max_input_bytes = 1048576
+
 # API server port (default: 7445).
 # api_port = 7445
 

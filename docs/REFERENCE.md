@@ -609,6 +609,17 @@ Key settings:
   max_parallel = 64
   ```
 
+`max_input_bytes`
+: Largest total size, in bytes, of the values in a run's confidential `input`
+  (see `POST /run` in API.md). Default: 1048576 (1 MiB). A larger input is
+  refused with a 400 at the API. The API's request body limit is 1 MiB plus
+  this value. The agent has its own `max_input_bytes` and refuses what exceeds
+  it; set them alike. At most 32 fields are allowed, regardless of this setting.
+
+  ```
+  max_input_bytes = 1048576
+  ```
+
 `api_port`
 : Port for the `ctrl-exec-api` HTTP server. Default: 7445.
 

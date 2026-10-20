@@ -137,7 +137,26 @@ Request body:
   match an entry in the agent's `scripts.conf`.
 
 `args`
-: Optional. Array of positional arguments passed to the script.
+: Optional. Array of positional arguments passed to the script. Arguments are
+  visible in the process table on both hosts; do not put secrets in them.
+
+`input`
+: Optional. Confidential input for the script: an object of named string
+  fields, for example `{"cert": "...", "key": "..."}`. Use it instead of `args`
+  for anything secret. The same `input` is sent to every host. Field names match
+  `[A-Za-z0-9_.-]` (1-64 characters), there are at most 32 fields, and the
+  total size of the values is at most `max_input_bytes` (default 1 MiB). A
+  request that breaks any of these is a **400** naming the problem (never a
+  value), before the auth hook is called or anything is dispatched. How the
+  script receives the fields is chosen by the receiving agent (`input=` in its
+  `scripts.conf`), so the request is the same for every script.
+
+  The values never reach the process table, an auth hook, a log line or the
+  run store. The auth hook is given only the field names (`input_names`) and the
+  total size (`input_bytes`). `input` is `writeOnly` in the OpenAPI schema.
+  Send it only over a channel that is not readable on the network (a local
+  unix socket or TLS); plain HTTP carries the body in clear. The API accepts a
+  body of up to 1 MiB plus `max_input_bytes`; larger is a 413.
 
 `username`, `token`
 : Optional. Passed to auth hook and forwarded to the agent as request context.

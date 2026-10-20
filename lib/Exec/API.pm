@@ -15,6 +15,7 @@ use Exec::Auth     qw();
 use Exec::Lock     qw();
 use Exec::Registry qw();
 use Exec::RunStore qw();
+use Exec::Input    qw();
 
 my $OPENAPI_PATH = '/usr/local/lib/ctrl-exec/Exec/openapi.json';
 my $VERSION_FILE = '/usr/local/lib/ctrl-exec/VERSION';
@@ -24,6 +25,7 @@ my $VERSION_FILE = '/usr/local/lib/ctrl-exec/VERSION';
 # into memory before the auth gate runs - a pre-authentication DoS.
 my $MAX_HEADERS = 32;
 my $MAX_BODY    = 1_048_576;   # 1 MiB; the largest legitimate body is well under
+                               # (confidential run input adds max_input_bytes, see _max_body)
 
 my $VERSION = do {
     if (open my $fh, '<', $VERSION_FILE) {
@@ -160,6 +162,15 @@ sub _make_server ($port, $bind, $use_tls, $cert, $key) {
     }
 }
 
+# The body limit: the base limit plus room for confidential run input
+# (max_input_bytes, default 1 MiB), so a run carrying the largest permitted
+# input is not refused as too large before it is validated.
+sub _max_body ($config) {
+    my $input_max = $config->{max_input_bytes} // Exec::Input::DEFAULT_MAX_BYTES;
+    $input_max = Exec::Input::DEFAULT_MAX_BYTES unless $input_max =~ /^\d+$/;
+    return $MAX_BODY + $input_max;
+}
+
 sub _handle_connection ($conn, $peer, $config) {
 
     # Read request line
@@ -197,9 +208,10 @@ sub _handle_connection ($conn, $peer, $config) {
         }
     }
 
-    if ($content_length > $MAX_BODY) {
+    my $max_body = _max_body($config);
+    if ($content_length > $max_body) {
         _send_error($conn, 413, 'payload too large',
-                    "body exceeds $MAX_BODY bytes");
+                    "body exceeds $max_body bytes");
         return;
     }
 
@@ -337,6 +349,16 @@ sub _handle_run ($conn, $peer, $body, $config) {
         return;
     }
 
+    # Confidential input (T-013): validated before any hook or dispatch. The
+    # values travel only to the agents; everything else here sees the field
+    # names and a total size.
+    my $input = $req->{input};
+    my $iv    = Exec::Input::validate($input, $config->{max_input_bytes});
+    unless ($iv->{ok}) {
+        _send_error($conn, 400, 'bad request', $iv->{error});
+        return;
+    }
+
     my $username = $req->{username} // '';
     my $token    = $req->{token}    // '';
     my $async    = $req->{async} ? 1 : 0;
@@ -346,6 +368,8 @@ sub _handle_run ($conn, $peer, $body, $config) {
         script    => $script,
         hosts     => $hosts,
         args      => $args,
+        input_names => $iv->{names},
+        input_bytes => $iv->{bytes},
         username  => $username,
         token     => $token,
         source_ip => $peer,
@@ -387,6 +411,7 @@ sub _handle_run ($conn, $peer, $body, $config) {
         token    => $token,
         config   => $config,
         async    => $async,
+        (defined $input ? (input => $input) : ()),
     );
 
     if ($async) {

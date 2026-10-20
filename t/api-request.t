@@ -60,8 +60,8 @@ subtest 'header flood -> 431' => sub {
 };
 
 subtest 'oversized Content-Length -> 413 (before the body is read)' => sub {
-    my $req = "POST /run HTTP/1.0\r\nContent-Length: 2000000\r\n\r\n";
-    like drive(request => $req), qr{^HTTP/1\.0 413 }, 'a body over 1 MiB is a 413';
+    my $req = "POST /run HTTP/1.0\r\nContent-Length: 3000000\r\n\r\n";
+    like drive(request => $req), qr{^HTTP/1\.0 413 }, 'a body over the limit (1 MiB + max_input_bytes) is a 413';
 };
 
 # --- the auth gate sits BEFORE routing ---------------------------------------

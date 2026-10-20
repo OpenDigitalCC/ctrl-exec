@@ -184,6 +184,7 @@ task group, each adding its bullets to this entry.
   how to start it, logged as `ACTION=executor-unavailable`, and `self-check`
   reports `Executor: NOT AVAILABLE` and exits non-zero. (T-028)
 - **Added** auth hooks receive `input_names` and `input_bytes` (env `ENVEXEC_INPUT_NAMES_JSON`, `ENVEXEC_INPUT_BYTES`) describing a run's confidential input, never its values, so policy can see what is sent without seeing it. (T-013)
+- **Added** `POST /run` accepts `input`, an object of named string fields for confidential content, validated before any hook or dispatch (400 on a bad shape, more than 32 fields, or more than `max_input_bytes`, default 1 MiB) and forwarded unchanged to each agent in sync and async runs. The values reach only the agents: the dispatcher's auth hook gets names and total size, and no log line, run record or async record holds them. The API's body limit is now 1 MiB plus `max_input_bytes`. `input` is `writeOnly` in `openapi.json`. (T-013)
 
 ## 0.12.4 — trusted dispatchers are no longer rate-limited; agent survives reload
 
