@@ -395,6 +395,25 @@ stale sandbox drop-in
   hardening; a stale drop-in can mask or conflict with it.
 
 
+## ctrl-exec-maintenance.service shows as failed
+
+`ced maintain` (run by `ctrl-exec-maintenance.timer`) runs the ping/renewal,
+rotate, broadcast, expire and purge phases independently, then exits 1 if any
+of them failed. The unit therefore shows as failed in `systemctl --failed`
+until the next successful run. It is not restarted in a loop; the timer simply
+fires again at its next interval.
+
+To see which phase failed, run it by hand or read the journal:
+
+```bash
+sudo ced maintain
+journalctl -u ctrl-exec-maintenance.service
+```
+
+The output ends with `Maintenance FAILED in phase(s): ...`, and the cause is
+logged at ERR (`ACTION=maintain PHASE=<phase>`). A failing `ping` or `rotate`
+phase means certificate renewal is stalled - fix it before certs expire.
+
 ## Certificate rotation with executor-mode agents
 
 Rotating the dispatcher certificate does **not** require re-pairing executor-mode

@@ -785,7 +785,10 @@ ced list-agents
 ```
 
 Renewal failure is logged at ERR level on the dispatcher (`ACTION=maintain`) and
-agent (`ACTION=cert-promote`), and retried on the next maintenance run. A cert
+agent (`ACTION=cert-promote`), and retried on the next maintenance run. A failed
+maintenance phase also makes `ced maintain` exit 1, so
+`ctrl-exec-maintenance.service` shows as failed in `systemctl --failed` (the
+timer still fires on its next interval; there is no restart loop). A cert
 that fails repeatedly will eventually expire and require re-pairing. Alert on
 those ERR lines so a stalled renewal is visible well before expiry.
 

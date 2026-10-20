@@ -505,6 +505,42 @@ control-plane operation, not an allowlisted script.
 
 ---
 
+### maintain
+
+Run one maintenance pass: ping every registered agent (which triggers
+certificate renewal for agents past half-life), rotate the dispatcher's own
+cert if it nears expiry, broadcast the serial, expire agents long out of
+contact, and purge expired async run records. This is what
+`ctrl-exec-maintenance.timer` runs; it needs root for CA-key access.
+
+```bash
+ced maintain [--json]
+```
+
+Each phase (`ping`, `rotate`, `broadcast`, `expire`, `purge`) runs
+independently: a failure is logged at ERR (`ACTION=maintain PHASE=<phase>`)
+and the remaining phases still run.
+
+Output on success:
+
+```
+Maintenance run: 3/3 agents pinged, dispatcher cert checked.
+```
+
+If any phase failed, a second line names them and the exit code is 1:
+
+```
+Maintenance FAILED in phase(s): rotate, purge
+```
+
+`--json` emits `{"ok":1,"agents":3,"pinged":3,"failed":[]}`. When a phase
+failed, `ok` is `0` and `failed` lists the phase names in run order. The
+`failed` key is always present.
+
+Exit code is 0 when every phase succeeded, 1 if any phase failed.
+
+---
+
 ### serial-status
 
 Show the current dispatcher serial, previous serial, rotation timestamps,

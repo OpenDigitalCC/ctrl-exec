@@ -23,6 +23,12 @@ use FindBin    qw($Bin);
 use lib "$Bin/../lib";
 use JSON qw(decode_json);
 
+# mode_maintain exits non-zero when a phase failed. Trap exit so the test can
+# read the status; it must be installed before the dispatcher is compiled.
+BEGIN {
+    *CORE::GLOBAL::exit = sub { die bless({ code => $_[0] // 0 }, 'Test::Exit') };
+}
+
 {
     no warnings qw(redefine once);
     local *main::main = sub {};
@@ -49,6 +55,7 @@ close $cf;
 my (@log, @ping_calls, %phase_ran);
 my %die_in;                 # phase name -> 1 to make that phase die
 my $ping_result = sub { [] };
+my $LAST_EXIT;              # exit status of the last run_maintain
 
 {
     no warnings 'redefine';
@@ -95,12 +102,20 @@ sub run_maintain {
     my ($opts) = @_;
     my $out = '';
     my $ok;
+    my $code = 0;
     {
         local *STDOUT;
         open STDOUT, '>', \$out or die;
         $ok = eval { main::mode_maintain($opts); 1 };
     }
-    return ($ok, $@, $out);
+    my $err = $@;
+    if (!$ok && ref $err eq 'Test::Exit') {     # exit() was called: not a die
+        $code = $err->{code};
+        $ok   = 1;
+        $err  = '';
+    }
+    $LAST_EXIT = $code;
+    return ($ok, $err, $out);
 }
 
 sub errs { grep { $_->[0] eq 'ERR' } @log }
@@ -127,8 +142,9 @@ subtest 'empty registry: runs, harmless, exits normally' => sub {
     reset_run();
     ($ok, $err, $out) = run_maintain({ json => 1 });
     ok $ok, 'json run does not die' or diag $err;
-    is_deeply decode_json($out), { ok => 1, agents => 0, pinged => 0 },
-        'empty registry json: ok, 0 agents, 0 pinged';
+    is_deeply decode_json($out), { ok => 1, agents => 0, pinged => 0, failed => [] },
+        'empty registry json: ok, 0 agents, 0 pinged, no failed phases';
+    is $LAST_EXIT, 0, 'exit status 0';
 };
 
 # --- json shape ------------------------------------------------------------
@@ -142,18 +158,22 @@ subtest '--json output shape' => sub {
     like $out, qr/\n\z/, 'newline terminated';
     my $j = eval { decode_json($out) };
     ok ref $j eq 'HASH', 'output is a JSON object' or return diag $out;
-    is_deeply [ sort keys %$j ], [ qw(agents ok pinged) ], 'exact key set';
+    is_deeply [ sort keys %$j ], [ qw(agents failed ok pinged) ], 'exact key set';
     like $out, qr/"ok":1\b/,      'ok is a JSON number 1, not a string';
     like $out, qr/"agents":2\b/,  'agents is a JSON number';
     like $out, qr/"pinged":2\b/,  'pinged is a JSON number';
-    is_deeply $j, { ok => 1, agents => 2, pinged => 2 }, 'values';
+    is_deeply $j, { ok => 1, agents => 2, pinged => 2, failed => [] }, 'values';
+    like $out, qr/"failed":\[\]/, 'failed is an empty JSON array when all phases pass';
+    is $LAST_EXIT, 0, 'all phases pass: exit status 0';
     is_deeply [ sort map { $_->{name} } @{ $ping_calls[0]{hosts} } ], [ qw(host-a host-b) ],
         'ping_all received the registered hosts';
 
     # Without --json the output is the human summary, not JSON.
     reset_run();
     ($ok, $err, $out) = run_maintain({});
-    like $out, qr/^Maintenance run: 2\/2 agents pinged/, 'text mode summary';
+    like $out, qr/^Maintenance run: 2\/2 agents pinged, dispatcher cert checked\.$/, 'text mode summary';
+    unlike $out, qr/failed/i, 'text mode names no failed phase when all pass';
+    is $LAST_EXIT, 0, 'text mode, all pass: exit status 0';
     unlike $out, qr/^\{/, 'text mode is not JSON';
 };
 
@@ -166,12 +186,16 @@ subtest 'phase isolation: one failing phase does not stop the others' => sub {
         $die_in{$bad} = 1;
         my ($ok, $err, $out) = run_maintain({ json => 1 });
         ok $ok, "$bad dies: mode_maintain itself does not die" or diag $err;
+        is $LAST_EXIT, 1, "$bad dies: exit status 1";
         is $phase_ran{$_}, 1, "$bad dies: phase $_ ran" for 'ping', @steps;
         is_deeply [ err_phases() ], [ $bad ], "$bad dies: only $bad logged as ERR";
         my ($e) = errs();
         like $e->[1]{ERROR}, qr/\Q$bad\E boom/, "$bad dies: ERR carries the cause";
         is $e->[1]{ACTION}, 'maintain', "$bad dies: ERR is tagged ACTION=maintain";
         my $j = eval { decode_json($out) } || {};
+        is $j->{ok}, 0, "$bad dies: json ok is 0";
+        is_deeply $j->{failed}, [ $bad ], "$bad dies: json failed lists $bad";
+        is $j->{agents}, 2, "$bad dies: json still reports agents";
         is $j->{pinged}, ($bad eq 'ping' ? 0 : 2), "$bad dies: pinged count reflects ping outcome";
         ok scalar(grep { $_->[0] eq 'INFO' && $_->[1]{ACTION} eq 'maintain' } @log),
             "$bad dies: closing INFO summary still logged";
@@ -180,10 +204,27 @@ subtest 'phase isolation: one failing phase does not stop the others' => sub {
     # Every phase failing at once: all reported, all attempted.
     reset_run();
     %die_in = map { $_ => 1 } qw(ping rotate broadcast expire purge);
-    my ($ok) = run_maintain({ json => 1 });
+    my ($ok, undef, $out) = run_maintain({ json => 1 });
     ok $ok, 'all phases failing: still no die';
     is_deeply [ err_phases() ], [ sort qw(ping rotate broadcast expire purge) ],
         'all phases failing: each one reported';
+    is $LAST_EXIT, 1, 'all phases failing: exit status 1';
+    my $aj = eval { decode_json($out) } || {};
+    is $aj->{ok}, 0, 'all phases failing: json ok is 0';
+    is_deeply $aj->{failed}, [ qw(ping rotate broadcast expire purge) ],
+        'all phases failing: json lists every phase, in run order';
+    ok scalar(grep { $_->[0] eq 'INFO' && $_->[1]{ACTION} eq 'maintain' } @log),
+        'all phases failing: closing INFO summary still logged';
+
+    # Text mode names the failed phases and still exits non-zero.
+    reset_run();
+    %die_in = map { $_ => 1 } qw(rotate purge);
+    ($ok, undef, $out) = run_maintain({});
+    is $LAST_EXIT, 1, 'text mode: exit status 1';
+    like $out, qr/^Maintenance run: 2\/2 agents pinged, dispatcher cert checked\.$/m,
+        'text mode: summary line kept';
+    like $out, qr/^Maintenance FAILED in phase\(s\): rotate, purge$/m,
+        'text mode: failed phases named';
 };
 
 # --- real phases against the temp tree --------------------------------------
@@ -197,6 +238,7 @@ subtest 'real phases: purge reaps expired run records only' => sub {
     delete @phase_ran{qw(rotate broadcast expire)};
     my ($ok, $err) = run_maintain({});
     ok $ok, 'runs' or diag $err;
+    is $LAST_EXIT, 0, 'real phases: exit status 0';
     ok !-e "$TMP/runs/old.json", 'expired record purged';
     ok -e "$TMP/runs/fresh.json", 'fresh record kept';
     is_deeply [ err_phases() ], [], 'real rotate/broadcast/expire/purge raised no ERR';

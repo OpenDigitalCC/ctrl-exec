@@ -74,6 +74,19 @@ Generate the control-host key and certificate.
 .B rotate-cert
 Rotate the control-host certificate and broadcast the new serial.
 .TP
+.B maintain
+Run one maintenance pass: ping all agents (renewing certificates that are past
+half-life), rotate and broadcast the control-host certificate, expire stale
+agents and purge expired run records. Every phase runs even if another fails.
+Exits 0 when all phases succeeded; if any failed, names them (or lists them in
+the
+.B failed
+array with
+.B ok
+0 under
+.BR \-\-json )
+and exits 1.
+.TP
 .B serial-status
 Show the control-host serial and per-agent serial state.
 .SH OPTIONS

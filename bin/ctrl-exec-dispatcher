@@ -307,12 +307,16 @@ sub mode_ping ($opts, @hosts) {
 #   2. Rotates the dispatcher's own cert when it nears expiry, broadcasts the new
 #      serial to agents, and expires agents long out of contact.
 # Each phase is independent: a failure in one is logged and does not stop the rest.
+# Failed phases are collected and reported: --json gives ok:0 and a "failed" array
+# (always present, empty when all passed), the text output names them, and the
+# process exits 1 (as `run`/`wait` do for failure) so a timer or monitor sees it.
 sub mode_maintain ($opts) {
     my $config = _load_config();
 
     my $agents = eval { Exec::Registry::list_agents() } // [];
     my @hosts  = map { $_->{hostname} } grep { defined $_->{hostname} } @$agents;
 
+    my @failed;
     my $pinged = 0;
     if (@hosts) {
         my $results = eval {
@@ -324,6 +328,7 @@ sub mode_maintain ($opts) {
         };
         if ($@) {
             Exec::Log::log_action('ERR', { ACTION => 'maintain', PHASE => 'ping', ERROR => $@ });
+            push @failed, 'ping';
         }
         else {
             $pinged = scalar @$results;
@@ -342,9 +347,10 @@ sub mode_maintain ($opts) {
         [ 'expire',    sub { Exec::Rotation::expire_stale_agents(config => $config) } ],
         [ 'purge',     sub { Exec::RunStore::purge() } ],
     ) {
-        eval { $step->[1]->(); 1 }
-            or Exec::Log::log_action('ERR',
-                { ACTION => 'maintain', PHASE => $step->[0], ERROR => $@ });
+        next if eval { $step->[1]->(); 1 };
+        Exec::Log::log_action('ERR',
+            { ACTION => 'maintain', PHASE => $step->[0], ERROR => $@ });
+        push @failed, $step->[0];
     }
 
     Exec::Log::log_action('INFO',
@@ -352,12 +358,19 @@ sub mode_maintain ($opts) {
 
     if ($opts->{json}) {
         require JSON;
-        print JSON::encode_json({ ok => 1, agents => scalar @hosts, pinged => $pinged }), "\n";
+        print JSON::encode_json({
+            ok     => (@failed ? 0 : 1),
+            agents => scalar @hosts,
+            pinged => $pinged,
+            failed => \@failed,
+        }), "\n";
     }
     else {
         print "Maintenance run: $pinged/" . scalar(@hosts) . " agents pinged, "
             . "dispatcher cert checked.\n";
+        print "Maintenance FAILED in phase(s): " . join(', ', @failed) . "\n" if @failed;
     }
+    exit 1 if @failed;
 }
 
 sub mode_list_agents ($opts) {
@@ -1106,6 +1119,8 @@ Modes:
                              [--agent-port <n>] [--lookup-by ip|hostname]
   list-locks                 Show currently held script locks
   rotate-cert                Rotate dispatcher certificate and broadcast new serial
+  maintain                   One maintenance pass (ping/renew, rotate, expire, purge);
+                             exit 1 if any phase failed
   serial-status              Show dispatcher serial and per-agent serial state
   unpair <hostname>          Remove a paired agent from the registry
 
