@@ -36,12 +36,20 @@ subtest 'generate_key_and_csr: missing hostname dies' => sub {
     like $@, qr/hostname required/, 'dies without hostname';
 };
 
+# store_certs adds the CA to the agent's CA bundle by fingerprint, so it needs
+# a real certificate (T-061).
+my $ca_dir = tempdir(CLEANUP => 1);
+system('openssl', 'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1',
+       '-nodes', '-keyout', "$ca_dir/ca.key", '-out', "$ca_dir/ca.crt", '-days', '2',
+       '-subj', '/CN=test-ca') == 0 or die "cannot make a test CA\n";
+my $CA_PEM = do { open my $fh, '<', "$ca_dir/ca.crt" or die $!; local $/; <$fh> };
+
 subtest 'store_certs: writes all three files' => sub {
     my $dir = tempdir(CLEANUP => 1);
 
     Exec::Agent::AgentPairing::store_certs(
         cert_pem => "FAKE CERT\n",
-        ca_pem   => "FAKE CA\n",
+        ca_pem   => $CA_PEM,
         key_pem  => "FAKE KEY\n",
         cert_dir => $dir,
     );
@@ -55,7 +63,7 @@ subtest 'store_certs: key file is mode 0600' => sub {
     my $dir = tempdir(CLEANUP => 1);
     Exec::Agent::AgentPairing::store_certs(
         cert_pem => "CERT\n",
-        ca_pem   => "CA\n",
+        ca_pem   => $CA_PEM,
         key_pem  => "KEY\n",
         cert_dir => $dir,
     );
@@ -67,13 +75,21 @@ subtest 'store_certs: cert content correct' => sub {
     my $dir = tempdir(CLEANUP => 1);
     Exec::Agent::AgentPairing::store_certs(
         cert_pem => "MY CERT DATA\n",
-        ca_pem   => "MY CA DATA\n",
+        ca_pem   => $CA_PEM,
         key_pem  => "MY KEY DATA\n",
         cert_dir => $dir,
     );
     open my $fh, '<', "$dir/agent.crt" or die $!;
     my $content = do { local $/; <$fh> };
     is $content, "MY CERT DATA\n", 'cert content preserved';
+};
+
+subtest 'store_certs: a CA that is not a certificate is refused before any write' => sub {
+    my $dir = tempdir(CLEANUP => 1);
+    eval { Exec::Agent::AgentPairing::store_certs(
+        cert_pem => "CERT\n", ca_pem => "NOT A CERT\n", key_pem => "KEY\n", cert_dir => $dir) };
+    like $@, qr/no certificate/, 'dies';
+    ok !-e "$dir/agent.crt" && !-e "$dir/ca.crt", 'nothing written';
 };
 
 subtest 'store_certs: missing required arg dies' => sub {

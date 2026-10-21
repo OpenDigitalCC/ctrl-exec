@@ -119,18 +119,20 @@ Agent host (`/etc/ctrl-exec-agent/`)
 ```
 agent.key             Agent's private key (0640, root:ctrl-exec-agent)
 agent.crt             Agent's cert, signed by dispatcher CA (0640, root:ctrl-exec-agent)
-ca.crt                CA cert from ctrl-exec (0644)
+ca.crt                CA bundle: one CA cert per paired dispatcher CA (0644)
 agent.conf            Port, cert paths, optional script_dirs and tags
 scripts.conf          Allowlist: name = /absolute/path
 ```
 
 The trusted-dispatcher map (`ctrl-exec-dispatchers`) replaces the old single
-`ctrl-exec-serial` file (0.9.0). Each line maps a trusted dispatcher's cert
-serial to its `dispatcher_id`. `/run`, `/ping`, `/result`, and
-`/capabilities` are accepted only when the connecting cert's serial is a key
-in the map; the matched `dispatcher_id` drives permission and attribution.
-Pairing appends a line (one agent can serve several distinct dispatchers, each
-chaining to the shared CA root). The map now lives in the agent-writable state
+`ctrl-exec-serial` file (0.9.0). Each line maps a trusted dispatcher cert,
+named by its issuing CA's SHA-256 fingerprint and its serial, to its
+`dispatcher_id` (0.14; a pre-0.14 `<hex-serial> <dispatcher-id>` line is
+upgraded in place on load). `/run`, `/ping`, `/result`, `/rotate-serial` and
+`/capabilities` are accepted only when the connecting cert's issuing CA and
+serial match an entry; the matched `dispatcher_id` drives permission and
+attribution. Pairing appends a line, and appends the dispatcher's CA to the
+`ca.crt` bundle (one agent can serve several distinct dispatchers). The map now lives in the agent-writable state
 directory (`/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers`) rather than the
 root-owned config dir, because the agent (a non-root service user) must rewrite
 it in place during cert rotation. The path is configurable via
@@ -148,7 +150,7 @@ Runtime directories
 Agent host (`/var/lib/ctrl-exec-agent/`)
 
 ```
-ctrl-exec-dispatchers               Trusted-dispatcher map: <hex-serial> <dispatcher-id>, one per line (agent-writable)
+ctrl-exec-dispatchers               Trusted-dispatcher map: <ca-fingerprint> <hex-serial> <dispatcher-id>, one per line (agent-writable)
 runs/<dispatcher-id>/<reqid>.json   Async result store, partitioned by owning dispatcher
 ```
 
@@ -1033,24 +1035,54 @@ so the caller can do other work between the two calls.
   `{ ok => 0, error }`. Options: `sock` (required), `nonce` (required).
 
 `store_certs(%opts)`
-: Writes `agent.crt` (0640), `agent.key` (0640), `ca.crt` (0644) to `cert_dir`.
-  Uses atomic rename via temp file. Sets group ownership to `ctrl-exec-agent`
-  if the group exists on the system.
+: Writes `agent.crt` (0640) and `agent.key` (0640) to `cert_dir` and appends
+  the dispatcher's CA to the `ca.crt` bundle (0644) unless its fingerprint is
+  already there (`add_to_ca_bundle`). Upgrades a pre-0.14 map against the
+  bundle first, then records the dispatcher under its CA (superseding the same
+  id's entries under any other CA). Refuses a `ca_pem` that holds no
+  certificate before writing anything. Uses atomic rename via temp file. Sets
+  group ownership to `ctrl-exec-agent` if the group exists on the system.
+
+`load_ca_bundle($path)`, `free_ca_bundle($bundle)`, `ca_bundle_fingerprints($path)`
+: Read the CA bundle into `[ { fpr, pem, x509 }, ... ]` (file order, one per
+  distinct certificate; the Net::SSLeay X509 handles are the caller's to free),
+  or just the fingerprints. A CA fingerprint is the SHA-256 of the
+  certificate's DER as 64 lowercase hex characters.
+
+`cert_issuers($x509, $bundle)`, `pem_issuers($pem, $bundle)`
+: The fingerprints of the bundle CAs that issued a certificate: subject equals
+  the certificate's issuer and the signature verifies under the CA's key.
+  Names alone are not enough (CAs made with the defaults share one name).
 
 `pairing_status(%opts)`
 : Checks cert files, reads expiry via `openssl x509 -noout -enddate`.
   Returns `{ paired => 1, expiry }` or `{ paired => 0, reason }`.
 
 `load_trusted_dispatchers(%opts)`
-: Reads the trusted-dispatcher map file (one `<hex-serial> <dispatcher-id>`
-  per line). Returns a hashref `{ '<hex-serial>' => '<dispatcher-id>', ... }`.
-  Replaces the old `load_dispatcher_serial`, which returned a single hex
-  string. Optional: `path` (default `/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers`).
+: Reads the trusted-dispatcher map file (one `<ca-fingerprint> <hex-serial>
+  <dispatcher-id>` per line). Returns a hashref
+  `{ '<ca-fingerprint> <hex-serial>' => '<dispatcher-id>', ... }`. With
+  `ca_path`, a pre-0.14 two-field line is given the fingerprint of each CA in
+  that bundle and the file is rewritten (logged `trusted-map-upgrade`);
+  without it, or with no readable CA, such a line stays `{ '<hex-serial>' =>
+  ... }` and matches under any CA, as before. Options: `path` (required),
+  `ca_path`.
 
-`dispatcher_trusted($peer_serial, $trusted)`
-: Resolves a connecting peer against the map. Returns the matched
-  `dispatcher_id` if `$peer_serial` is a key in `$trusted`, otherwise `undef`.
+`trusted_for_issuers($trusted, $issuers)`, `revoked_for_issuers($revoked, $issuers)`
+: The view of the map (or the revocation list) for a peer whose cert the CAs
+  in `@$issuers` issued, keyed by serial alone: the accept loop builds these
+  per connection from `Exec::Agent::Server::peer_issuers` and hands them to
+  `handle_connection`.
+
+`dispatcher_trusted($peer_serial, $view)`
+: Resolves a connecting peer within its issuer view. Returns the matched
+  `dispatcher_id` if `$peer_serial` is a key in the view, otherwise `undef`.
   This is the per-request trust gate; callers refuse the request on `undef`.
+
+`add_trusted_dispatcher(%opts)`, `remove_trusted_dispatcher(%opts)`
+: Add (or update) and remove one entry. Both require `issuer` (a fingerprint
+  or an arrayref of them) and act under it only; `add` also takes `supersede`
+  (pairing) and both take `ca_path` for the upgrade on the way.
 
 HTTP response reading
 : `submit_pairing_request` and `await_pairing_result` read headers
@@ -1206,9 +1238,11 @@ sub mode_serve {
     my $config    = Exec::Agent::Config::load_config($CONFIG_PATH);
     my $allowlist = Exec::Agent::Config::load_allowlist($ALLOWLIST_PATH);
     my $revoked   = Exec::Agent::AgentPairing::load_revoked_serials(...);
-    # Trusted-dispatcher map: { '<hex-serial>' => '<dispatcher-id>', ... }
+    # CA bundle, and the map keyed { '<ca-fpr> <hex-serial>' => '<id>', ... }
+    my $ca_bundle = Exec::Agent::AgentPairing::load_ca_bundle($config->{ca});
     my $trusted   = Exec::Agent::AgentPairing::load_trusted_dispatchers(
-                        path => $config->{trusted_dispatchers_path});
+                        path => $config->{trusted_dispatchers_path},
+                        ca_path => $config->{ca});
 
     # The reload closure is top-level in mode_serve (not local $SIG{HUP}).
     # It closes over $allowlist, $revoked, $trusted and reassigns them.
@@ -1262,14 +1296,15 @@ sub mode_serve {
   here as handshake errors, not inside `handle_connection`.
 
 `handle_connection` signature
-: `handle_connection($conn, $peer, $allowlist, $config, $revoked, $trusted, $peer_serial)`
+: `handle_connection($conn, $peer, $allowlist, $config, $revoked, $trusted, $peer_serial, $schemas, $version, $skipped, $peer_issuers)`
 
   All variables come from `mode_serve`'s scope and are passed explicitly - there
   is no closure over them. `$peer_serial` is a plain lowercase hex string (or
-  `''`) extracted before fork. `$revoked` is a hashref keyed by hex serial.
-  `$trusted` is the trusted-dispatcher map: a hashref
-  `{ '<hex-serial>' => '<dispatcher-id>', ... }` loaded from
-  `ctrl-exec-dispatchers`. Resolve the connecting peer with
+  `''`) extracted before fork; `$peer_issuers` is the arrayref of fingerprints
+  of the bundle CAs that issued the peer's cert (`Server::peer_issuers`, also
+  before fork). `$revoked` and `$trusted` are the views for those issuers
+  (`revoked_for_issuers`, `trusted_for_issuers`): hashrefs keyed by hex
+  serial, `$trusted` mapping to `dispatcher_id`. Resolve the connecting peer with
   `Exec::Agent::AgentPairing::dispatcher_trusted($peer_serial, $trusted)`,
   which returns the matched `dispatcher_id` or `undef`; an `undef` result
   means the serial is not a trusted dispatcher and the request is refused.

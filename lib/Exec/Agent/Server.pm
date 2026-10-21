@@ -33,7 +33,9 @@ use Exec::Log                 qw();
 # --- connection handler (runs in forked child) ---
 # Reads raw HTTP/1.0 request from IO::Socket::SSL, dispatches, sends response.
 
-# Authenticate the calling dispatcher by its cert serial against the trusted map.
+# Authenticate the calling dispatcher by its cert serial against the trusted map
+# (the view for the CA that issued the caller's cert, so an entry under another
+# CA never matches).
 # Returns the dispatcher id on success. On a serial mismatch it sends the 403,
 # logs a serial-reject (with the request's reqid, or '(none)' where there is none
 # yet), and returns undef - the caller then returns. The single place run/ping/
@@ -51,7 +53,11 @@ sub _require_dispatcher ($conn, $peer, $peer_serial, $trusted, $reqid = undef) {
     return;
 }
 
-sub handle_connection ($conn, $peer, $allowlist, $config, $revoked, $trusted, $peer_serial = undef, $schemas = undef, $version = undef, $skipped = undef) {
+# $revoked and $trusted are the views for the peer's issuing CA
+# (AgentPairing::revoked_for_issuers / trusted_for_issuers), keyed by serial;
+# $peer_issuers is that CA's fingerprint list (peer_issuers), which rotation
+# records against the serials it adds.
+sub handle_connection ($conn, $peer, $allowlist, $config, $revoked, $trusted, $peer_serial = undef, $schemas = undef, $version = undef, $skipped = undef, $peer_issuers = undef) {
     # $peer_serial is extracted before fork() in the accept loop - after the
     # parent closes its copy of $conn the SSL object is invalid in the child.
     $peer_serial //= '';
@@ -117,7 +123,7 @@ sub handle_connection ($conn, $peer, $allowlist, $config, $revoked, $trusted, $p
         handle_result($conn, $1, $peer, $config, $trusted, $peer_serial);
     }
     elsif ($method eq 'POST' && $path eq '/rotate-serial') {
-        handle_rotate_serial($conn, $body, $peer, $config, $trusted, $peer_serial);
+        handle_rotate_serial($conn, $body, $peer, $config, $trusted, $peer_serial, $peer_issuers);
     }
     elsif ($method eq 'POST' && $path eq '/renew') {
         handle_renew($conn, $body, $peer, $config);
@@ -140,7 +146,11 @@ sub handle_connection ($conn, $peer, $allowlist, $config, $revoked, $trusted, $p
 # from the request body: a dispatcher can only add/retire serials under its own
 # identity. This chains trust - each new serial is authorised by the
 # currently-trusted one, back to the original human-approved pairing.
-sub handle_rotate_serial ($conn, $body, $peer, $config, $trusted, $peer_serial) {
+#
+# The issuing CA comes from the caller too: a rotated dispatcher cert is issued
+# by the same dispatcher's CA, so the new serial is recorded under the CA that
+# issued the caller's cert, and a retire only touches entries under it.
+sub handle_rotate_serial ($conn, $body, $peer, $config, $trusted, $peer_serial, $peer_issuers = undef) {
     my $dispatcher = _require_dispatcher($conn, $peer, $peer_serial, $trusted);
     return unless defined $dispatcher;
 
@@ -180,21 +190,31 @@ sub handle_rotate_serial ($conn, $body, $peer, $config, $trusted, $peer_serial) 
 
     my $trusted_path = $config->{trusted_dispatchers_path}
                     // '/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers';
+    my @issuers = ref $peer_issuers eq 'ARRAY' ? @$peer_issuers : ();
 
     my $ok = eval {
+        # Fail closed: a serial is never recorded without its issuing CA.
+        die "issuing CA of the caller's certificate is not in the agent's CA bundle\n"
+            unless @issuers;
         if ($action eq 'add') {
             Exec::Agent::AgentPairing::add_trusted_dispatcher(
-                path => $trusted_path, serial => $new_serial, id => $dispatcher);
+                path => $trusted_path, serial => $new_serial, id => $dispatcher,
+                issuer => \@issuers, ca_path => $config->{ca});
         }
         else {
             # Retire: only a serial that currently belongs to THIS dispatcher's
-            # identity - never another dispatcher's, and a no-op if absent.
+            # identity under its CA - never another dispatcher's, and a no-op
+            # if absent.
             my $hex = Exec::CertInfo::serial_to_hex($new_serial);
-            my $map = Exec::Agent::AgentPairing::load_trusted_dispatchers(path => $trusted_path);
+            my $map = Exec::Agent::AgentPairing::trusted_for_issuers(
+                Exec::Agent::AgentPairing::load_trusted_dispatchers(
+                    path => $trusted_path, ca_path => $config->{ca}),
+                \@issuers);
             die "serial not owned by '$dispatcher'\n"
                 if exists $map->{$hex} && $map->{$hex} ne $dispatcher;
             Exec::Agent::AgentPairing::remove_trusted_dispatcher(
-                path => $trusted_path, serial => $new_serial);
+                path => $trusted_path, serial => $new_serial,
+                issuer => \@issuers, ca_path => $config->{ca});
         }
         1;
     };
@@ -640,6 +660,7 @@ sub handle_renew_complete ($conn, $body, $peer, $config) {
         cert_pem    => $cert,
         ca_path     => $config->{ca},
         key_path    => $config->{key},
+        cert_path   => $config->{cert},
         staged_path => $staged,
     );
 
@@ -830,6 +851,20 @@ sub peer_serial ($conn) {
     } // '';
     Net::SSLeay::X509_free($cert);
     return lc $hex;
+}
+
+# The fingerprints of the CAs in $bundle (AgentPairing::load_ca_bundle) that
+# issued the peer's certificate on $conn: an arrayref, normally of one. Empty
+# when there is no peer certificate or no bundle CA issued it - such a peer
+# matches no issuer-keyed entry in the trusted map. Called in the accept-loop
+# parent before fork, like peer_serial, and from the certificate itself rather
+# than the handshake, so it holds for a resumed session too.
+sub peer_issuers ($conn, $bundle) {
+    my $ssl  = eval { $conn->_get_ssl_object } or return [];
+    my $cert = eval { Net::SSLeay::get_peer_certificate($ssl) } or return [];
+    my @fprs = eval { Exec::Agent::AgentPairing::cert_issuers($cert, $bundle) };
+    Net::SSLeay::X509_free($cert);
+    return \@fprs;
 }
 
 # Bounds for draining a refused connection (see drain_refused).

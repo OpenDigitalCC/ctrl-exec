@@ -265,10 +265,16 @@ MSG
         path => $revoked_path,
     );
 
+    # The CA bundle (agent.conf 'ca'): which of its CAs issued a peer's
+    # certificate decides which trusted-map and revocation entries apply to it.
+    # Loading the map with it upgrades a pre-0.14 map in place.
+    my $ca_bundle = Exec::Agent::AgentPairing::load_ca_bundle($config->{ca});
+
     my $trusted_path = $config->{trusted_dispatchers_path}
                     // '/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers';
     my $trusted = Exec::Agent::AgentPairing::load_trusted_dispatchers(
-        path => $trusted_path,
+        path    => $trusted_path,
+        ca_path => $config->{ca},
     );
 
     my %rate_state;
@@ -320,8 +326,14 @@ MSG
             Exec::Agent::AgentPairing::load_revoked_serials(path => $revoked_path)
         };
         warn "Revocation list reload failed: $@\n" if $@;
+        # 'ca' is restart-only, but the file it names may have changed (a
+        # pairing appends to it), so the bundle is read again. The TLS listener
+        # keeps the CAs it loaded at startup.
+        Exec::Agent::AgentPairing::free_ca_bundle($ca_bundle);
+        $ca_bundle = Exec::Agent::AgentPairing::load_ca_bundle($config->{ca});
         $trusted = eval {
-            Exec::Agent::AgentPairing::load_trusted_dispatchers(path => $trusted_path)
+            Exec::Agent::AgentPairing::load_trusted_dispatchers(
+                path => $trusted_path, ca_path => $config->{ca})
         } // {};
         warn "Trusted-dispatcher map reload failed: $@\n" if $@;
         %rate_state = ();
@@ -503,8 +515,16 @@ MSG
         # dispatcher as "no response from child". The volume limit now guards
         # against CA-signed-but-unpaired peers; the probe limit (handshake
         # failures) and max_children below apply to everyone as before.
-        my $peer_serial = Exec::Agent::Server::peer_serial($conn);
-        my $trusted_id  = Exec::Agent::AgentPairing::dispatcher_trusted($peer_serial, $trusted);
+        #
+        # Trust is keyed by issuing CA and serial: only the map and revocation
+        # entries under the CA that issued this peer's certificate apply to it,
+        # so a certificate from another trusted CA carrying a trusted serial is
+        # not that dispatcher.
+        my $peer_serial  = Exec::Agent::Server::peer_serial($conn);
+        my $peer_issuers = Exec::Agent::Server::peer_issuers($conn, $ca_bundle);
+        my $trusted_view = Exec::Agent::AgentPairing::trusted_for_issuers($trusted, $peer_issuers);
+        my $revoked_view = Exec::Agent::AgentPairing::revoked_for_issuers($revoked, $peer_issuers);
+        my $trusted_id   = Exec::Agent::AgentPairing::dispatcher_trusted($peer_serial, $trusted_view);
 
         unless (defined $trusted_id) {
             if (Exec::RateLimit::check($peer, \%rate_state, $rate_config)) {
@@ -554,7 +574,7 @@ MSG
         if ($pid == 0) {
             # Child: close server socket, handle connection, exit
             $server->close(SSL_no_shutdown => 1);
-            Exec::Agent::Server::handle_connection($conn, $peer, $allowlist, $config, $revoked, $trusted, $peer_serial, $schemas, $VERSION, $skipped);
+            Exec::Agent::Server::handle_connection($conn, $peer, $allowlist, $config, $revoked_view, $trusted_view, $peer_serial, $schemas, $VERSION, $skipped, $peer_issuers);
             $conn->close;
             exit 0;
         }

@@ -731,15 +731,22 @@ cert rotation. Holding the map in the agent-writable state directory does not
 weaken the lateral-reconnaissance protection: a serial is inert without a
 CA-signed cert bearing it (the CA key is operator-held), and an attacker on a
 compromised peer host cannot write *this* host's map. The map holds one line per
-trusted dispatcher in the format `<hex-serial> <dispatcher-id>`; lines
-beginning with `#` are comments. The map is loaded at startup and reloaded on
+trusted dispatcher cert in the format `<ca-fingerprint> <hex-serial>
+<dispatcher-id>`, `<ca-fingerprint>` being the SHA-256 fingerprint of the CA
+in the agent's CA bundle that issued that cert; lines beginning with `#` are
+comments. A pre-0.14 two-field line (`<hex-serial> <dispatcher-id>`) is
+upgraded in place on first load with the fingerprint of the CA the agent held
+then. The map is loaded at startup and reloaded on
 SIGHUP. This key replaces the former `dispatcher_serial_path` /
 `ctrl-exec-serial` single-serial file.
 
 On every `/run`, `/ping`, `/result`, and `/capabilities` request, the agent
-checks whether the connecting client cert's serial is a *key* in the map. A
-request whose peer serial is not a key is rejected with a 403. When the serial
-matches, the dispatcher *identity* recorded against that key is used for
+checks whether the connecting client cert's issuing CA *and* serial match an
+entry in the map. The issuing CA is the CA in the bundle whose name is the
+cert's issuer and whose key verifies the cert's signature, so a cert from
+another trusted CA that carries a trusted serial matches nothing: holding one
+dispatcher CA's key does not let anyone act as a dispatcher of another CA. A
+request that matches no entry is rejected with a 403. When it matches, the dispatcher *identity* recorded against that key is used for
 permission decisions and attribution. If the map is empty (an unpaired or
 legacy agent that has not yet been re-paired), `/capabilities` logs
 `capabilities-no-serial` and skips the restriction; `/run`, `/ping`, and
@@ -754,9 +761,12 @@ Native multi-dispatcher support
 : An agent can serve more than one dispatcher. Pairing *appends* a dispatcher
   to the map rather than replacing the existing entry, so re-pairing to enrol
   an additional dispatcher leaves existing dispatchers trusted. Each dispatcher
-  presents its own cert; all dispatcher certs and the agent cert chain to a
-  shared CA root. Independent per-dispatcher CAs with SNI are explicitly out of
-  scope. A dedicated single-operator agent instance remains available as
+  presents its own cert. The agent's `ca.crt` is a bundle: pairing appends the
+  dispatcher's CA (once per fingerprint) instead of replacing the CAs already
+  trusted, and map entries are keyed by issuing CA, so dispatchers with
+  different CAs cannot impersonate each other at the agent. Re-pairing a
+  dispatcher id under a different CA ends that id's entries under its old CA.
+  A renewed agent cert must come from the CA that issued the current one. A dedicated single-operator agent instance remains available as
   optional defence-in-depth, but it is not the multi-dispatcher mechanism.
 
 Async result ownership
@@ -884,8 +894,14 @@ mTLS connection, after the handshake verifies the CA signature, the peer cert
 serial is checked against this list. A revoked cert is rejected with a 403
 and a syslog warning before any request is processed.
 
-The file contains one serial per line. All of the following formats are accepted
-and normalised to lowercase hex on load:
+A line `<serial>` revokes that serial in a cert from any CA (the pre-0.14 form,
+still honoured, so an existing revocation never loosens). A line
+`<ca-fingerprint> <serial>` revokes it only in certs issued by that CA (the
+SHA-256 fingerprint of the CA certificate, 64 hex characters), so the same
+serial issued by another dispatcher's CA keeps working.
+
+The serial is given in any of the following formats, all normalised to
+lowercase hex on load:
 
 - Plain hex: `deadbeef`
 - Colon-separated: `DE:AD:BE:EF` (as returned by some tools and `IO::Socket::SSL`)

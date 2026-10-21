@@ -86,24 +86,47 @@ sub store_certs (%opts) {
     # (over the run channel, as the service user) without re-pairing. Secrets
     # (key/cert/CA) stay in the root-owned config dir.
     my $trusted_path      = $opts{trusted_path}        // '/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers';
+    my $ca_path           = "$cert_dir/ca.crt";
+
+    # Refuse a CA that is not a certificate before anything is written, so a
+    # bad delivery cannot leave a half-stored pairing behind.
+    my @ca_pems = pem_certs($ca_pem);
+    croak "ca_pem holds no certificate" unless @ca_pems;
+    defined pem_fingerprint($_) or croak "ca_pem holds an unreadable certificate"
+        for @ca_pems;
+
+    # A map written before 0.14 carries no issuing CA. Bring it to the issuer-
+    # keyed form against the CA bundle as it is NOW, before this dispatcher's CA
+    # joins it: an existing entry belongs to the CA(s) the agent trusted when it
+    # was written, never to the dispatcher pairing now.
+    load_trusted_dispatchers(path => $trusted_path, ca_path => $ca_path)
+        if -f $trusted_path;
 
     _write_file("$cert_dir/agent.crt", $cert_pem, 0640);
     _write_file("$cert_dir/agent.key", $key_pem,  0640);
-    _write_file("$cert_dir/ca.crt",   $ca_pem,   0644);
+
+    # ca.crt is the agent's CA bundle: the dispatcher's CA is appended (once,
+    # by fingerprint), not written over the CAs of dispatchers paired before.
+    my @issuers = add_to_ca_bundle(path => $ca_path, pem => $ca_pem);
 
     # Record the approving dispatcher in the trusted-dispatcher map, keyed by its
-    # cert serial and carrying its stable identity. Appended, not overwritten, so
-    # an agent already paired with one dispatcher keeps trusting it when a second
-    # one pairs. The map gates /run, /ping, /result and /capabilities and drives
-    # per-call attribution. See load_trusted_dispatchers / dispatcher_trusted.
+    # issuing CA and cert serial and carrying its stable identity. Appended, not
+    # overwritten, so an agent already paired with one dispatcher keeps trusting
+    # it when a second one pairs. The map gates /run, /ping, /result and
+    # /capabilities and drives per-call attribution. See load_trusted_dispatchers
+    # / dispatcher_trusted.
     if (length $dispatcher_serial) {
         # Pairing runs as root; make sure the state directory exists and is owned
         # by the service user so later in-place rewrites (cert rotation) succeed.
         _ensure_owned_dir(dirname($trusted_path), $group);
+        # supersede: a re-pair of the same identity under a different CA ends
+        # that identity's trust under its old CA, as overwriting ca.crt did.
         add_trusted_dispatcher(
-            path   => $trusted_path,
-            serial => $dispatcher_serial,
-            id     => (length $dispatcher_id ? $dispatcher_id : $dispatcher_serial),
+            path      => $trusted_path,
+            serial    => $dispatcher_serial,
+            id        => (length $dispatcher_id ? $dispatcher_id : $dispatcher_serial),
+            issuer    => \@issuers,
+            supersede => 1,
         );
     }
 
@@ -321,42 +344,299 @@ sub valid_dispatcher_id ($id) {
     return defined $id && $id =~ /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/ ? 1 : 0;
 }
 
-# Load the trusted-dispatcher map: the set of dispatcher cert serials this agent
-# accepts, each mapped to that dispatcher's stable identity. Tolerates an absent
-# file (returns {}). One entry per line: "<serial> <id>". The serial is
-# normalised to lowercase hex (serial_to_hex) so a decimal serial off the wire
-# matches a hex map entry; the id is validated. Lines beginning with # are
-# comments; malformed lines are skipped.
+# --- CA bundle -------------------------------------------------------------
 #
-# Returns hashref: { '<hex-serial>' => '<id>', ... }
-sub load_trusted_dispatchers (%opts) {
-    my $path = $opts{path} or croak "path required";
+# The agent's CA file (agent.conf 'ca', /etc/ctrl-exec-agent/ca.crt) is a
+# bundle: one PEM certificate per dispatcher CA the agent trusts. An install
+# paired before 0.14 holds one PEM, which is a bundle of one, so nothing moves on
+# upgrade. The TLS listener, self-ping and renewal validation all read it as a
+# CA file, and OpenSSL takes every certificate in it.
+#
+# A CA is named by its fingerprint: the SHA-256 of the certificate's DER, as 64
+# lowercase hex characters (Exec::CertInfo::fingerprint_from_path computes the
+# same value from a file).
 
-    my %trusted;
-    return \%trusted unless -f $path;
+# The PEM certificate blocks in $text, in order.
+sub pem_certs ($text) {
+    return () unless defined $text;
+    return $text =~ /(-----BEGIN CERTIFICATE-----\r?\n.*?-----END CERTIFICATE-----)/gs;
+}
+
+sub _valid_fpr ($fpr) {
+    return defined $fpr && $fpr =~ /\A[0-9a-f]{64}\z/ ? 1 : 0;
+}
+
+# Parse one PEM certificate into a Net::SSLeay X509 the caller frees, or undef.
+sub _x509_from_pem ($pem) {
+    require IO::Socket::SSL;   # loads and initialises Net::SSLeay
+    my $bio = Net::SSLeay::BIO_new(Net::SSLeay::BIO_s_mem()) or return;
+    Net::SSLeay::BIO_write($bio, $pem);
+    my $x509 = Net::SSLeay::PEM_read_bio_X509($bio);
+    Net::SSLeay::BIO_free($bio);
+    Net::SSLeay::ERR_clear_error() unless $x509;
+    return $x509 || undef;
+}
+
+sub _x509_fpr ($x509) {
+    my $f = Net::SSLeay::X509_get_fingerprint($x509, 'sha256') // '';
+    $f =~ s/://g;
+    $f = lc $f;
+    return _valid_fpr($f) ? $f : undef;
+}
+
+# Fingerprint of one PEM certificate, or undef when it does not parse.
+sub pem_fingerprint ($pem) {
+    my $x509 = _x509_from_pem($pem) or return;
+    my $fpr  = _x509_fpr($x509);
+    Net::SSLeay::X509_free($x509);
+    return $fpr;
+}
+
+# Load the CA bundle at $path: [ { fpr => '<64 hex>', pem => '...', x509 => ... } ]
+# in file order, one per distinct certificate. An absent or unreadable file, or
+# a block that does not parse, contributes nothing. The X509 handles are owned
+# by the caller: release them with free_ca_bundle.
+sub load_ca_bundle ($path) {
+    my @bundle;
+    my $text = defined $path ? Exec::FileUtil::slurp_maybe($path) : undef;
+    my %seen;
+    for my $pem (pem_certs($text)) {
+        my $x509 = _x509_from_pem($pem) or next;
+        my $fpr  = _x509_fpr($x509);
+        if (!defined $fpr || $seen{$fpr}++) {
+            Net::SSLeay::X509_free($x509);
+            next;
+        }
+        push @bundle, { fpr => $fpr, pem => $pem, x509 => $x509 };
+    }
+    return \@bundle;
+}
+
+sub free_ca_bundle ($bundle) {
+    return unless ref $bundle eq 'ARRAY';
+    for my $ca (@$bundle) {
+        Net::SSLeay::X509_free(delete $ca->{x509}) if $ca->{x509};
+    }
+}
+
+# The fingerprints of the CAs in the bundle at $path, in file order.
+sub ca_bundle_fingerprints ($path) {
+    my $bundle = load_ca_bundle($path);
+    my @fprs   = map { $_->{fpr} } @$bundle;
+    free_ca_bundle($bundle);
+    return @fprs;
+}
+
+# The fingerprints of the bundle CAs that issued the certificate $x509 (a
+# Net::SSLeay X509): the CA's subject is the certificate's issuer AND the
+# certificate's signature verifies under the CA's public key. Matching on the
+# name alone would not do: every dispatcher CA made with the defaults is called
+# "ctrl-exec CA". Normally one fingerprint; two only when one key signs two CA
+# certificates (a re-issued CA). Empty when no CA in the bundle issued it.
+sub cert_issuers ($x509, $bundle) {
+    return () unless $x509 && ref $bundle eq 'ARRAY';
+    my $issuer = Net::SSLeay::X509_get_issuer_name($x509);
+    my @fprs;
+    for my $ca (@$bundle) {
+        next unless $ca->{x509};
+        next unless Net::SSLeay::X509_NAME_cmp(
+            $issuer, Net::SSLeay::X509_get_subject_name($ca->{x509})) == 0;
+        my $pkey = Net::SSLeay::X509_get_pubkey($ca->{x509}) or next;
+        my $ok   = Net::SSLeay::X509_verify($x509, $pkey);
+        Net::SSLeay::EVP_PKEY_free($pkey);
+        push @fprs, $ca->{fpr} if defined $ok && $ok == 1;
+    }
+    # A failed verify leaves an entry on OpenSSL's per-thread error queue;
+    # clear it so it cannot surface in a later, unrelated TLS call in this
+    # process (the accept loop calls this for every connection).
+    Net::SSLeay::ERR_clear_error();
+    return @fprs;
+}
+
+# As cert_issuers, for a certificate in PEM form.
+sub pem_issuers ($pem, $bundle) {
+    my $x509 = _x509_from_pem($pem // '') or return ();
+    my @fprs = cert_issuers($x509, $bundle);
+    Net::SSLeay::X509_free($x509);
+    return @fprs;
+}
+
+# Add the CA certificate(s) in $opts{pem} to the bundle at $opts{path}, each
+# once: a certificate whose fingerprint is already in the bundle is not added
+# again. Existing content is kept as it is and the new certificates are
+# appended, so the CAs already trusted keep their place. The file is not
+# rewritten when nothing is new. Returns the fingerprints of the certificates in
+# $opts{pem}. Dies when $opts{pem} holds no readable certificate.
+sub add_to_ca_bundle (%opts) {
+    my $path = $opts{path} or croak "path required";
+    my @new  = pem_certs($opts{pem});
+    croak "no CA certificate to add" unless @new;
+
+    my $existing = Exec::FileUtil::slurp_maybe($path) // '';
+    my %have;
+    for my $pem (pem_certs($existing)) {
+        my $f = pem_fingerprint($pem);
+        $have{$f} = 1 if defined $f;
+    }
+
+    my (@fprs, %listed);
+    my $append = '';
+    for my $pem (@new) {
+        my $f = pem_fingerprint($pem) // croak "unreadable CA certificate";
+        push @fprs, $f unless $listed{$f}++;
+        next if $have{$f}++;
+        $append .= "$pem\n";
+    }
+
+    if (length $append) {
+        $existing .= "\n" if length $existing && $existing !~ /\n\z/;
+        _write_file($path, $existing . $append, 0644);
+    }
+    return @fprs;
+}
+
+# --- trusted-dispatcher map ------------------------------------------------
+#
+# The dispatchers this agent accepts. One entry per line:
+#
+#   <ca-fpr> <hex-serial> <dispatcher-id>
+#
+# <ca-fpr> is the fingerprint of the CA in the bundle that issued the
+# dispatcher's certificate. A connecting peer is a trusted dispatcher only when
+# both its issuing CA and its serial match an entry, so a certificate from
+# another trusted CA that carries the same serial is refused. Before 0.14 a line
+# was "<hex-serial> <dispatcher-id>"; such a line is upgraded in place on first
+# load (see load_trusted_dispatchers).
+#
+# In memory the map is { '<ca-fpr> <hex-serial>' => '<id>' }. A pre-0.14 line
+# that could not be upgraded (no CA bundle readable) stays { '<hex-serial>' =>
+# '<id>' } and matches that serial under any CA, as it did before. The request
+# handlers work on the view for one peer's issuing CA (trusted_for_issuers),
+# keyed by serial alone, and dispatcher_trusted resolves within that view.
+
+# Read the map file. Returns (\%map, \@legacy), @legacy being [hex, id] pairs
+# from pre-0.14 two-field lines.
+sub _read_trusted ($path) {
+    my (%trusted, @legacy);
+    return (\%trusted, \@legacy) unless -f $path;
 
     open my $fh, '<', $path
-        or do { warn "Cannot read trusted dispatchers '$path': $!\n"; return \%trusted; };
+        or do { warn "Cannot read trusted dispatchers '$path': $!\n"; return (\%trusted, \@legacy); };
     while (my $line = <$fh>) {
         chomp $line;
         $line =~ s/#.*$//;        # strip comments
         $line =~ s/^\s+|\s+$//g;  # strip surrounding whitespace
         next unless length $line;
-        my ($serial, $id) = split /\s+/, $line, 2;
-        $serial = Exec::CertInfo::serial_to_hex($serial // '');
-        next unless length $serial;
-        next unless defined $id && valid_dispatcher_id($id);
-        $trusted{$serial} = $id;
+        my @f = split /\s+/, $line;
+        if (@f == 3) {
+            my ($fpr, $serial, $id) = @f;
+            $fpr    = lc $fpr;
+            $serial = Exec::CertInfo::serial_to_hex($serial);
+            next unless _valid_fpr($fpr) && length $serial && valid_dispatcher_id($id);
+            $trusted{"$fpr $serial"} = $id;
+        }
+        elsif (@f == 2) {
+            my ($serial, $id) = @f;
+            $serial = Exec::CertInfo::serial_to_hex($serial);
+            next unless length $serial && valid_dispatcher_id($id);
+            push @legacy, [ $serial, $id ];
+        }
+        # anything else is malformed and skipped
     }
     close $fh;
-
-    return \%trusted;
+    return (\%trusted, \@legacy);
 }
 
-# Resolve a connecting peer's cert serial to its trusted dispatcher identity.
-# Returns the id string when the serial is trusted, or undef when it is not (or
-# when either input is empty). Normalises the serial the same way the loader
-# does, so a decimal serial from IO::Socket::SSL matches a hex map entry.
+sub _write_trusted ($path, $trusted) {
+    my $content = "# ctrl-exec trusted dispatchers: <ca-fingerprint> <serial> <id>, one per line.\n"
+                . "# Managed by pairing - do not edit by hand.\n";
+    for my $k (sort keys %$trusted) {
+        $content .= "$k $trusted->{$k}\n";
+    }
+    _write_file($path, $content, 0644);
+}
+
+# Load the trusted-dispatcher map. Tolerates an absent file (returns {}).
+# Serials are normalised to lowercase hex (serial_to_hex) and ids validated;
+# lines beginning with # are comments; malformed lines are skipped.
+#
+# Upgrade: with ca_path (the agent's CA bundle), each pre-0.14 two-field line is
+# given the issuing CA it had - the CA the agent trusted when the line was
+# written, which is the CA in the bundle - and the file is rewritten in the new
+# form. A bundle that somehow holds several CAs gives the line one entry per
+# CA, which is exactly what the agent accepted before. Rewriting is best effort:
+# when the file cannot be written, the upgrade holds in memory, is logged, and is
+# tried again on the next load. Without ca_path, or with no readable CA, a
+# two-field line is kept as it was (matching its serial under any CA).
+#
+# Returns hashref: { '<ca-fpr> <hex-serial>' => '<id>', ... }
+sub load_trusted_dispatchers (%opts) {
+    my $path = $opts{path} or croak "path required";
+
+    my ($trusted, $legacy) = _read_trusted($path);
+    return $trusted unless @$legacy;
+
+    my @fprs = defined $opts{ca_path} ? ca_bundle_fingerprints($opts{ca_path}) : ();
+    unless (@fprs) {
+        $trusted->{ $_->[0] } //= $_->[1] for @$legacy;
+        return $trusted;
+    }
+
+    for my $e (@$legacy) {
+        $trusted->{"$_ $e->[0]"} //= $e->[1] for @fprs;
+    }
+    if (eval { _write_trusted($path, $trusted); 1 }) {
+        Exec::Log::log_action('INFO', {
+            ACTION  => 'trusted-map-upgrade',
+            PATH    => $path,
+            ENTRIES => scalar(@$legacy),
+            CA      => join(',', @fprs),
+        });
+    }
+    else {
+        my $err = $@ || 'write failed'; $err =~ s/\s+\z//;
+        Exec::Log::log_action('WARNING', {
+            ACTION => 'trusted-map-upgrade',
+            PATH   => $path,
+            ERROR  => $err,
+        });
+    }
+    return $trusted;
+}
+
+sub _issuer_list ($issuer) {
+    my @list = ref $issuer eq 'ARRAY' ? @$issuer : (defined $issuer ? ($issuer) : ());
+    my %seen;
+    return grep { _valid_fpr($_) && !$seen{$_}++ } map { lc } @list;
+}
+
+# The part of a loaded map that applies to a peer whose certificate the CAs
+# @$issuers issued (Server::peer_issuers): { '<hex-serial>' => '<id>' }. Entries
+# under any other CA are left out. A pre-0.14 entry that could not be upgraded
+# applies whatever the issuer, as before. dispatcher_trusted resolves within
+# this view.
+sub trusted_for_issuers ($trusted, $issuers) {
+    my %want = map { $_ => 1 } _issuer_list($issuers);
+    my %view;
+    return \%view unless ref $trusted eq 'HASH';
+    # Un-upgraded lines first, so an issuer-keyed entry for the same serial
+    # overwrites them.
+    for my $k (sort { ($a =~ / /) <=> ($b =~ / /) || $a cmp $b } keys %$trusted) {
+        if ($k =~ /\A([0-9a-f]{64}) (\S+)\z/) {
+            $view{$2} = $trusted->{$k} if $want{$1};
+        }
+        elsif ($k !~ / /) {
+            $view{$k} //= $trusted->{$k};
+        }
+    }
+    return \%view;
+}
+
+# Resolve a connecting peer's cert serial to its trusted dispatcher identity,
+# within the view for that peer's issuing CA (trusted_for_issuers). Returns the
+# id string when the serial is trusted, or undef when it is not (or when either
+# input is empty). Normalises the serial the same way the loader does, so a
+# decimal serial from IO::Socket::SSL matches a hex map entry.
 sub dispatcher_trusted ($peer_serial, $trusted) {
     return unless ref $trusted eq 'HASH';
     my $hex = Exec::CertInfo::serial_to_hex($peer_serial // '');
@@ -369,12 +649,16 @@ sub dispatcher_trusted ($peer_serial, $trusted) {
 # This is the append-enrolment primitive: pairing a second dispatcher adds its
 # serial without unpairing the first; re-pairing the same dispatcher (new serial
 # after rotation/re-key) adds the new serial. Writes the file atomically. Dies
-# on an unusable serial or an invalid id.
+# on an unusable serial, an invalid id or no issuing CA.
 #
 # Required opts:
 #   path   => $str
 #   serial => $str   (any form accepted by serial_to_hex)
 #   id     => $str   (must satisfy valid_dispatcher_id)
+#   issuer => $fpr or [ $fpr, ... ]  (the CA(s) that issued that serial)
+# Optional:
+#   ca_path   => $str  (CA bundle, to upgrade a pre-0.14 map on the way)
+#   supersede => 1     (drop this id's entries under any other CA: pairing)
 sub add_trusted_dispatcher (%opts) {
     my $path = $opts{path} or croak "path required";
     my $hex  = Exec::CertInfo::serial_to_hex($opts{serial} // '');
@@ -382,55 +666,73 @@ sub add_trusted_dispatcher (%opts) {
     my $id   = $opts{id};
     croak "invalid dispatcher id '" . ($id // '') . "'"
         unless valid_dispatcher_id($id);
+    my @issuers = _issuer_list($opts{issuer});
+    croak "issuing CA fingerprint required" unless @issuers;
 
-    my $trusted = load_trusted_dispatchers(path => $path);
-    $trusted->{$hex} = $id;
-
-    my $content = "# ctrl-exec trusted dispatchers: <serial> <id>, one per line.\n"
-                . "# Managed by pairing - do not edit by hand.\n";
-    for my $s (sort keys %$trusted) {
-        $content .= "$s $trusted->{$s}\n";
+    my $trusted = load_trusted_dispatchers(path => $path, ca_path => $opts{ca_path});
+    if ($opts{supersede}) {
+        my %keep = map { $_ => 1 } @issuers;
+        for my $k (keys %$trusted) {
+            next unless $trusted->{$k} eq $id;
+            my ($fpr) = $k =~ /\A(\S+) /;
+            delete $trusted->{$k} unless defined $fpr && $keep{$fpr};
+        }
     }
-    _write_file($path, $content, 0644);
+    $trusted->{"$_ $hex"} = $id for @issuers;
+
+    _write_trusted($path, $trusted);
     return $trusted;
 }
 
-# Remove one trusted-dispatcher entry by serial, preserving every other entry.
-# This is the "remove" half of add-then-remove cert rotation: once agents have
-# adopted a dispatcher's new serial and the overlap window has passed, the old
-# serial is removed so the retired cert is no longer trusted. A no-op (returns 0)
-# if the serial is absent or the file does not exist; returns 1 when an entry was
+# Remove one trusted-dispatcher entry by issuing CA and serial, preserving every
+# other entry. This is the "remove" half of add-then-remove cert rotation: once
+# agents have adopted a dispatcher's new serial and the overlap window has
+# passed, the old serial is removed so the retired cert is no longer trusted. An
+# un-upgraded pre-0.14 line for the serial goes too. A no-op (returns 0) if the
+# serial is absent or the file does not exist; returns 1 when an entry was
 # removed. Writes atomically.
 #
 # Required opts:
 #   path   => $str
 #   serial => $str   (any form accepted by serial_to_hex)
+#   issuer => $fpr or [ $fpr, ... ]
+# Optional:
+#   ca_path => $str  (CA bundle, to upgrade a pre-0.14 map on the way)
 sub remove_trusted_dispatcher (%opts) {
     my $path = $opts{path} or croak "path required";
     my $hex  = Exec::CertInfo::serial_to_hex($opts{serial} // '');
     croak "invalid dispatcher serial" unless length $hex;
+    my @issuers = _issuer_list($opts{issuer});
+    croak "issuing CA fingerprint required" unless @issuers;
 
     return 0 unless -f $path;
-    my $trusted = load_trusted_dispatchers(path => $path);
-    return 0 unless exists $trusted->{$hex};
-    delete $trusted->{$hex};
-
-    my $content = "# ctrl-exec trusted dispatchers: <serial> <id>, one per line.\n"
-                . "# Managed by pairing - do not edit by hand.\n";
-    for my $s (sort keys %$trusted) {
-        $content .= "$s $trusted->{$s}\n";
+    my $trusted = load_trusted_dispatchers(path => $path, ca_path => $opts{ca_path});
+    my $removed = 0;
+    for my $k ($hex, map { "$_ $hex" } @issuers) {
+        $removed++ if defined delete $trusted->{$k};
     }
-    _write_file($path, $content, 0644);
+    return 0 unless $removed;
+
+    _write_trusted($path, $trusted);
     return 1;
 }
 
-# Load the revoked serials file into a hashref keyed by lowercase hex serial.
-# Tolerates absent file - returns empty hashref.
-# Format: one serial per line, hex string (as output by openssl x509 -serial,
-# with or without "serial=" prefix, upper or lower case - all normalised).
-# Lines beginning with # are treated as comments and ignored.
+# --- revoked serials -------------------------------------------------------
+
+# Load the revoked serials file. Tolerates an absent file - returns an empty
+# hashref. One entry per line, either:
 #
-# Returns hashref: { 'aabbcc...' => 1, ... }
+#   <ca-fpr> <serial>   the serial is revoked under that issuing CA only
+#   <serial>            the serial is revoked under every CA (the pre-0.14
+#                       form, still accepted: an existing revocation never
+#                       loosens)
+#
+# The serial is a hex string as output by openssl x509 -serial, with or without
+# a "serial=" prefix, upper or lower case - all normalised. Lines beginning with
+# # are treated as comments and ignored.
+#
+# Returns hashref: { '<ca-fpr> <hex>' => 1, '<hex>' => 1, ... }. Check a peer
+# with serial_revoked against revoked_for_issuers(...) for its issuing CA.
 sub load_revoked_serials (%opts) {
     my $path = $opts{path} or croak "path required";
 
@@ -452,6 +754,13 @@ sub load_revoked_serials (%opts) {
         $line =~ s/#.*$//;       # strip comments
         $line =~ s/^\s+|\s+$//g; # strip whitespace
         next unless length $line;
+        my @f = split /\s+/, $line;
+        if (@f == 2 && _valid_fpr(lc $f[0])) {
+            my $hex = Exec::CertInfo::serial_to_hex($f[1]);
+            $revoked{ lc($f[0]) . " $hex" } = 1 if length $hex;
+            next;
+        }
+        # The whole line, as before 0.14.
         $line = Exec::CertInfo::serial_to_hex($line);
         next unless length $line;
         $revoked{$line} = 1;
@@ -461,8 +770,27 @@ sub load_revoked_serials (%opts) {
     return \%revoked;
 }
 
+# The part of a loaded revocation list that applies to a peer whose certificate
+# the CAs @$issuers issued: { '<hex>' => 1 }, holding the serials revoked under
+# those CAs and every serial revoked under any CA.
+sub revoked_for_issuers ($revoked, $issuers) {
+    my %want = map { $_ => 1 } _issuer_list($issuers);
+    my %view;
+    return \%view unless ref $revoked eq 'HASH';
+    for my $k (keys %$revoked) {
+        if ($k =~ /\A([0-9a-f]{64}) (\S+)\z/) {
+            $view{$2} = 1 if $want{$1};
+        }
+        elsif ($k !~ / /) {
+            $view{$k} = 1;
+        }
+    }
+    return \%view;
+}
+
 # Return true if the given serial (lowercase hex from _peer_serial,
-# or any format accepted by serial_to_hex) is in the revoked set.
+# or any format accepted by serial_to_hex) is in the revoked set - the view
+# for the peer's issuing CA (revoked_for_issuers), or a serial-only list.
 # Normalises the input to lowercase hex before checking.
 sub serial_revoked ($serial, $revoked) {
     return 0 unless defined $serial && ref $revoked eq 'HASH';
@@ -501,10 +829,31 @@ sub validate_cert (%o) {
     print $cfh $cert_pem;
     close $cfh;
 
+    # The CA file is a bundle (one CA per paired dispatcher). A renewed cert
+    # must come from the CA that issued the agent's live cert (cert_path), so
+    # one dispatcher cannot swap the agent onto its own CA and cut off the
+    # others. When the live cert's issuer is not found in the bundle, the whole
+    # bundle is used, as with a single CA before 0.14.
+    my $ca_file = $ca_path;
+    my $live    = defined $o{cert_path} ? Exec::FileUtil::slurp_maybe($o{cert_path}) : undef;
+    if (defined $live) {
+        my $bundle = load_ca_bundle($ca_path);
+        if (@$bundle > 1) {
+            my %own = map { $_ => 1 } pem_issuers($live, $bundle);
+            if (%own) {
+                my ($afh, $apath) = tempfile(SUFFIX => '.crt', UNLINK => 1);
+                print $afh map { "$_->{pem}\n" } grep { $own{ $_->{fpr} } } @$bundle;
+                close $afh;
+                $ca_file = $apath;
+            }
+        }
+        free_ca_bundle($bundle);
+    }
+
     # 1. Verify against the agent's CA. A 127 exit means openssl is not on PATH -
     # report that distinctly so a hands-free renewal failure is not misattributed
     # to a bad cert. Either way this fails closed (no adoption).
-    my $vout = `openssl verify -CAfile \Q$ca_path\E \Q$cpath\E 2>&1`;
+    my $vout = `openssl verify -CAfile \Q$ca_file\E \Q$cpath\E 2>&1`;
     return (0, "openssl not available") if ($? >> 8) == 127;
     return (0, "renewed cert does not verify against the agent CA")
         unless $? == 0;
@@ -527,7 +876,8 @@ sub stage_renewed_cert (%o) {
     my $staged_path = $o{staged_path} or croak "staged_path required";
 
     my ($ok, $reason) = validate_cert(
-        cert_pem => $cert_pem, ca_path => $o{ca_path}, key_path => $o{key_path});
+        cert_pem => $cert_pem, ca_path => $o{ca_path}, key_path => $o{key_path},
+        cert_path => $o{cert_path});
     return { ok => 0, error => $reason } unless $ok;
 
     eval { _write_file($staged_path, $cert_pem, 0640); 1 }
@@ -551,7 +901,8 @@ sub promote_staged_cert (%o) {
     return { ok => 0, error => "cannot read staged cert: $@" } unless defined $cert_pem;
 
     my ($valid, $reason) = validate_cert(
-        cert_pem => $cert_pem, ca_path => $o{ca_path}, key_path => $o{key_path});
+        cert_pem => $cert_pem, ca_path => $o{ca_path}, key_path => $o{key_path},
+        cert_path => $cert_path);
     unless ($valid) {
         unlink $staged_path;
         return { ok => 0, error => $reason };

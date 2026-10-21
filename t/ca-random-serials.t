@@ -97,8 +97,10 @@ subtest 'CA cert, dispatcher cert and signed CSRs carry random serials' => sub {
 
     # Trusted-dispatcher map and revocation list.
     my $tf = "$w/trusted";
-    Exec::Agent::AgentPairing::add_trusted_dispatcher(path => $tf, serial => uc $sx, id => 'automation');
-    my $trusted = Exec::Agent::AgentPairing::load_trusted_dispatchers(path => $tf);
+    my $cafpr = Exec::CertInfo::fingerprint_from_path("$ca/ca.crt");
+    Exec::Agent::AgentPairing::add_trusted_dispatcher(path => $tf, serial => uc $sx, id => 'automation', issuer => $cafpr);
+    my $trusted = Exec::Agent::AgentPairing::trusted_for_issuers(
+        Exec::Agent::AgentPairing::load_trusted_dispatchers(path => $tf), [ $cafpr ]);
     is scalar(Exec::Agent::AgentPairing::dispatcher_trusted($sx, $trusted)), 'automation', 'trusted lookup by peer-style serial';
     is scalar(Exec::Agent::AgentPairing::dispatcher_trusted($s{a2}, $trusted)), undef, 'other serial not trusted';
 

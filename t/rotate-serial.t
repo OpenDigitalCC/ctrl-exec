@@ -13,6 +13,11 @@
 # the security rule it enforces: identity comes from the caller, and retire is
 # scoped to serials the caller owns - the property that makes rotation a safely
 # chained trust rather than a way to inject a foreign serial.
+#
+# Since 0.14 (T-061) the map is keyed by issuing CA and serial: the handler adds
+# a serial under the CA that issued the caller's certificate and retires only
+# under it. CA fingerprints here are stand-ins; agent-ca-bundle.t drives the
+# real handler over mTLS with two CAs.
 
 use strict;
 use warnings;
@@ -24,23 +29,34 @@ use Exec::Agent::AgentPairing;
 
 my $tmpdir = tempdir(CLEANUP => 1);
 
-sub load { Exec::Agent::AgentPairing::load_trusted_dispatchers(path => $_[0]) }
+my $CA1 = 'a' x 64;
+my $CA2 = 'b' x 64;
 
-# Mirror the handler's ADD: the new serial is stored under the caller's derived id.
-sub rotate_add {
-    my ($path, $serial, $caller_id) = @_;
-    Exec::Agent::AgentPairing::add_trusted_dispatcher(
-        path => $path, serial => $serial, id => $caller_id);
+# The view of the map for callers whose cert $ca issued (default $CA1).
+sub load {
+    my ($path, $ca) = @_;
+    return Exec::Agent::AgentPairing::trusted_for_issuers(
+        Exec::Agent::AgentPairing::load_trusted_dispatchers(path => $path), [ $ca // $CA1 ]);
 }
 
-# Mirror the handler's RETIRE: refuse to remove a serial owned by another identity.
+# Mirror the handler's ADD: the new serial is stored under the caller's derived
+# id and the caller's issuing CA.
+sub rotate_add {
+    my ($path, $serial, $caller_id, $ca) = @_;
+    Exec::Agent::AgentPairing::add_trusted_dispatcher(
+        path => $path, serial => $serial, id => $caller_id, issuer => $ca // $CA1);
+}
+
+# Mirror the handler's RETIRE: refuse to remove a serial owned by another
+# identity under the caller's CA.
 sub rotate_remove {
-    my ($path, $serial, $caller_id) = @_;
+    my ($path, $serial, $caller_id, $ca) = @_;
     my $hex = Exec::CertInfo::serial_to_hex($serial);
-    my $map = load($path);
+    my $map = load($path, $ca);
     die "serial not owned by '$caller_id'\n"
         if exists $map->{$hex} && $map->{$hex} ne $caller_id;
-    Exec::Agent::AgentPairing::remove_trusted_dispatcher(path => $path, serial => $serial);
+    Exec::Agent::AgentPairing::remove_trusted_dispatcher(
+        path => $path, serial => $serial, issuer => $ca // $CA1);
 }
 
 subtest 'overlap: new serial added under the same identity, both trusted' => sub {
@@ -78,6 +94,20 @@ subtest 'retire of an absent serial is a no-op (idempotent)' => sub {
     ok eval { rotate_remove($path, 'dddd0004', 'dispatcher-a'); 1 },
         'retiring an absent serial does not die';
     is load($path)->{'cccc0003'}, 'dispatcher-a', 'existing entry intact';
+};
+
+subtest 'rotation keeps the issuer: add and retire act under the caller\'s CA' => sub {
+    my $path = "$tmpdir/issuer";
+    rotate_add($path, 'eeee0005', 'dispatcher-a', $CA1);
+    rotate_add($path, 'eeee0005', 'dispatcher-b', $CA2);   # same serial, other CA
+    rotate_add($path, 'ffff0006', 'dispatcher-b', $CA2);   # b rotates
+    is load($path, $CA2)->{'ffff0006'}, 'dispatcher-b', 'new serial under CA2';
+    ok !exists load($path, $CA1)->{'ffff0006'}, 'and not under CA1';
+    ok eval { rotate_remove($path, 'eeee0005', 'dispatcher-b', $CA2); 1 },
+        'b retires its old serial';
+    is load($path, $CA1)->{'eeee0005'}, 'dispatcher-a',
+        'the same serial under CA1 (dispatcher-a) is untouched';
+    ok !exists load($path, $CA2)->{'eeee0005'}, 'gone under CA2';
 };
 
 done_testing;

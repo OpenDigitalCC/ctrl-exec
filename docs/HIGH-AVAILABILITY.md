@@ -151,8 +151,9 @@ audited access controls, not in a general-purpose object bucket.
 
 Port 7443 carries mTLS connections for `/run`, `/ping`, `/result`, and
 `/capabilities`. Each connection is self-contained: the agent authenticates
-the connecting cert against the CA, checks the connecting serial is a key in
-its trusted-dispatcher map, processes the request, and closes the connection.
+the connecting cert against its CA bundle, checks the cert's issuing CA and
+serial match an entry in its trusted-dispatcher map, processes the request,
+and closes the connection.
 There is no session state that must be pinned to a specific dispatcher
 instance.
 
@@ -266,16 +267,27 @@ Registry writes
 ## Native Multi-Dispatcher
 
 Native multi-dispatcher (0.9.0) lets a single agent serve more than one
-distinct dispatcher. Each dispatcher presents its own cert, chaining to a
-shared CA root, and each appears as its own line in the agent's
-trusted-dispatcher map at `/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers` — one
-line per dispatcher, `<hex-serial> <dispatcher-id>`. The map lives in the
-agent-writable state directory (not under `/etc/ctrl-exec-agent`, which holds
-only secrets), so the agent can rewrite it in place during rotation. It
-replaces the old single `ctrl-exec-serial` file and is reloaded on SIGHUP.
+distinct dispatcher. Each dispatcher presents its own cert and each appears
+as its own line in the agent's trusted-dispatcher map at
+`/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers` — one line per dispatcher
+cert, `<ca-fingerprint> <hex-serial> <dispatcher-id>`, where
+`<ca-fingerprint>` is the SHA-256 fingerprint of the CA that issued that cert.
+The map lives in the agent-writable state directory (not under
+`/etc/ctrl-exec-agent`, which holds only secrets), so the agent can rewrite it
+in place during rotation. It replaces the old single `ctrl-exec-serial` file
+and is reloaded on SIGHUP. A map written before 0.14 (`<hex-serial>
+<dispatcher-id>`) is upgraded in place on the agent's first start after the
+upgrade, with the fingerprint of the CA in its `ca.crt`; no operator step.
 
-`/run`, `/ping`, `/result`, and `/capabilities` are accepted only if the
-connecting cert's serial is a key in the map. The matched dispatcher's
+The agent's CA file (`/etc/ctrl-exec-agent/ca.crt`) is a bundle: pairing
+appends the dispatcher's CA certificate, once per fingerprint, and keeps the
+CAs already there. The TLS listener accepts a cert issued by any CA in the
+bundle, but `/run`, `/ping`, `/result`, `/rotate-serial` and `/capabilities`
+are accepted only if the connecting cert's issuing CA **and** serial match an
+entry in the map: a cert from another trusted CA that carries a trusted serial
+is not that dispatcher, so no CA holder can impersonate a dispatcher of
+another CA. Revocation is keyed the same way (see `revoked_serials` in
+REFERENCE.md). The matched dispatcher's
 identity (its `dispatcher_id`) then drives permission and attribution: agent
 logs carry `DISPATCHER=<id>`, auth hooks receive `ENVEXEC_DISPATCHER` and
 `ENVEXEC_DISPATCHER_SERIAL`, and the async result store is partitioned by
@@ -291,9 +303,11 @@ place.
 This is the supported mechanism for running multiple operators of differing
 trust classes against one host. Running separate agent instances per operator
 remains possible as optional defence-in-depth, but is no longer the way to
-achieve multi-operator separation. Independent per-dispatcher CAs with SNI
-are out of scope; all dispatchers in an agent's map chain to one shared CA
-root.
+achieve multi-operator separation. The agent side holds several dispatcher
+CAs; a dispatcher, however, verifies agents against its own `ca` file, so
+until a dispatcher can verify an agent whose cert another dispatcher's CA
+issued, the dispatchers an agent serves share one CA (the shared CA directory
+above).
 
 Relation to the HA models above
 : Active/passive and active/active concern redundant instances of **one**

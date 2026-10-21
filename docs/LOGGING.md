@@ -1340,6 +1340,33 @@ This is informational. An absent file is the expected state on a freshly
 paired agent. `config-warn` is produced only for malformed entries within
 the file if it does exist.
 
+### trusted-map-upgrade
+
+Emitted by the agent when it loads a trusted-dispatcher map written before
+0.14 (`<hex-serial> <dispatcher-id>` lines) and gives each such line the
+fingerprint of the CA in its CA bundle (`ca` in `agent.conf`), rewriting the
+map in the `<ca-fingerprint> <hex-serial> <dispatcher-id>` form. Happens once,
+on the first start (or reload, or pairing) after the upgrade. When the map
+cannot be rewritten the upgrade holds in memory and the event is logged at
+WARNING with ERROR; it is tried again on the next load.
+
+Priority
+: INFO (WARNING when the rewrite failed)
+
+Fields
+
+| Field | Type | Description |
+| --- | --- | --- |
+| ACTION | string | `trusted-map-upgrade` |
+| PATH | string | The trusted-dispatcher map |
+| ENTRIES | integer | Number of two-field lines upgraded (INFO only) |
+| CA | string | Fingerprint(s) of the CA(s) recorded, comma-separated (INFO only) |
+| ERROR | string | Why the rewrite failed (WARNING only) |
+
+```
+ACTION=trusted-map-upgrade CA=3f9a...c1d2 ENTRIES=1 PATH=/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers
+```
+
 
 ## Rotation Actions
 
@@ -1606,7 +1633,7 @@ ACTION=rotation-state-corrupt PATH=/var/lib/ctrl-exec/rotation.json ERROR="..." 
 
 | Priority | Syslog level | Used for |
 | --- | --- | --- |
-| INFO | `daemon.info` | Normal operations: `start`, `run`, `ping`, `dispatch`, `lock-acquire`, `lock-release`, `renew`, `renew-complete`, `auth` pass, `pair-complete`, `pair-approve`, `pair-deny`, `pair-request`, `pair-reject`, `pairing-mode-start`, `pairing-mode-stop`, `capabilities` success, `rate-evict`, `unpair`, `api-start`, `api-stop`, `api-request`, `status-read` (served, not-found), `cert-check`, `cert-renewal-start`, `cert-rotated`, `serial-broadcast`, `serial-retire`, `serial-confirmed`, `revoked-serials-absent` |
+| INFO | `daemon.info` | Normal operations: `start`, `run`, `ping`, `dispatch`, `lock-acquire`, `lock-release`, `renew`, `renew-complete`, `auth` pass, `pair-complete`, `pair-approve`, `pair-deny`, `pair-request`, `pair-reject`, `pairing-mode-start`, `pairing-mode-stop`, `capabilities` success, `rate-evict`, `unpair`, `api-start`, `api-stop`, `api-request`, `status-read` (served, not-found), `cert-check`, `cert-renewal-start`, `cert-rotated`, `serial-broadcast`, `serial-retire`, `serial-confirmed`, `revoked-serials-absent`, `trusted-map-upgrade` |
 | WARNING | `daemon.warning` | Security and access events requiring attention: `deny`, `serial-reject`, `result-deny`, `status-read` (denied), `revoked-cert`, `tls-failure`, `ip-block`, `rate-block`, `capabilities-deny`, `capabilities-no-serial`, `pair-denied`, `pair-timeout`, `lock-conflict`, `config-warn`, `allowlist-skip`, `stdin-timeout`, `auth` deny, `serial-broadcast-fail`, `serial-stale` |
 | ERR | `daemon.err` | Failures requiring investigation: `accept-fatal`, `renew` failure, `capabilities` error, `ping` error, `run` error, `auth` error (hook not executable), `cert-rotation-fail`, `rotation-state-corrupt`, `run-store-fail`, `status-read` (error) |
 

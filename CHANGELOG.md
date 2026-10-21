@@ -7,6 +7,10 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 
 ## 0.14.0 — (unreleased)
 
+- **Changed** the agent's `ca.crt` is a bundle of dispatcher CAs: pairing appends the dispatcher's CA (once per SHA-256 fingerprint) instead of replacing it, so pairing a dispatcher that has its own CA no longer cuts off the dispatchers already paired; an existing single-CA `ca.crt` is a bundle of one and is used as it is. A renewed agent certificate must come from the CA that issued the current one. (T-061)
+- **Changed** the trusted-dispatcher map is keyed by issuing CA and serial (`<ca-fingerprint> <hex-serial> <dispatcher-id>`), so a certificate from another trusted CA that carries a trusted serial is refused instead of being taken for that dispatcher; rotation records the caller's CA. A pre-0.14 map is upgraded in place on the agent's first start with the fingerprint of its CA (logged `trusted-map-upgrade`), with no operator step. (T-061)
+- **Added** `revoked-serials` lines of the form `<ca-fingerprint> <serial>`, which revoke a serial under one CA only; a serial-only line still revokes that serial under every CA. (T-061)
+
 ## 0.13.2 — scripts.conf edits work without a reload
 
 Upgrading from 0.13.1: nothing to do. An edit to `scripts.conf` or

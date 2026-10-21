@@ -743,10 +743,33 @@ Key settings:
   `port`, these are read once at start: a change needs a restart (SIGHUP keeps
   the running values and logs that a restart is needed).
 
+  The `ca` file is the agent's CA bundle: one PEM certificate for each
+  dispatcher CA the agent trusts, in the order they were paired. Pairing
+  appends the dispatcher's CA certificate to `/etc/ctrl-exec-agent/ca.crt`
+  unless a certificate with the same SHA-256 fingerprint is already there; it
+  never replaces the CAs of dispatchers paired before. An agent paired before
+  0.14 holds one certificate, a bundle of one, and needs no change. The TLS
+  listener accepts a peer certificate issued by any CA in the bundle; which
+  dispatcher the peer is, if any, is decided by the trusted-dispatcher map
+  below, by issuing CA and serial. A renewed agent certificate must come from
+  the CA that issued the current one. The listener reads the bundle at start,
+  so restart the agent after pairing it with another dispatcher.
+
 `revoked_serials`
 : Path to a file listing revoked TLS certificate serial numbers, one per line.
   Connections presenting a revoked cert are rejected immediately after the mTLS
   handshake, before any request is processed. Reloaded on SIGHUP without restart.
+
+  A line is either `<serial>`, which revokes that serial whatever CA issued
+  the certificate (the only form before 0.14, still honoured), or
+  `<ca-fingerprint> <serial>`, which revokes it only in certificates issued by
+  that CA, so the same serial from another dispatcher's CA still runs.
+  `<ca-fingerprint>` is the CA certificate's SHA-256 fingerprint as 64 hex
+  characters (colons removed):
+
+  ```
+  openssl x509 -in ca.crt -noout -fingerprint -sha256 | cut -d= -f2 | tr -d :
+  ```
 
   Accepted serial formats (all normalised to lowercase hex on load):
 
@@ -770,17 +793,30 @@ Key settings:
   ```
 
 `trusted_dispatchers_path`
-: Path to the trusted-dispatcher map. Each line maps a dispatcher cert
-  serial to a dispatcher id: `<hex-serial> <dispatcher-id>`. Written
-  automatically by `request-pairing` and updated in place during cert
-  rotation - do not edit manually. Pairing appends an entry, so an agent can
-  serve multiple dispatchers natively; re-pair to add another. The `/run`,
-  `/ping`, `/result`, and `/capabilities` endpoints reject peers whose cert
-  serial is not a key in the map; the matched dispatcher identity drives
-  permission and attribution. A dispatcher cert rotation updates the map
-  automatically over the run channel (the rotated serial is added, then the
-  old serial removed after the overlap window), so no re-pairing is needed
-  for a reachable agent.
+: Path to the trusted-dispatcher map. Each line maps a dispatcher
+  certificate, named by its issuing CA and its serial, to a dispatcher id:
+  `<ca-fingerprint> <hex-serial> <dispatcher-id>`, where `<ca-fingerprint>`
+  is the SHA-256 fingerprint (64 hex characters) of the CA in the `ca` bundle
+  that issued the dispatcher's certificate. Written automatically by
+  `request-pairing` and updated in place during cert rotation - do not edit
+  manually. Pairing appends an entry, so an agent can serve multiple
+  dispatchers natively; re-pair to add another. Re-pairing a dispatcher id
+  under a different CA ends that id's entries under its old CA. The `/run`,
+  `/ping`, `/result`, `/rotate-serial` and `/capabilities` endpoints reject a
+  peer unless both its issuing CA and its serial match an entry, so a
+  certificate from another trusted CA that carries a trusted serial is
+  refused; the matched dispatcher identity drives permission and attribution.
+  A dispatcher cert rotation updates the map automatically over the run
+  channel (the rotated serial is added under the caller's CA, then the old
+  serial removed after the overlap window), so no re-pairing is needed for a
+  reachable agent.
+
+  Upgrade: before 0.14 a line was `<hex-serial> <dispatcher-id>`. The agent
+  reads that form and, on first load (start or reload), rewrites each such
+  line with the fingerprint of the CA in its `ca` file and logs
+  `ACTION=trusted-map-upgrade`. No operator step. If the map cannot be
+  rewritten the upgrade holds in memory, a warning is logged and it is
+  retried on the next load.
 
   Default: `/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers`. The map lives in
   the agent-writable state directory, not the root-owned config dir, so the

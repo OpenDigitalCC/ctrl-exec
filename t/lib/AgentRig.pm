@@ -40,9 +40,19 @@ sub _slurp {
 }
 
 sub _make_ca {
-    my ($dir, $name) = @_;
+    my ($dir, $name, $cn) = @_;
+    $cn //= $name;
     _sh("openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes "
-      . "-keyout $dir/$name.key -out $dir/$name.crt -subj /CN=$name -days 2 2>/dev/null");
+      . "-keyout $dir/$name.key -out $dir/$name.crt -subj /CN=$cn -days 2 2>/dev/null");
+}
+
+# SHA-256 fingerprint of a cert file: 64 lowercase hex characters.
+sub fingerprint {
+    my ($path) = @_;
+    my $out = `openssl x509 -noout -fingerprint -sha256 -in $path 2>/dev/null`;
+    $out =~ /=\s*([0-9A-Fa-f:]+)/ or die "no fingerprint for $path\n";
+    (my $f = lc $1) =~ s/://g;
+    return $f;
 }
 
 sub _make_leaf {
@@ -56,7 +66,14 @@ sub _make_leaf {
       . "-set_serial $serial -out $dir/$name.crt -days 2 -extfile $dir/$name.ext 2>/dev/null");
 }
 
-# new(extra_conf => "key = value\n...", allowlist => "name = /path\n")
+# new(extra_conf => "key = value\n...", allowlist => "name = /path\n",
+#     second_ca => 1)
+#
+# second_ca: the agent's CA file is a bundle of 'ca' and 'ca2' (a second
+# dispatcher CA with the SAME subject name as 'ca', as two CAs made with the
+# defaults have), 'd2' is a dispatcher certificate from ca2 (serial 2002, in
+# the map as d2), and 'evil' is a ca2 certificate carrying the serial of
+# 'trusted' (1002). The map is written in the issuer-keyed form.
 sub new {
     my ($class, %o) = @_;
     my $dir = ChildGuard::dir(tempdir(CLEANUP => 1));
@@ -67,13 +84,27 @@ sub new {
     _make_leaf($dir, 'ca', 'untrusted', 1003);   # CA-signed, not paired
     _make_leaf($dir, 'rogue-ca', 'rogue', 1004); # fails the agent's handshake
 
+    my $ca_file = "$dir/ca.crt";
     open my $t, '>', "$dir/dispatchers" or die;
-    print $t "3ea test-dispatcher\n";             # 0x3ea == 1002
+    if ($o{second_ca}) {
+        _make_ca($dir, 'ca2', 'ca');
+        _make_leaf($dir, 'ca2', 'd2',   2002);
+        _make_leaf($dir, 'ca2', 'evil', 1002);
+        $ca_file = "$dir/bundle.crt";
+        system("cat $dir/ca.crt $dir/ca2.crt > $ca_file") == 0 or die;
+        my ($f1, $f2) = (fingerprint("$dir/ca.crt"), fingerprint("$dir/ca2.crt"));
+        print $t "$f1 3ea test-dispatcher\n";     # 0x3ea == 1002
+        print $t "$f2 7d2 d2\n";                  # 0x7d2 == 2002
+    }
+    else {
+        print $t "3ea test-dispatcher\n";         # 0x3ea == 1002, pre-0.14 form
+    }
     close $t;
 
     my $self = bless {
         dir => $dir, port => _free_port(), log => "$dir/agent.log",
         conf => "$dir/agent.conf", allow => "$dir/scripts.conf", pid => undef,
+        ca_file => $ca_file,
     }, $class;
     $self->set_conf($o{extra_conf} // '');
     open my $a, '>', $self->{allow} or die;
@@ -93,7 +124,7 @@ sub set_conf {
 port = $self->{port}
 cert = $d/agent.crt
 key  = $d/agent.key
-ca   = $d/ca.crt
+ca   = $self->{ca_file}
 trusted_dispatchers_path = $d/dispatchers
 revoked_serials = $d/revoked
 async_runs_dir = $d/runs

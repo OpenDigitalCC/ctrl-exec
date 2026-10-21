@@ -20,6 +20,16 @@ open my $saved_stderr, '>&', \*STDERR;
 
 my $tmpdir = tempdir(CLEANUP => 1);
 
+# Since 0.14 (T-061) entries carry the issuing CA's fingerprint; add and remove
+# act under one. A stand-in fingerprint here; view() is the map as a peer whose
+# cert that CA issued sees it.
+my $CA = 'c' x 64;
+sub view {
+    my ($path) = @_;
+    return Exec::Agent::AgentPairing::trusted_for_issuers(
+        Exec::Agent::AgentPairing::load_trusted_dispatchers(path => $path), [ $CA ]);
+}
+
 sub slurp {
     my ($path) = @_;
     open my $fh, '<', $path or die "read $path: $!";
@@ -101,9 +111,9 @@ subtest 'skips entries with a missing or invalid identity' => sub {
 subtest 'creates the map file with one entry' => sub {
     my $path = "$tmpdir/map-create";
     Exec::Agent::AgentPairing::add_trusted_dispatcher(
-        path => $path, serial => 'abc123', id => 'first',
+        path => $path, issuer => $CA, serial => 'abc123', id => 'first',
     );
-    my $map = Exec::Agent::AgentPairing::load_trusted_dispatchers(path => $path);
+    my $map = view($path);
     is_deeply( $map, { abc123 => 'first' }, 'single entry stored' );
     like( slurp($path), qr/^#/, 'file carries a managed-by header comment' );
 };
@@ -111,12 +121,12 @@ subtest 'creates the map file with one entry' => sub {
 subtest 'appending a second dispatcher preserves the first' => sub {
     my $path = "$tmpdir/map-append";
     Exec::Agent::AgentPairing::add_trusted_dispatcher(
-        path => $path, serial => '1111aaaa', id => 'automation',
+        path => $path, issuer => $CA, serial => '1111aaaa', id => 'automation',
     );
     Exec::Agent::AgentPairing::add_trusted_dispatcher(
-        path => $path, serial => '2222bbbb', id => 'human',
+        path => $path, issuer => $CA, serial => '2222bbbb', id => 'human',
     );
-    my $map = Exec::Agent::AgentPairing::load_trusted_dispatchers(path => $path);
+    my $map = view($path);
     is_deeply(
         $map,
         { '1111aaaa' => 'automation', '2222bbbb' => 'human' },
@@ -127,15 +137,15 @@ subtest 'appending a second dispatcher preserves the first' => sub {
 subtest 'updating an existing serial replaces only its identity' => sub {
     my $path = "$tmpdir/map-update";
     Exec::Agent::AgentPairing::add_trusted_dispatcher(
-        path => $path, serial => 'cccc1111', id => 'oldname',
+        path => $path, issuer => $CA, serial => 'cccc1111', id => 'oldname',
     );
     Exec::Agent::AgentPairing::add_trusted_dispatcher(
-        path => $path, serial => 'dddd2222', id => 'other',
+        path => $path, issuer => $CA, serial => 'dddd2222', id => 'other',
     );
     Exec::Agent::AgentPairing::add_trusted_dispatcher(
-        path => $path, serial => 'cccc1111', id => 'newname',
+        path => $path, issuer => $CA, serial => 'cccc1111', id => 'newname',
     );
-    my $map = Exec::Agent::AgentPairing::load_trusted_dispatchers(path => $path);
+    my $map = view($path);
     is( $map->{cccc1111}, 'newname', 'identity updated for existing serial' );
     is( $map->{dddd2222}, 'other',   'other entry untouched' );
     is( scalar keys %$map, 2, 'no duplicate entry created' );
@@ -144,20 +154,20 @@ subtest 'updating an existing serial replaces only its identity' => sub {
 subtest 'normalises serial form on add (decimal in, hex stored)' => sub {
     my $path = "$tmpdir/map-norm";
     Exec::Agent::AgentPairing::add_trusted_dispatcher(
-        path => $path, serial => '255', id => 'dec',
+        path => $path, issuer => $CA, serial => '255', id => 'dec',
     );
-    my $map = Exec::Agent::AgentPairing::load_trusted_dispatchers(path => $path);
+    my $map = view($path);
     is( $map->{ff}, 'dec', 'decimal serial stored as hex key' );
 };
 
 subtest 'rejects an invalid id or unusable serial' => sub {
     my $path = "$tmpdir/map-reject";
     eval { Exec::Agent::AgentPairing::add_trusted_dispatcher(
-        path => $path, serial => 'abcd', id => 'bad id') };
+        path => $path, issuer => $CA, serial => 'abcd', id => 'bad id') };
     like( $@, qr/invalid dispatcher id/, 'croaks on invalid id' );
 
     eval { Exec::Agent::AgentPairing::add_trusted_dispatcher(
-        path => $path, serial => '', id => 'good') };
+        path => $path, issuer => $CA, serial => '', id => 'good') };
     like( $@, qr/invalid dispatcher serial/, 'croaks on empty serial' );
 };
 
@@ -168,45 +178,45 @@ subtest 'rejects an invalid id or unusable serial' => sub {
 subtest 'removes one entry and preserves the rest' => sub {
     my $path = "$tmpdir/map-rm";
     Exec::Agent::AgentPairing::add_trusted_dispatcher(
-        path => $path, serial => '1111aaaa', id => 'automation');
+        path => $path, issuer => $CA, serial => '1111aaaa', id => 'automation');
     Exec::Agent::AgentPairing::add_trusted_dispatcher(
-        path => $path, serial => '2222bbbb', id => 'human');
+        path => $path, issuer => $CA, serial => '2222bbbb', id => 'human');
 
     my $removed = Exec::Agent::AgentPairing::remove_trusted_dispatcher(
-        path => $path, serial => '1111aaaa');
+        path => $path, issuer => $CA, serial => '1111aaaa');
     is( $removed, 1, 'returns 1 when an entry is removed' );
 
-    my $map = Exec::Agent::AgentPairing::load_trusted_dispatchers(path => $path);
+    my $map = view($path);
     is_deeply( $map, { '2222bbbb' => 'human' }, 'only the target serial removed' );
 };
 
 subtest 'remove normalises the serial form (decimal removes hex entry)' => sub {
     my $path = "$tmpdir/map-rm-norm";
     Exec::Agent::AgentPairing::add_trusted_dispatcher(
-        path => $path, serial => 'ff', id => 'dec');
+        path => $path, issuer => $CA, serial => 'ff', id => 'dec');
     my $removed = Exec::Agent::AgentPairing::remove_trusted_dispatcher(
-        path => $path, serial => '255');     # decimal 255 == hex ff
+        path => $path, issuer => $CA, serial => '255');     # decimal 255 == hex ff
     is( $removed, 1, 'decimal serial removes the matching hex entry' );
-    is_deeply( Exec::Agent::AgentPairing::load_trusted_dispatchers(path => $path),
+    is_deeply( view($path),
         {}, 'map now empty' );
 };
 
 subtest 'remove is a no-op for an absent serial or file' => sub {
     is( Exec::Agent::AgentPairing::remove_trusted_dispatcher(
-            path => "$tmpdir/map-rm-nope", serial => 'deadbeef'),
+            path => "$tmpdir/map-rm-nope", issuer => $CA, serial => 'deadbeef'),
         0, 'absent file -> 0' );
 
     my $path = "$tmpdir/map-rm-absent";
     Exec::Agent::AgentPairing::add_trusted_dispatcher(
-        path => $path, serial => 'aaaa1111', id => 'x');
+        path => $path, issuer => $CA, serial => 'aaaa1111', id => 'x');
     is( Exec::Agent::AgentPairing::remove_trusted_dispatcher(
-            path => $path, serial => 'ffff9999'),
+            path => $path, issuer => $CA, serial => 'ffff9999'),
         0, 'absent serial -> 0 (other entries untouched)' );
-    is_deeply( Exec::Agent::AgentPairing::load_trusted_dispatchers(path => $path),
+    is_deeply( view($path),
         { 'aaaa1111' => 'x' }, 'existing entry preserved' );
 
     eval { Exec::Agent::AgentPairing::remove_trusted_dispatcher(
-        path => $path, serial => '') };
+        path => $path, issuer => $CA, serial => '') };
     like( $@, qr/invalid dispatcher serial/, 'croaks on empty serial' );
 };
 
