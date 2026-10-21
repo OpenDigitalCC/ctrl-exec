@@ -12,8 +12,8 @@ _ctrl_exec_agent() {
 
     local modes="serve request-pairing pairing-status self-check self-ping
         promote-cert cert-staged paired"
-    local opts="--config --allowlist --dispatcher --port --background --timeout
-        --lookup-by --version"
+    local opts="--config --allowlist --dispatcher --dispatcher-fingerprint --port
+        --background --timeout --lookup-by --version"
 
     # "--opt=value": bash splits it into --opt, =, value.
     if [[ $prev == = && $COMP_CWORD -ge 2 ]]; then
@@ -27,7 +27,7 @@ _ctrl_exec_agent() {
             COMPREPLY=($(compgen -f -- "$cur")); return 0 ;;
         --lookup-by)
             COMPREPLY=($(compgen -W "ip hostname" -- "$cur")); return 0 ;;
-        --dispatcher|--port|--timeout)
+        --dispatcher|--dispatcher-fingerprint|--port|--timeout)
             return 0 ;;
     esac
 
@@ -37,7 +37,7 @@ _ctrl_exec_agent() {
         w=${COMP_WORDS[i]}
         case $w in
             =) ((i++)) ;;
-            --config|--allowlist|--dispatcher|--port|--timeout|--lookup-by)
+            --config|--allowlist|--dispatcher|--dispatcher-fingerprint|--port|--timeout|--lookup-by)
                 [[ ${COMP_WORDS[i+1]} == = ]] || ((i++)) ;;
             -*) ;;
             *) have_mode=1 ;;

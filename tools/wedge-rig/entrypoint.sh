@@ -58,7 +58,9 @@ echo $! > "$PIDS/api.pid"
 
 # pairing: the agent requests, the dispatcher approves
 ctrl-exec-dispatcher pairing-mode start --timeout 300 || true
-ctrl-exec-agent request-pairing --dispatcher "$(hostname)" --background --timeout 120 > /dev/null
+# verified pairing (T-041): the agent checks the listener chains to this CA
+ctrl-exec-agent request-pairing --dispatcher "$(hostname)" --background --timeout 120 \
+    --dispatcher-fingerprint "$(ctrl-exec-dispatcher ca-fingerprint)" > /dev/null
 for _ in $(seq 1 60); do
     ids=$(ctrl-exec-dispatcher list-requests 2>/dev/null | awk '/^[0-9a-f]{8,}/ {print $1}' || true)
     for id in $ids; do

@@ -1,7 +1,7 @@
 ---
 title: ced — CLI Reference
 subtitle: Complete command reference for ctrl-exec-dispatcher.
-updated: 2026-06-10
+updated: 2026-10-21
 github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/CLI.md
 current_page: /cli
 ---
@@ -101,6 +101,8 @@ ced pairing-mode [--port <n>]
 
 Opens the pairing listener on the pairing port (default: 7444) and waits for incoming agent CSR submissions.
 
+On start it prints this dispatcher's CA fingerprint and the agent command for verified pairing, ready to paste (`ctrl-exec-agent request-pairing --dispatcher <this host> --dispatcher-fingerprint SHA256:<hex>`), to use on any untrusted network.
+
 Interactive when run in a terminal — requests are displayed with a prompt to approve or deny.
 
 | Command | Action |
@@ -140,6 +142,14 @@ Approves or denies a pending pairing request by ID. Used from a separate termina
 : The agent's operational port (default 7443), recorded so dispatch reaches it without a per-command port.
 
 Both override any value the agent suggested at `request-pairing`.
+
+# ca-fingerprint
+
+```
+ced ca-fingerprint
+```
+
+Prints the SHA-256 fingerprint of this dispatcher's CA certificate, one line (`SHA256:<hex>`), for `ctrl-exec-agent request-pairing --dispatcher-fingerprint`. It is the CA's fingerprint, so it stays the same when the dispatcher certificate is rotated.
 
 # list-agents
 

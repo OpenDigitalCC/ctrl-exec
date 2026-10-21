@@ -10,6 +10,7 @@ use lib "$Bin/../lib";
 use Exec::Agent::Config    qw();
 use Exec::Agent::Schema    qw();
 use Exec::Agent::AgentPairing   qw();
+use Exec::CertInfo              qw();
 use Exec::Agent::Server         qw();
 use Exec::Random                qw();
 use Exec::RateLimit qw();
@@ -44,6 +45,7 @@ sub main {
         'background'    => \$opts{background},
         'timeout=i'     => \$opts{timeout},
         'lookup-by=s'   => \$opts{lookup_by},
+        'dispatcher-fingerprint=s' => \$opts{dispatcher_fingerprint},
         'version'       => sub { print "ctrl-exec-agent $VERSION\n"; exit 0; },
     ) or die usage();
 
@@ -595,6 +597,16 @@ sub mode_request_pairing ($opts) {
         die "--lookup-by must be 'ip' or 'hostname'\n";
     }
 
+    # Verified pairing (T-041): the dispatcher's CA fingerprint, refused here if
+    # malformed, before anything connects.
+    my $ca_fpr;
+    if (defined $opts->{dispatcher_fingerprint}) {
+        $ca_fpr = Exec::CertInfo::parse_sha256_fingerprint($opts->{dispatcher_fingerprint})
+            // die "--dispatcher-fingerprint must be SHA256: then 64 hex digits "
+                 . "(colons optional),\nas printed by 'ctrl-exec-dispatcher "
+                 . "ca-fingerprint' on the dispatcher.\n";
+    }
+
     if ($background && $timeout > 600) {
         die "Error: --timeout cannot exceed 600 seconds in background mode.\n"
           . "The agent connection window is 660 seconds; values above 600 risk\n"
@@ -653,10 +665,19 @@ WARN
         hostname   => $host,
         lookup_by  => $lookup_by,
         agent_port => $agent_port,
+        dispatcher_ca_fpr => $ca_fpr,
     );
 
     unless ($submitted->{ok}) {
         my $err = $submitted->{error} // 'unknown error';
+        if ($submitted->{verify_failed}) {
+            Exec::Log::log_action('WARNING', {
+                ACTION     => 'pair-verify-failed',
+                DISPATCHER_HOST => $ctrl_exec_host,
+                EXPECTED   => Exec::CertInfo::format_sha256_fingerprint($ca_fpr),
+            });
+            die "Pairing refused: $err\n";
+        }
         if ($err =~ /IO::Socket::IP configuration failed|Name or service not known|Temporary failure in name resolution/i) {
             die "Pairing failed: could not resolve ctrl-exec hostname '$ctrl_exec_host'.\n"
               . "Check the hostname is correct or use an IP address instead.\n";
@@ -683,6 +704,9 @@ WARN
     # The code is bound to the certificate the dispatcher presented on this
     # connection, so it can only be shown once connected.
     unless ($background) {
+        print "Dispatcher verified: its certificate chains to CA "
+            . Exec::CertInfo::format_sha256_fingerprint($ca_fpr) . ".\n"
+            if defined $ca_fpr;
         print "Pairing code: $submitted->{code} (v$submitted->{code_version})\n";
         print "  Verify this code matches the ctrl-exec display before approving.\n";
         unless ($submitted->{dispatcher_confirms_v2}) {
@@ -1014,7 +1038,7 @@ Usage: ctrl-exec-agent <mode> [options]
 
 Modes:
   serve                          Start the agent server
-  request-pairing --dispatcher <host>
+  request-pairing --dispatcher <host> [--dispatcher-fingerprint SHA256:<hex>]
                                  Request pairing with the ctrl-exec dispatcher host
   pairing-status                 Show pairing/cert status
   self-check                     Validate local config and certs
@@ -1027,6 +1051,11 @@ Options:
   --lookup-by <ip|hostname>      Suggest how the dispatcher should resolve this
                                  agent for dispatch (default: hostname). The
                                  dispatcher's approve --lookup-by overrides it.
+  --dispatcher-fingerprint SHA256:<hex>
+                                 Verified pairing: refuse, before sending the
+                                 CSR, a dispatcher whose certificate does not
+                                 chain to the CA with this fingerprint (from
+                                 'ctrl-exec-dispatcher ca-fingerprint')
   --background                   Non-interactive pairing: print reqid and wait
                                  for approval (for orchestrated installations)
   --timeout <n>                  Seconds to wait for approval in background

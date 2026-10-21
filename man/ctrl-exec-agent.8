@@ -47,7 +47,9 @@ Start the agent server in the foreground.
 .B request-pairing
 Generate a key and CSR and submit a pairing request to a control host (see
 .B \-\-dispatcher
-below). After the operator approves, the signed certificate is stored.
+below). After the operator approves, the signed certificate is stored. With
+.BR \-\-dispatcher-fingerprint ,
+the control host is verified before the CSR is sent.
 .TP
 .B pairing-status
 Show pairing and certificate status. Reads the root-only certificate files;
@@ -84,6 +86,16 @@ Default:
 Override the pairing port for
 .BR request-pairing .
 Default: 7444.
+.TP
+.BI \-\-dispatcher-fingerprint " SHA256:hex"
+Verified pairing: the SHA-256 fingerprint of the control host's CA
+certificate (from
+.B "ctrl-exec-dispatcher ca-fingerprint"
+or the
+.B pairing-mode
+banner; colons and either case accepted). The agent refuses, before sending
+its CSR, a control host whose certificate does not chain to that CA. Use it on
+any network you do not control.
 .TP
 .BI \-\-lookup-by " ip|hostname"
 Suggest how the control host should resolve this agent for dispatch

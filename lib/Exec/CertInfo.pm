@@ -59,6 +59,28 @@ sub fingerprint_from_path ($path) {
     return $hex;
 }
 
+# Parse a SHA-256 certificate fingerprint as an operator types or pastes it:
+# "SHA256:" then 64 hex digits, with or without colons between the bytes, in
+# either case. The prefix may be left off, so the colon form openssl prints
+# (`openssl x509 -fingerprint -sha256`) is accepted as it stands once the
+# "sha256 Fingerprint=" label is dropped. Returns 64 lowercase hex characters,
+# or undef for anything else (a SHA-1 length, a stray character, an empty value).
+sub parse_sha256_fingerprint ($str) {
+    return unless defined $str;
+    (my $s = $str) =~ s/^\s+|\s+$//g;
+    $s =~ s/\ASHA-?256://i;
+    return unless $s =~ /\A(?:[0-9A-Fa-f]{64}|(?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2})\z/;
+    $s =~ s/://g;
+    return lc $s;
+}
+
+# The display form of a SHA-256 fingerprint (64 hex characters): "SHA256:"
+# then lowercase hex without colons, the form the pairing-mode banner and
+# 'ctrl-exec-dispatcher ca-fingerprint' print and request-pairing accepts.
+sub format_sha256_fingerprint ($hex) {
+    return 'SHA256:' . lc $hex;
+}
+
 # Parse an openssl notAfter string ("Mon DD HH:MM:SS YYYY GMT", as produced by
 # expiry_from_path) to a Unix epoch (UTC), or undef if it cannot be parsed. The
 # single notAfter->epoch parser: the renewal-due check (Engine) and the

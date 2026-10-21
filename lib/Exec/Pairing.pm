@@ -127,6 +127,16 @@ sub run_pairing_mode (%opts) {
     require IO::Socket::SSL;
     require IO::Select;
 
+    # The CA that issued the served certificate. Verified pairing (T-041): an
+    # agent run with --dispatcher-fingerprint checks the listener's certificate
+    # chains to the CA with that fingerprint, so the listener sends the CA
+    # certificate after its own. When the CA cannot be used (absent, or it did
+    # not issue the served cert) the listener serves as before and the banner
+    # says verified pairing is unavailable.
+    my $ca = ca_fingerprint(ca_dir => $ca_dir, cert => $cert);
+    $log_fn->({ ACTION => 'pairing-ca-unavailable', REASON => $ca->{error} })
+        unless $ca->{ok};
+
     # Pairing port: TLS server cert only, no client cert required
     require Exec::TLS;
     my $server = IO::Socket::SSL->new(
@@ -136,6 +146,9 @@ sub run_pairing_mode (%opts) {
         SSL_cert_file   => $cert,
         SSL_key_file    => $key,
         SSL_verify_mode => IO::Socket::SSL::SSL_VERIFY_NONE(),
+        ($ca->{ok} ? (SSL_create_ctx_callback => sub ($ctx) {
+            _add_chain_cert($ctx, $ca->{ca_file});
+        }) : ()),
         Exec::TLS::hardening(),
     ) or die "Cannot start pairing server: $IO::Socket::SSL::SSL_ERROR\n";
     # The port actually bound: the same as asked for, except for port 0 (any
@@ -157,10 +170,15 @@ sub run_pairing_mode (%opts) {
     my $auto = $deadline ? " (auto-stops in ${timeout}s)" : "";
     if ($interactive) {
         print "Pairing mode active on port $port$auto. Ctrl-C or 'quit' to stop.\n";
-        print "Waiting for pairing requests...\n";
     }
     else {
         print "Pairing mode active on port $port$auto. Ctrl-C to stop.\n";
+    }
+    print "$_\n" for verified_pairing_lines($ca, $port);
+    if ($interactive) {
+        print "Waiting for pairing requests...\n";
+    }
+    else {
         print "Use 'ctrl-exec-dispatcher list-requests' to see pending requests.\n";
     }
 
@@ -313,6 +331,66 @@ sub run_pairing_mode (%opts) {
         $log_fn->({ ACTION => 'pairing-mode-stop' });
     }
     return $stopped;
+}
+
+# The SHA-256 fingerprint of this dispatcher's CA certificate ($ca_dir/ca.crt,
+# the CA that signs agent certificates and is delivered to them at pairing),
+# for verified pairing (T-041). It is stable across rotation of the dispatcher
+# certificate, which the same CA reissues. When cert is given, the CA must have
+# issued it - otherwise an agent checking the fingerprint could never pair, and
+# the fingerprint is not offered.
+# Returns { ok => 1, fpr => '<64 hex>', ca_file => $path }
+#      or { ok => 0, error => '...' }
+sub ca_fingerprint (%opts) {
+    my $ca_dir  = $opts{ca_dir} // Exec::DispatcherConfig::conf_dir();
+    my $ca_file = "$ca_dir/ca.crt";
+    return { ok => 0, error => "no CA certificate at $ca_file" } unless -f $ca_file;
+    my $fpr = Exec::CertInfo::fingerprint_from_path($ca_file)
+        // return { ok => 0, error => "cannot read the CA certificate $ca_file" };
+    if (defined(my $cert = $opts{cert})) {
+        my $out = `openssl verify -CAfile \Q$ca_file\E \Q$cert\E 2>&1`;
+        return { ok => 0, error => "the served certificate $cert was not "
+                                 . "issued by the CA $ca_file" }
+            unless $? == 0;
+    }
+    return { ok => 1, fpr => $fpr, ca_file => $ca_file };
+}
+
+# The agent command for verified pairing with this dispatcher, ready to paste.
+# The host is this host's name, which the operator may need to replace with the
+# name or address the agent reaches it by.
+sub agent_pairing_command ($fpr, $port = 7444, $host = undef) {
+    $host //= hostname();
+    return "ctrl-exec-agent request-pairing --dispatcher $host"
+         . ($port == 7444 ? '' : " --port $port")
+         . ' --dispatcher-fingerprint '
+         . Exec::CertInfo::format_sha256_fingerprint($fpr);
+}
+
+# Banner lines about verified pairing for the pairing-mode start: the CA
+# fingerprint and the agent command, or why they are unavailable. $ca is the
+# result of ca_fingerprint.
+sub verified_pairing_lines ($ca, $port = 7444) {
+    return ("Verified pairing unavailable: $ca->{error}.") unless $ca->{ok};
+    return (
+        'Dispatcher CA fingerprint: '
+            . Exec::CertInfo::format_sha256_fingerprint($ca->{fpr}),
+        'On the agent (verified pairing; use it on any untrusted network):',
+        '    ' . agent_pairing_command($ca->{fpr}, $port),
+    );
+}
+
+# Add the CA certificate in $ca_file to the chain a TLS context sends after its
+# own certificate (SSL_create_ctx_callback). The context takes ownership.
+sub _add_chain_cert ($ctx, $ca_file) {
+    require Net::SSLeay;
+    my $bio = Net::SSLeay::BIO_new_file($ca_file, 'r')
+        or die "Cannot open CA certificate '$ca_file'\n";
+    my $x509 = Net::SSLeay::PEM_read_bio_X509($bio);
+    Net::SSLeay::BIO_free($bio);
+    die "Cannot read CA certificate '$ca_file'\n" unless $x509;
+    Net::SSLeay::CTX_add_extra_chain_cert($ctx, $x509)
+        or die "Cannot add CA certificate '$ca_file' to the pairing chain\n";
 }
 
 # Return list of pending requests sorted by received time

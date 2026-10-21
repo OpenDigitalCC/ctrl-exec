@@ -1,7 +1,7 @@
 ---
 title: cea — CLI Reference
 subtitle: Complete command reference for ctrl-exec-agent.
-updated: 2026-10-20
+updated: 2026-10-21
 github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/CLI-AGENT.md
 current_page: /cli-agent
 ---
@@ -30,13 +30,16 @@ sudo systemctl kill --signal=HUP ctrl-exec-agent
 # request-pairing
 
 ```
-ctrl-exec-agent request-pairing --dispatcher <hostname> [--port <n>] [--lookup-by ip|hostname] [--background] [--timeout <s>]
+ctrl-exec-agent request-pairing --dispatcher <hostname> [--dispatcher-fingerprint SHA256:<hex>] [--port <n>] [--lookup-by ip|hostname] [--background] [--timeout <s>]
 ```
 
 Generates a key pair and CSR, connects to the dispatcher pairing port, and waits for approval. On approval, stores the signed certificate and CA certificate, and records the approving dispatcher — its serial and stable id — in the agent's trusted-dispatcher map. The entry is appended: re-pairing against a further dispatcher leaves existing dispatchers trusted. The agent's configured operational port is reported in the request so dispatch can reach it without a per-command port.
 
 `--dispatcher <hostname>`
 : Hostname or IP of the dispatcher instance. Required.
+
+`--dispatcher-fingerprint SHA256:<hex>`
+: Verified pairing. The SHA-256 fingerprint of the dispatcher's CA certificate, from `ced ca-fingerprint` or the `pairing-mode` banner (colons and either case accepted). After the TLS handshake the agent checks the dispatcher's certificate chains to that CA, and stops before sending its CSR if it does not. Use it on any network you do not control.
 
 `--port <n>`
 : Pairing port on the dispatcher host. Default: 7444.
@@ -45,13 +48,14 @@ Generates a key pair and CSR, connects to the dispatcher pairing port, and waits
 : Suggests how the dispatcher host should resolve this agent for dispatch (default: hostname). The operator's `ced approve --lookup-by` overrides it.
 
 `--background`
-: Prints the request ID and pairing code to stdout, then waits without requiring an interactive terminal. Suitable for automated or orchestrated pairing.
+: Prints the request ID (and nothing else) to stdout, then waits for approval in the background without requiring an interactive terminal. Suitable for automated or orchestrated pairing; the code is shown on the dispatcher by `ced list-requests`.
 
 `--timeout <s>`
-: Seconds to wait for approval before timing out. Default: 600 (10 minutes).
+: Seconds the background process waits for approval before timing out. Default: 30. Maximum: 600.
 
 ```bash
 sudo ctrl-exec-agent request-pairing --dispatcher ctrl-exec.example.com
+sudo ctrl-exec-agent request-pairing --dispatcher ctrl-exec.example.com --dispatcher-fingerprint SHA256:3f2a...c91e
 sudo ctrl-exec-agent request-pairing --dispatcher ctrl-exec.example.com --background
 sudo ctrl-exec-agent request-pairing --dispatcher ctrl-exec.example.com --background --timeout 300
 ```

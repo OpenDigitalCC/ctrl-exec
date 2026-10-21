@@ -1,7 +1,7 @@
 ---
 title: Security Model
 subtitle: mTLS trust, the pairing protocol, dispatcher identity, and the auth hook system.
-updated: 2026-10-20
+updated: 2026-10-21
 github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/SECURITY.md
 current_page: /security
 ---
@@ -35,6 +35,8 @@ Pairing is the ceremony by which a new agent joins the fleet. It runs on a separ
 5. The dispatcher records the agent in the registry with certificate expiry and serial tracking state.
 
 Pairing is a deliberate one-time ceremony. The operator reviews each agent before it joins the fleet. The verification code step ensures that a rogue pairing request cannot be approved by mistake.
+
+On a network you do not control, give the agent the dispatcher's CA fingerprint (`--dispatcher-fingerprint`, printed by `ced ca-fingerprint` and by the `pairing-mode` banner): the agent then checks the dispatcher before sending its CSR, and stops if the check fails. The code alone is adequate on a closed network or over an authenticated path such as an SSH tunnel.
 
 Automated pairing (`--background` flag) is available for orchestrated environments. The approval step remains explicit even in automated flows.
 

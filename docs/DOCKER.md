@@ -723,6 +723,7 @@ services:
     restart: on-failure
     environment:
       DISPATCHER_HOST: dispatcher    # Docker DNS resolves the service name
+      # DISPATCHER_FINGERPRINT: SHA256:<hex>   # ced ca-fingerprint; verified pairing
       # SYSLOG_HOST: logs.example.com
     ports:
       - "7443:7443"
@@ -758,6 +759,13 @@ state is on the mounts.
 
 `DISPATCHER_HOST: dispatcher` uses Docker's internal DNS to resolve the
 dispatcher service by name. No IP addresses required.
+
+`DISPATCHER_FINGERPRINT`, when set, makes the agent's first-start pairing
+verified: it pairs only with a dispatcher whose certificate chains to the CA
+with that fingerprint, and sends its CSR to nothing else. Take the value from
+`ctrl-exec-dispatcher ca-fingerprint` on the dispatcher. Set it whenever the
+agent reaches the dispatcher over a network you do not control; see
+SECURITY.md, *Pairing Security*.
 
 The scheduler that calls the API, `run-jobs`, is a separate container. It is
 documented, with its own hardened compose service, in the `ctrl-exec-plugins`
@@ -836,9 +844,17 @@ fi
 # until the operator approves on the dispatcher (30 seconds by default), stores
 # the certificates, and returns; a denial or timeout exits non-zero, and the
 # restart policy then sends a fresh request.
+# DISPATCHER_FINGERPRINT, when set, is the dispatcher's CA fingerprint
+# ('ctrl-exec-dispatcher ca-fingerprint'): the agent then pairs only with a
+# dispatcher whose certificate chains to that CA (verified pairing).
 if [ ! -f "$CONF_DIR/agent.crt" ]; then
     log "No cert found - requesting pairing with $DISPATCHER_HOST..."
-    ctrl-exec-agent request-pairing --dispatcher "$DISPATCHER_HOST"
+    if [ -n "${DISPATCHER_FINGERPRINT:-}" ]; then
+        ctrl-exec-agent request-pairing --dispatcher "$DISPATCHER_HOST" \
+            --dispatcher-fingerprint "$DISPATCHER_FINGERPRINT"
+    else
+        ctrl-exec-agent request-pairing --dispatcher "$DISPATCHER_HOST"
+    fi
     log "Paired."
 fi
 
@@ -951,7 +967,8 @@ instead. This prints the `reqid` to stdout and exits immediately, leaving a
 background process to wait for approval (`--timeout`, up to 600 seconds):
 
 ```bash
-ctrl-exec-agent request-pairing --dispatcher "$DISPATCHER_HOST" --background
+ctrl-exec-agent request-pairing --dispatcher "$DISPATCHER_HOST" --background \
+    --dispatcher-fingerprint "$DISPATCHER_FINGERPRINT"
 ```
 
 The `reqid` can be captured by the orchestration layer and passed to

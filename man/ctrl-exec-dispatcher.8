@@ -33,7 +33,8 @@ is passed to the script.
 Test mTLS connectivity and report certificate expiry and agent version.
 .TP
 .B pairing-mode
-Accept agent pairing requests interactively on port 7444.
+Accept agent pairing requests interactively on port 7444. The banner prints
+the CA fingerprint and the agent command for verified pairing.
 .TP
 .B list-requests
 Show pending pairing requests.
@@ -47,6 +48,13 @@ to set how dispatch reaches the agent.
 .TP
 .BI "deny " reqid
 Deny a pending request.
+.TP
+.B ca-fingerprint
+Print the SHA-256 fingerprint of this dispatcher's CA certificate, one line,
+as
+.B "ctrl-exec-agent request-pairing \-\-dispatcher-fingerprint"
+takes it. Unchanged by
+.BR rotate-cert .
 .TP
 .B list-agents
 List registered agents. Accepts

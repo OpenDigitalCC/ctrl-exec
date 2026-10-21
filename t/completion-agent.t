@@ -28,12 +28,16 @@ is_deeply(complete('cea', 'pa'), [qw(paired pairing-status)], 'prefix with two m
 is_deeply(complete('cea', '--config', '/x', 'ser'), ['serve'], 'option value is not the mode');
 is_deeply(complete('cea', 'serve', ''), [], 'no further words after the mode');
 
-is_deeply(complete('cea', 'request-pairing', '--d'), ['--dispatcher'], 'request-pairing --dispatcher');
+is_deeply(complete('cea', 'request-pairing', '--d'), [qw(--dispatcher --dispatcher-fingerprint)],
+    'request-pairing --dispatcher');
+is_deeply(complete('cea', 'request-pairing', '--dispatcher-f'), ['--dispatcher-fingerprint'],
+    'request-pairing --dispatcher-fingerprint');
 is_deeply(complete('cea', 'request-pairing', '--dispatcher', 'h', '--b'), ['--background'],
     'request-pairing --background');
 is_deeply(complete('cea', 'request-pairing', '--lookup-by', ''), [qw(hostname ip)], '--lookup-by values');
 is_deeply(complete('cea', '--'),
-    [qw(--allowlist --background --config --dispatcher --lookup-by --port --timeout --version)],
+    [qw(--allowlist --background --config --dispatcher --dispatcher-fingerprint --lookup-by
+        --port --timeout --version)],
     'all options');
 is_deeply(complete('cea', 'serve', '--al'), ['--allowlist'], 'serve --allowlist');
 

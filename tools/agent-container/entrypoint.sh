@@ -24,9 +24,17 @@ fi
 # until the operator approves on the dispatcher (30 seconds by default), stores
 # the certificates, and returns; a denial or timeout exits non-zero, and the
 # restart policy then sends a fresh request.
+# DISPATCHER_FINGERPRINT, when set, is the dispatcher's CA fingerprint
+# ('ctrl-exec-dispatcher ca-fingerprint'): the agent then pairs only with a
+# dispatcher whose certificate chains to that CA (verified pairing).
 if [ ! -f "$CONF_DIR/agent.crt" ]; then
     log "No cert found - requesting pairing with $DISPATCHER_HOST..."
-    ctrl-exec-agent request-pairing --dispatcher "$DISPATCHER_HOST"
+    if [ -n "${DISPATCHER_FINGERPRINT:-}" ]; then
+        ctrl-exec-agent request-pairing --dispatcher "$DISPATCHER_HOST" \
+            --dispatcher-fingerprint "$DISPATCHER_FINGERPRINT"
+    else
+        ctrl-exec-agent request-pairing --dispatcher "$DISPATCHER_HOST"
+    fi
     log "Paired."
 fi
 

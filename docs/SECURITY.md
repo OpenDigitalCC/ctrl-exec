@@ -149,10 +149,11 @@ Pairing code verification
   connection: the agent hashes the certificate it was shown, the dispatcher
   the certificate its pairing listener presents. A matching code shows that
   the dispatcher received this agent's CSR **and** that the agent was talking
-  to this dispatcher's pairing listener. The agent connects without verifying
-  the dispatcher (it has no CA yet), so a man in the middle can terminate its
-  TLS - but it then presents its own certificate, the agent's code is computed
-  over that, and the operator sees two different codes. Before 0.13 the code
+  to this dispatcher's pairing listener. Without `--dispatcher-fingerprint`
+  (see *Verified pairing*) the agent connects without verifying the dispatcher
+  (it has no CA yet), so a man in the middle can terminate its TLS - but it
+  then presents its own certificate, the agent's code is computed over that,
+  and the operator sees two different codes. Before 0.13 the code
   was `SHA-256(CSR)` alone, which a relay forwarding the CSR unchanged
   reproduced exactly.
 
@@ -166,8 +167,48 @@ Pairing code verification
   dispatcher's code for it equals the code the agent shows - about a million
   CSR signatures on average, within the 10-minute pairing window. The code
   makes a relay visible; it does not make a determined, well-resourced
-  attacker in the path impossible. Pair over a network you trust, and treat a
-  mismatch as an attack.
+  attacker in the path impossible. Treat a mismatch as an attack.
+
+  The code alone is adequate when the path between agent and dispatcher is
+  one an attacker cannot sit in: a closed network you control, or an
+  authenticated path such as an SSH tunnel to the dispatcher's pairing port.
+  On any other network - shared, routed over the internet, or simply not
+  yours - use verified pairing.
+
+Verified pairing
+: `ctrl-exec-agent request-pairing --dispatcher-fingerprint SHA256:<hex>`
+  gives the agent the SHA-256 fingerprint of the dispatcher's CA certificate,
+  taken out of band from the dispatcher (`ctrl-exec-dispatcher
+  ca-fingerprint`, or the `pairing-mode` banner, which prints the whole agent
+  command). The pairing listener (0.14 and later) sends its CA certificate
+  after its own. Once the TLS handshake is done and before anything is sent,
+  the agent finds the certificate with that fingerprint in the presented
+  chain and runs a full X.509 verification of the dispatcher's certificate
+  with that CA as the only trust anchor: signature, validity dates and CA
+  constraints. The TLS handshake has already proved the peer holds the key of
+  the certificate it presented. If the CA is not in the chain, or the
+  presented certificate was not issued by it, the agent stops with an error
+  naming the expected and the seen fingerprints, and its CSR is never sent. A
+  man in the middle cannot pass by presenting the real CA certificate (it is
+  public); it needs a certificate that CA issued, and the key for it.
+
+  The fingerprint is of the CA, not of the dispatcher certificate, so it stays
+  the same across `rotate-cert`. The host name is not checked: the pinned CA is
+  the trust. With the channel verified, the six-digit code remains the
+  operator's check that the pending request is the one the agent just made; it
+  can no longer be ground, because a man in the middle never sees the CSR.
+
+  The dispatcher cannot require verification - an agent's claim to have
+  verified would be unauthenticated - so it advises: the banner says to use the
+  command on any untrusted network. Without the flag pairing runs as before.
+  A dispatcher older than 0.14 does not send its CA certificate, so an agent
+  given the flag refuses it; upgrade the dispatcher first.
+
+  Limit. The dispatcher's CA also issues the agents' certificates, and those
+  certificates are not marked for a particular role. A host holding a paired
+  agent's certificate and key therefore also passes the check; in the path, it
+  is back to the grinding window the code alone leaves (above). Protect agent
+  keys as the credentials they are, and revoke a compromised agent promptly.
 
 Pairing code versions
 : The agent states the code version it computed in its pairing request.
@@ -1083,7 +1124,7 @@ limitations, Docker-specific notes), see SECURITY-OPERATIONS.md.
 | Rogue dispatcher connecting to agent | Agent verifies dispatcher cert against CA |
 | Pairing replay or misrouting | Nonce verified before cert storage |
 | Pairing CSR injection / social engineering | 6-digit pairing code verified by operator on both sides |
-| Pairing relay (man in the middle on the pairing port) | v2 pairing code bound to the dispatcher certificate the agent saw; a relay shows mismatching codes (limits under *Pairing code verification*) |
+| Pairing relay (man in the middle on the pairing port) | Verified pairing (`--dispatcher-fingerprint`): the agent refuses a listener whose certificate does not chain to the dispatcher's CA before sending its CSR. Without it, the v2 pairing code bound to the dispatcher certificate the agent saw; a relay shows mismatching codes (limits under *Pairing code verification*) |
 | Lateral reconnaissance via capabilities | `/capabilities` restricted to the trusted-dispatcher map (per-dispatcher serial); hard deny on unknown serial; re-pair to activate |
 | Script execution by non-current dispatcher cert | `/run`, `/ping`, and `/result` restricted to the trusted-dispatcher map (per-dispatcher serial); hard deny on unknown serial |
 | Cross-dispatcher result disclosure | Runs partitioned per owner; `GET /result/<reqid>` owner-gated, `404 unknown` to other dispatchers (`result-deny`, REASON=not-owner) |

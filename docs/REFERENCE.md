@@ -269,6 +269,26 @@ pending. Press Ctrl-C to stop pairing mode.
 Pairing mode processes one request at a time interactively. For
 unattended approval workflows, use `list-requests` and `approve`.
 
+**Verified pairing.** On start, pairing mode prints this dispatcher's CA
+fingerprint and the agent command for verified pairing, ready to paste:
+
+```
+Pairing mode active on port 7444 (auto-stops in 600s). Ctrl-C or 'quit' to stop.
+Dispatcher CA fingerprint: SHA256:3f2a...c91e
+On the agent (verified pairing; use it on any untrusted network):
+    ctrl-exec-agent request-pairing --dispatcher d1.example.com --dispatcher-fingerprint SHA256:3f2a...c91e
+Waiting for pairing requests...
+```
+
+The host in the command is this host's name; replace it with the name or
+address the agent reaches the dispatcher by if they differ. `--port` is added
+when the pairing port is not 7444. The listener sends its CA certificate after
+its own, which is what lets the agent check it. If the CA cannot be used (no
+`ca.crt` in the config directory, or it did not issue the certificate named by
+`cert`), the banner says `Verified pairing unavailable: <reason>.`, logs
+`ACTION=pairing-ca-unavailable`, and pairing works as before without it. See
+`ca-fingerprint` and `request-pairing --dispatcher-fingerprint`.
+
 **Automatic timeout.** Pairing mode always auto-stops after an absolute
 timeout so the pairing port cannot be left open indefinitely. The default is
 600 seconds; lower it with `--timeout <seconds>` (1–600) or the
@@ -287,7 +307,8 @@ ced pairing-mode start           # detach; auto-stops at the timeout
 ced pairing-mode stop            # stop a backgrounded session, close the port
 ```
 
-`start` reports the PID and the stop deadline, then returns. Only one
+`start` reports the PID and the stop deadline, followed by the same verified
+pairing lines, then returns. Only one
 background session runs at a time (tracked by a pidfile under
 `/var/lib/ctrl-exec`). `stop` is a no-op, with a clear message, if nothing is
 running.
@@ -362,6 +383,24 @@ signing.
 ```bash
 ced deny <reqid>
 ```
+
+---
+
+### ca-fingerprint
+
+Print the SHA-256 fingerprint of this dispatcher's CA certificate
+(`ca.crt` in the config directory), for verified pairing.
+
+```bash
+ced ca-fingerprint
+# SHA256:3f2a...c91e
+```
+
+One line on stdout, `SHA256:` then 64 lowercase hex digits, as
+`request-pairing --dispatcher-fingerprint` takes it. It is the fingerprint of
+the CA, not of the dispatcher certificate, so it does not change on
+`rotate-cert`. Fails, with the reason on stderr, if there is no CA certificate
+or it did not issue the dispatcher's certificate (`cert` in `ctrl-exec.conf`).
 
 ---
 
@@ -1144,12 +1183,28 @@ request and stored in the registry so dispatch can reach it without a
 per-command `--port`; the operator can override it with `approve --agent-port`.
 
 ```bash
-ctrl-exec-agent request-pairing --dispatcher <host>
+ctrl-exec-agent request-pairing --dispatcher <host> [--dispatcher-fingerprint SHA256:<hex>]
 ctrl-exec-agent request-pairing --dispatcher <host> --background [--timeout <n>]
+    [--dispatcher-fingerprint SHA256:<hex>]
 ```
 
 `--dispatcher <host>`
 : Hostname or IP of the dispatcher host. Required.
+
+`--dispatcher-fingerprint SHA256:<hex>`
+: Verified pairing. The SHA-256 fingerprint of the dispatcher's CA
+  certificate, from `ced ca-fingerprint` or the `pairing-mode` banner. Colons
+  between the bytes and either case are accepted, and the `SHA256:` prefix may
+  be left off; anything else is refused before connecting. After the TLS
+  handshake, and before sending anything, the agent checks that the
+  dispatcher's certificate chains to the CA with this fingerprint. If it does
+  not, the agent stops with `Pairing refused:` and the expected and seen
+  fingerprints, logs `ACTION=pair-verify-failed`, and exits non-zero without
+  sending its CSR (with `--background`, before printing a request ID). On
+  success it prints `Dispatcher verified: ...` above the pairing code. Use it on
+  any network you do not control; see SECURITY.md, *Verified pairing*. Needs a
+  0.14 or later dispatcher, which sends its CA certificate. Without the flag,
+  pairing runs as before.
 
 `--port <n>`
 : Override the pairing port on the dispatcher (default 7444).
@@ -1202,12 +1257,18 @@ On the agent host (as part of a provisioning script):
 ```bash
 # Start pairing-mode on the dispatcher first, then:
 REQID=$(ctrl-exec-agent request-pairing --dispatcher ctrl-exec.example.com \
+    --dispatcher-fingerprint "$DISPATCHER_FINGERPRINT" \
     --background --timeout 60)
 echo "Request ID: $REQID"
 ```
 
-The command exits 0 immediately, printing the request ID. The background
-process is now waiting for approval.
+`DISPATCHER_FINGERPRINT` is the output of `ced ca-fingerprint`, held in the
+orchestrator's configuration alongside the dispatcher's address. With it, a
+dispatcher that fails verification gets no CSR and the command exits non-zero
+with nothing on stdout.
+
+The command exits 0 immediately, printing the request ID and nothing else.
+The background process is now waiting for approval.
 
 On the dispatcher host (or via the orchestrator calling it remotely):
 

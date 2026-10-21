@@ -218,6 +218,19 @@ sub submit_pairing_request (%opts) {
     return { ok => 0, error => "cannot fingerprint the dispatcher certificate" }
         unless defined $fpr_bin && length $fpr_bin == 32;
     my $dispatcher_fpr = unpack 'H*', $fpr_bin;
+
+    # Verified pairing (T-041): with the dispatcher's CA fingerprint, the
+    # certificate this connection presented must chain to that CA. Checked here,
+    # after the handshake and before anything is sent, so a listener that fails
+    # it never receives the CSR.
+    if (defined(my $want = $opts{dispatcher_ca_fpr})) {
+        my $why = verify_dispatcher_ca($sock, $want);
+        if (defined $why) {
+            $sock->close(SSL_no_shutdown => 1);
+            return { ok => 0, verify_failed => 1, error => $why };
+        }
+    }
+
     my $code = eval {
         Exec::Digest::pairing_code_for($PAIRING_CODE_VERSION, $csr_pem, $dispatcher_fpr)
     } // return { ok => 0, error => "cannot compute the pairing code: $@" };
@@ -287,6 +300,65 @@ sub submit_pairing_request (%opts) {
         dispatcher_fpr => $dispatcher_fpr,
         dispatcher_confirms_v2 => (($data->{code_version} // '') eq '2' ? 1 : 0),
     };
+}
+
+# Check that the certificate a pairing connection presented chains to the CA
+# whose SHA-256 fingerprint is $want_fpr (64 lowercase hex). The dispatcher
+# sends its CA certificate after its own; the CA is found in the presented
+# chain by fingerprint and used as the only trust anchor for a full X.509
+# verification of the presented certificate (signature, validity dates, CA
+# constraints). Holding the CA certificate alone is not enough - it is public -
+# the presented certificate must be one that CA issued, and the TLS handshake
+# has already proved the peer holds that certificate's key.
+# Returns undef when verified, or the reason it is not.
+sub verify_dispatcher_ca ($sock, $want_fpr) {
+    require Net::SSLeay;
+    my $want_disp = Exec::CertInfo::format_sha256_fingerprint($want_fpr);
+    my $leaf  = $sock->peer_certificate;
+    my @chain = $sock->peer_certificates;
+    return "the dispatcher presented no certificate" unless $leaf && @chain;
+
+    my ($anchor, @seen);
+    for my $x (@chain) {
+        my $fpr = unpack 'H*', (Net::SSLeay::X509_digest($x,
+            Net::SSLeay::EVP_get_digestbyname('sha256')) // '');
+        push @seen, $fpr;
+        $anchor //= $x if $fpr eq lc $want_fpr;
+    }
+    unless ($anchor) {
+        return "the dispatcher's certificate does not chain to the expected CA.\n"
+             . "  expected CA: $want_disp\n"
+             . join('', map { "  seen:        " . Exec::CertInfo::format_sha256_fingerprint($_) . "\n" } @seen)
+             . "The CSR was not sent. Check the fingerprint with "
+             . "'ctrl-exec-dispatcher ca-fingerprint' on the dispatcher; a "
+             . "dispatcher before 0.14 does not send its CA, so it cannot be "
+             . "verified.";
+    }
+
+    my $store = Net::SSLeay::X509_STORE_new();
+    my $sk    = Net::SSLeay::sk_X509_new_null();
+    my $ctx   = Net::SSLeay::X509_STORE_CTX_new();
+    my ($ok, $err);
+    Net::SSLeay::X509_STORE_add_cert($store, $anchor);
+    # The pinned certificate is the trust anchor whether or not it is
+    # self-signed, so verification never reaches past it to a system store.
+    Net::SSLeay::X509_STORE_set_flags($store, Net::SSLeay::X509_V_FLAG_PARTIAL_CHAIN());
+    Net::SSLeay::sk_X509_push($sk, $_) for @chain[1 .. $#chain];
+    if (Net::SSLeay::X509_STORE_CTX_init($ctx, $store, $leaf, $sk)) {
+        $ok  = Net::SSLeay::X509_verify_cert($ctx) == 1;
+        $err = Net::SSLeay::X509_verify_cert_error_string(
+            Net::SSLeay::X509_STORE_CTX_get_error($ctx));
+    }
+    Net::SSLeay::X509_STORE_CTX_free($ctx);
+    Net::SSLeay::sk_X509_free($sk);
+    Net::SSLeay::X509_STORE_free($store);
+    return if $ok;
+    return "the dispatcher's certificate is not issued by the expected CA "
+         . "(" . ($err // 'verification could not run') . ").\n"
+         . "  expected CA: $want_disp\n"
+         . "  seen:        " . Exec::CertInfo::format_sha256_fingerprint($seen[0])
+         . " (presented certificate)\n"
+         . "The CSR was not sent.";
 }
 
 # Read the final approval/denial response on the open pairing socket.

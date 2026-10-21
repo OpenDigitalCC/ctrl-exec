@@ -15,6 +15,7 @@ use Exec::Lock    qw();
 use Exec::RunStore qw();
 use Exec::Pairing qw();
 use Exec::CA        qw();
+use Exec::CertInfo  qw();
 use Exec::Registry  qw();
 use Exec::Rotation  qw();
 use JSON                qw(encode_json decode_json);
@@ -77,6 +78,7 @@ sub main {
         'list-requests'     => \&mode_list_requests,
         'approve'           => \&mode_approve,
         'deny'              => \&mode_deny,
+        'ca-fingerprint'    => \&mode_ca_fingerprint,
         'setup-ca'          => \&mode_setup_ca,
         'setup-ctrl-exec'  => \&mode_setup_dispatcher,
         'list-agents'       => \&mode_list_agents,
@@ -551,6 +553,9 @@ sub _pairing_start_background ($opts, $config, $timeout) {
         print "Pairing mode started in the background on port $port (PID $child).\n";
         print "It auto-stops after ${timeout}s; stop sooner with:\n";
         print "    ctrl-exec-dispatcher pairing-mode stop\n";
+        my $ca = Exec::Pairing::ca_fingerprint(
+            ca_dir => Exec::DispatcherConfig::conf_dir(), cert => $config->{cert});
+        print "$_\n" for Exec::Pairing::verified_pairing_lines($ca, $port);
         return;
     }
 
@@ -692,6 +697,17 @@ sub mode_deny ($opts, $reqid = undef) {
         reqid  => $reqid,
         log_fn => sub ($f) { Exec::Log::log_action('INFO', $f) },
     );
+}
+
+# Print this dispatcher's CA fingerprint (SHA256:<hex>) on its own, for an agent
+# to pair with 'request-pairing --dispatcher-fingerprint' (verified pairing,
+# T-041). One line on stdout so a script can take it as it stands.
+sub mode_ca_fingerprint ($opts, @) {
+    my $config = eval { _load_config() } // {};
+    my $ca = Exec::Pairing::ca_fingerprint(
+        ca_dir => Exec::DispatcherConfig::conf_dir(), cert => $config->{cert});
+    die "Error: $ca->{error}.\n" unless $ca->{ok};
+    print Exec::CertInfo::format_sha256_fingerprint($ca->{fpr}), "\n";
 }
 
 sub mode_setup_ca {
@@ -1126,6 +1142,9 @@ Modes:
                              [--agent-port <n>] overrides the agent's
                              reported operational port (default: 7443)
   deny <reqid>               Deny a pairing request
+  ca-fingerprint             Print this dispatcher's CA fingerprint for
+                             verified pairing (request-pairing
+                             --dispatcher-fingerprint on the agent)
   setup-ca                   One-time CA initialisation
   setup-ctrl-exec           Generate ctrl-exec key and certificate
   list-agents                List all registered (paired) agents

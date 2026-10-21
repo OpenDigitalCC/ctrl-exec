@@ -1,7 +1,7 @@
 ---
 title: Pairing
 subtitle: How a new agent is introduced to the fleet and what the protocol guarantees.
-updated: 2026-10-20
+updated: 2026-10-21
 github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/PAIRING.md
 current_page: /pairing
 ---
@@ -10,13 +10,13 @@ current_page: /pairing
 
 Pairing is the ceremony by which a new agent joins the fleet. It establishes mutual trust between an agent and a dispatcher instance: the agent receives a CA-signed certificate, and the dispatcher records the agent in the registry.
 
-Pairing runs on a separate port (7444 by default) using server-TLS only. The agent does not yet have a certificate to present, and does not yet hold the CA that would let it check the dispatcher's certificate. That is what the verification code is for: it ties the request to the certificate the agent actually saw.
+Pairing runs on a separate port (7444 by default) using server-TLS only. The agent does not yet have a certificate to present, and does not yet hold the CA that would let it check the dispatcher's certificate. Two things cover that: verified pairing, where the operator gives the agent the dispatcher's CA fingerprint so it checks the dispatcher before sending anything, and the verification code, which ties the request to the certificate the agent actually saw.
 
 # The Protocol
 
 1. The operator starts `ced pairing-mode` on the dispatcher host. This opens a listener on the pairing port and waits for incoming CSR submissions.
 
-2. On the agent host, the operator runs `ctrl-exec-agent request-pairing --dispatcher <hostname>`. The agent generates a new RSA key pair, constructs a CSR, and connects to the pairing port.
+2. On the agent host, the operator runs the command the banner printed, `ctrl-exec-agent request-pairing --dispatcher <hostname> --dispatcher-fingerprint SHA256:<hex>` (or without the fingerprint on a closed network). The agent generates a new RSA key pair, constructs a CSR, and connects to the pairing port. With the fingerprint it checks that the dispatcher's certificate chains to that CA, and stops before sending the CSR if not.
 
 3. Both sides independently compute a 6-digit verification code from the CSR and the dispatcher certificate on the pairing connection. The code is displayed on both terminals.
 
@@ -37,6 +37,9 @@ Verification code
 : The 6-digit code is derived on both sides independently from the CSR and the fingerprint of the dispatcher's pairing certificate: the agent uses the certificate it was shown, the dispatcher the one it presents. A matching code shows the dispatcher has this agent's CSR and the agent was talking to this dispatcher. An attacker who intercepts the connection must present its own certificate to the agent, so even if it passes the CSR on unchanged the two codes differ, and the operator's comparison catches it. The code is not transmitted over the network — it is computed locally from what each side received or generated.
 
 : It is a six-digit check: an attacker in the path with time and computing power to try around a million certificate requests of its own could still produce a match, so pair over a network you trust and treat any mismatch as an attack.
+
+Verified pairing
+: With `--dispatcher-fingerprint`, the agent checks the pairing connection against the dispatcher's CA (its SHA-256 fingerprint, from `ced ca-fingerprint` or the `pairing-mode` banner) before it sends its CSR. Something in the path that is not the dispatcher never sees the CSR, so it has nothing to work with. The fingerprint is of the CA, so it does not change when the dispatcher's certificate is rotated. The dispatcher cannot insist on it; it prints the command and advises using it on any untrusted network. On a closed network, or over an authenticated path such as an SSH tunnel, the code alone is adequate.
 
 Agents older than 0.13
 : Older agents compute the code from the CSR alone. The dispatcher still accepts them and shows their code marked `v1, pre-0.13 agent`; a relay can reproduce that code, so upgrade the agent before pairing where it matters. Codes from 0.13 agents are marked `v2`. Pair 0.13 agents with a 0.13 dispatcher: an older dispatcher shows a code they will not match.
@@ -135,9 +138,9 @@ For orchestrated environments where interactive approval is not practical, the a
 sudo ctrl-exec-agent request-pairing --dispatcher ctrl-exec.example.com --background
 ```
 
-The agent prints the request ID and pairing code to stdout, then waits without requiring a terminal. The approval step remains explicit — an operator or automation system must call `ced approve <reqid>`.
+The agent prints the request ID (and nothing else) to stdout, then waits without requiring a terminal. The approval step remains explicit — an operator or automation system must call `ced approve <reqid>`; `ced list-requests` shows the code. Orchestration can hold the dispatcher's CA fingerprint in its configuration and pass `--dispatcher-fingerprint` as well, so the request goes to the genuine dispatcher only.
 
-To set an approval timeout (default 600 seconds):
+To set an approval timeout (default 30 seconds, maximum 600):
 
 ```bash
 sudo ctrl-exec-agent request-pairing \

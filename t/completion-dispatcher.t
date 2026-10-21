@@ -34,7 +34,7 @@ sub complete {
     return [ sort grep { length } split /\n/, $out ];
 }
 
-my @modes = qw(run status wait ping pairing-mode list-requests approve deny
+my @modes = qw(run status wait ping pairing-mode list-requests approve deny ca-fingerprint
     setup-ca setup-ctrl-exec list-agents edit-agent list-locks rotate-cert
     serial-status unpair maintain);
 
