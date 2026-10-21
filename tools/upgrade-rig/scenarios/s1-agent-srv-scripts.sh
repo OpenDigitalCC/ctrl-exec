@@ -82,7 +82,9 @@ check "self-check: allowlist holds all 3 scripts" "$out" 'Allowlist OK \(3 scrip
 for s in $SCRIPTS; do
     check "self-check lists $s as ok" "$out" "Script '$s': /srv/scripts/$s.sh .*\\[ok\\]"
 done
-check_not "self-check: no script skipped or refused" "$out" 'skip|SKIPPED|refused|not permitted|owned by uid|group-writable'
+# A layout that breaks the ownership rule is reported (self-check shows a
+# [warning: ...] per script, T-054), never skipped or refused.
+check_not "self-check: no script skipped or refused" "$out" 'skipping|SKIPPED|refused|not permitted'
 
 out=$(cli "$DISP" to discovery --scripts agent)
 { echo "== discovery --scripts (TO)"; echo "$out"; } >> "$EV"
