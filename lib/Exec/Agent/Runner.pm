@@ -8,6 +8,7 @@ use JSON   qw(encode_json);
 use File::Path qw(remove_tree);
 use File::Temp qw(tempdir);
 use File::Spec qw();
+use Encode     qw();
 use Fcntl  qw(O_WRONLY O_CREAT O_EXCL O_NOFOLLOW);
 use POSIX  qw(WIFEXITED WEXITSTATUS EINTR EAGAIN EPIPE);
 use Fcntl  qw(F_GETFL F_SETFL O_NONBLOCK);
@@ -108,11 +109,6 @@ sub _run_forked ($script_path, $args, $stdin_data, $extra_env, $timeout) {
         open STDIN,  '<&', $stdin_r  or POSIX::_exit(127);
         open STDOUT, '>&', $stdout_w or POSIX::_exit(127);
         open STDERR, '>&', $stderr_w or POSIX::_exit(127);
-        ## no critic (RequireEncodingWithUTF8Layer) - no effect: layers do not survive exec
-        binmode STDIN,  ':utf8';
-        binmode STDOUT, ':utf8';
-        binmode STDERR, ':utf8';
-        ## use critic
         close $stdin_r;
         close $stdout_w;
         close $stderr_w;
@@ -234,11 +230,15 @@ sub _write_stdin ($fh, $data, $timeout = undef) {
     }
 }
 
+# Script output as text: read the bytes, decode UTF-8 once, and replace any
+# byte sequence that is not UTF-8 with U+FFFD, so the JSON reply always
+# encodes (a malformed string made encode_json die). Exec::Agent::ExecClient
+# decodes executor output the same way.
 sub _slurp_utf8 ($fh) {
-    # :utf8 decodes leniently; :encoding(UTF-8) would change how bad output reads.
-    binmode $fh, ':utf8';   ## no critic (RequireEncodingWithUTF8Layer)
+    binmode $fh, ':raw';
     local $/;
-    return scalar <$fh> // '';
+    my $bytes = <$fh> // '';
+    return Encode::decode('UTF-8', $bytes);
 }
 
 sub _error ($msg) {

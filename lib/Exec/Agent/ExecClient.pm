@@ -30,6 +30,7 @@ use warnings;
 use feature      qw(signatures);
 no warnings      qw(experimental::signatures);
 use Carp qw(croak);
+use Encode qw();
 use IO::Socket::UNIX qw();
 use Errno qw(ENOENT ECONNREFUSED EACCES EPERM);
 
@@ -159,7 +160,11 @@ sub run (%o) {
     return { exit => -1, error => old_executor_message(), executor_no_input => 1 }
         if $v2 && $exit == -1 && $out eq '' && $err eq $OLD_EXECUTOR_REPLY;
 
-    return { exit => $exit, stdout => $out, stderr => $err };
+    # The frame carries the action's output as bytes; decode it as the direct
+    # path does (Runner::_slurp_utf8): UTF-8 once, anything else as U+FFFD.
+    return { exit   => $exit,
+             stdout => Encode::decode('UTF-8', $out),
+             stderr => Encode::decode('UTF-8', $err) };
 }
 
 1;
