@@ -1879,7 +1879,22 @@ static int cmd_serve(const char *sockpath, const char *agent_conf,
     return 0;
 }
 
+/* Started with stdin, stdout or stderr closed, the executor's next socket,
+ * pipe or directory fd would take that number: its error messages would then
+ * go into whatever holds fd 2 (possibly the agent connection), and the
+ * action's pipe wiring could collide with its own fds. Fill any closed one of
+ * 0-2 with /dev/null before anything else is opened; if that fails, stop. */
+static int ensure_stdio_open(void) {
+    for (int fd = 0; fd <= 2; fd++) {
+        if (fcntl(fd, F_GETFD) != -1 || errno != EBADF) continue;
+        int n = open("/dev/null", O_RDWR);
+        if (n != fd) { if (n >= 0) close(n); return -1; }
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
+    if (ensure_stdio_open() != 0) return 1;
     if (argc == 5 && strcmp(argv[1], "resolve") == 0)
         return cmd_resolve(argv[2], argv[3], argv[4]);
     if (argc == 6 && strcmp(argv[1], "serve") == 0)

@@ -369,7 +369,10 @@ The action's file descriptors under the executor
   connection socket stayed open in the action, so a script could write its
   own result frame to the agent (any exit status and output) or corrupt the
   real one. An `input=fields` action reads its files by the path in
-  `CTRL_EXEC_INPUT`, never through an inherited descriptor.
+  `CTRL_EXEC_INPUT`, never through an inherited descriptor. If the executor
+  itself is started with any of fd 0-2 closed, it fills them with `/dev/null`
+  before opening anything, so none of its sockets, pipes or directories can
+  take those numbers.
 
 Schema sidecars are advertised, never executed
 : A script's optional `<script>.schema.json` sidecar (see REFERENCE.md) is read
