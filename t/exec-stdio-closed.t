@@ -16,7 +16,8 @@ use warnings;
 use Test::More;
 use File::Temp qw(tempdir);
 use FindBin    qw($Bin);
-use lib "$Bin/../lib";
+use lib "$Bin/../lib", "$Bin/lib";
+use ChildGuard ();
 use IO::Socket::UNIX qw();
 use JSON::PP ();
 use POSIX qw();
@@ -36,7 +37,7 @@ plan skip_all => '/proc/self/fd not available' unless -d '/proc/self/fd';
 my $JSON = JSON::PP->new->canonical;
 
 umask 022;   # nothing group-writable: the executor refuses it (T-045)
-my $dir = tempdir(CLEANUP => 1);
+my $dir = ChildGuard::dir(tempdir(CLEANUP => 1));
 my $SRC = $ENV{CE_EXECUTOR_SRC} // "$Bin/../src/ctrl-exec-executor.c";
 my $BIN = "$dir/ctrl-exec-executor";
 system($cc, '-O2', '-DCE_TEST_SEAM', '-o', $BIN, $SRC, '-lcap') == 0
@@ -65,7 +66,7 @@ my ($allowlist, $skipped);
 is scalar(keys %$allowlist), 1, 'test script allowlisted' or diag explain $skipped;
 
 my $sock = "$dir/exec.sock";
-my $epid = fork // die "fork: $!";
+my $epid = ChildGuard::guarded_fork() // die "fork: $!";
 if (!$epid) {
     $ENV{CTRL_EXEC_EXEC_ALLOW_UNPRIV} = 1;
     $ENV{CE_TEST_TRUSTED_UID} = $>;

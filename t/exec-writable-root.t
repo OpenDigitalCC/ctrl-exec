@@ -7,7 +7,8 @@ use warnings;
 use Test::More;
 use File::Temp qw(tempdir);
 use FindBin    qw($Bin);
-use lib "$Bin/../lib";
+use lib "$Bin/../lib", "$Bin/lib";
+use ChildGuard ();
 use POSIX qw();
 
 use Exec::Agent::ExecClient qw();
@@ -19,7 +20,7 @@ plan skip_all => 'gcc not available' unless $cc && -x $cc;
 # /run, not /tmp: the profile mounts a private tmpfs on /tmp which would shadow
 # files placed under it. Not /var/tmp either: the executor refuses a script under
 # a directory others can write (T-045), and /var/tmp is world-writable.
-my $TMP = tempdir(DIR => '/run', CLEANUP => 1);
+my $TMP = ChildGuard::dir(tempdir(DIR => '/run', CLEANUP => 1));
 my $BIN = "$TMP/ctrl-exec-executor";
 system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-executor.c", '-lcap') == 0
     or plan skip_all => 'could not compile the executor';
@@ -49,7 +50,7 @@ print $s "probe = $probe profile=confined\n";
 close $s;
 
 my $sock = "$TMP/exec.sock";
-my $pid  = fork();
+my $pid  = ChildGuard::guarded_fork();
 die "fork: $!" unless defined $pid;
 if ($pid == 0) {
     exec($BIN, 'serve', $sock, $agent_conf, $scripts_conf, scalar getpwuid($>)) or POSIX::_exit(127);

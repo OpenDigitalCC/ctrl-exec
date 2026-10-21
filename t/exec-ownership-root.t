@@ -22,7 +22,8 @@ use warnings;
 use Test::More;
 use File::Temp qw(tempdir);
 use FindBin    qw($Bin);
-use lib "$Bin/../lib";
+use lib "$Bin/../lib", "$Bin/lib";
+use ChildGuard ();
 use POSIX      qw(mkfifo);
 use Fcntl      qw(O_WRONLY O_NONBLOCK);
 
@@ -35,7 +36,7 @@ plan skip_all => 'gcc not available' unless $cc && -x $cc;
 umask 022;
 # /run is root-owned 0755 on a normal host and in the rig; /tmp and /var/tmp
 # are world-writable, so a script under them is refused.
-my $T = tempdir(DIR => '/run', CLEANUP => 1);
+my $T = ChildGuard::dir(tempdir(DIR => '/run', CLEANUP => 1));
 chmod 0755, $T;
 my $SRC  = $ENV{CE_EXECUTOR_SRC} // "$Bin/../src/ctrl-exec-executor.c";
 my $BIN  = "$T/executor";
@@ -90,7 +91,7 @@ sub run_via {
     my ($bin, $name, %env) = @_;
     my $sock = "$T/exec.sock";
     unlink $sock;
-    my $pid = fork() // die "fork: $!";
+    my $pid = ChildGuard::guarded_fork() // die "fork: $!";
     if ($pid == 0) {
         $ENV{$_} = $env{$_} for keys %env;
         open STDERR, '>>', "$T/serve.err";

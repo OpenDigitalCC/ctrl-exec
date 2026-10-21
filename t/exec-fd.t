@@ -22,7 +22,8 @@ use warnings;
 use Test::More;
 use File::Temp qw(tempdir);
 use FindBin    qw($Bin);
-use lib "$Bin/../lib";
+use lib "$Bin/../lib", "$Bin/lib";
+use ChildGuard ();
 use Fcntl qw(F_GETFD F_SETFD FD_CLOEXEC);
 use IO::Socket::UNIX qw();
 use JSON::PP ();
@@ -43,7 +44,7 @@ plan skip_all => '/proc/self/fd not available' unless -d '/proc/self/fd';
 my $JSON = JSON::PP->new->canonical;
 
 umask 022;   # nothing group-writable: the executor refuses it (T-045)
-my $dir = tempdir(CLEANUP => 1);
+my $dir = ChildGuard::dir(tempdir(CLEANUP => 1));
 my $SRC = $ENV{CE_EXECUTOR_SRC} // "$Bin/../src/ctrl-exec-executor.c";
 my $BIN = "$dir/ctrl-exec-executor";
 system($cc, '-O2', '-DCE_TEST_SEAM', '-o', $BIN, $SRC, '-lcap') == 0
@@ -119,7 +120,7 @@ my $exec_log = "$dir/out/executor.log";
 my $LEAK_FD  = 9;
 my $epid;
 sub start_executor {
-    $epid = fork // die "fork: $!";
+    $epid = ChildGuard::guarded_fork() // die "fork: $!";
     if (!$epid) {
         open STDERR, '>>', $exec_log or POSIX::_exit(127);
         # An fd the launcher left open across exec (fd 9, close-on-exec off).

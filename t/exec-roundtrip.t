@@ -10,7 +10,8 @@ use warnings;
 use Test::More;
 use File::Temp qw(tempdir);
 use FindBin    qw($Bin);
-use lib "$Bin/../lib";
+use lib "$Bin/../lib", "$Bin/lib";
+use ChildGuard ();
 use POSIX      qw(:sys_wait_h);
 
 use Exec::Agent::ExecClient qw();
@@ -18,7 +19,7 @@ use Exec::Agent::ExecClient qw();
 my $cc = `command -v gcc 2>/dev/null`; chomp $cc;
 plan skip_all => 'gcc not available' unless $cc && -x $cc;
 
-my $TMP  = tempdir(CLEANUP => 1);
+my $TMP  = ChildGuard::dir(tempdir(CLEANUP => 1));
 umask 022;   # nothing group-writable: the executor refuses it (T-045)
 my $BIN  = "$TMP/ctrl-exec-executor";
 system($cc, '-O2', '-DCE_TEST_SEAM', '-o', $BIN, "$Bin/../src/ctrl-exec-executor.c", '-lcap') == 0
@@ -63,7 +64,7 @@ close $cf;
 my $sock = "$TMP/exec.sock";
 my $user = getpwuid($>);               # peer-user = us; PEERCRED uid will match
 
-my $pid = fork();
+my $pid = ChildGuard::guarded_fork();
 die "fork: $!" unless defined $pid;
 if ($pid == 0) {
     $ENV{CTRL_EXEC_EXEC_ALLOW_UNPRIV} = 1;          # test-only: skip root requirement

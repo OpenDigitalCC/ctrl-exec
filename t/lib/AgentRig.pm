@@ -14,9 +14,8 @@ use IO::Socket::SSL;
 use POSIX      qw(WNOHANG);
 use Time::HiRes qw(sleep time);
 
-# Pids of agents this process started, so a test that dies leaves none behind.
-my %LIVE;
-END { kill 'TERM', keys %LIVE if %LIVE; }
+# Agents are started with ChildGuard, so a test that dies leaves none behind.
+use ChildGuard ();
 
 sub available { return system('openssl version >/dev/null 2>&1') == 0 }
 
@@ -60,7 +59,7 @@ sub _make_leaf {
 # new(extra_conf => "key = value\n...", allowlist => "name = /path\n")
 sub new {
     my ($class, %o) = @_;
-    my $dir = tempdir(CLEANUP => 1);
+    my $dir = ChildGuard::dir(tempdir(CLEANUP => 1));
     _make_ca($dir, 'ca');
     _make_ca($dir, 'rogue-ca');
     _make_leaf($dir, 'ca', 'agent',     1001);
@@ -106,7 +105,7 @@ END
 
 sub start {
     my ($self) = @_;
-    my $pid = fork() // die "fork: $!";
+    my $pid = ChildGuard::guarded_fork() // die "fork: $!";
     if ($pid == 0) {
         open STDERR, '>>', $self->{log} or die;
         open STDOUT, '>>', $self->{log} or die;
@@ -115,7 +114,6 @@ sub start {
             or die "exec: $!";
     }
     $self->{pid} = $pid;
-    $LIVE{$pid} = 1;
     my $deadline = time + 15;
     while (time < $deadline) {
         my $s = IO::Socket::INET->new(PeerAddr => '127.0.0.1', PeerPort => $self->{port});
@@ -133,7 +131,6 @@ sub stop {
     return unless $self->{pid};
     kill 'TERM', $self->{pid};
     waitpid($self->{pid}, 0);
-    delete $LIVE{ $self->{pid} };
     $self->{pid} = undef;
 }
 

@@ -19,7 +19,8 @@ use warnings;
 use Test::More;
 use File::Temp qw(tempdir);
 use FindBin    qw($Bin);
-use lib "$Bin/../lib";
+use lib "$Bin/../lib", "$Bin/lib";
+use ChildGuard ();
 use IO::Socket::UNIX qw();
 use JSON::PP ();
 use POSIX qw();
@@ -43,7 +44,7 @@ my $SENTINEL = 'SENTINEL-c41e07-s3cr3t-XK';
 my $OTHER    = 'SECOND-9a2f61-v4lu3-QM';
 
 umask 022;   # nothing group-writable: the executor refuses it (T-045)
-my $dir = tempdir(CLEANUP => 1);
+my $dir = ChildGuard::dir(tempdir(CLEANUP => 1));
 my $BIN = "$dir/ctrl-exec-executor";
 system($cc, '-O2', '-DCE_TEST_SEAM', '-o', $BIN, "$Bin/../src/ctrl-exec-executor.c", '-lcap') == 0
     or plan skip_all => 'could not compile src/ctrl-exec-executor.c';
@@ -111,7 +112,7 @@ my $exec_log = "$dir/out/executor.log";
 my $base    = "$dir/input";
 my $epid;
 sub start_executor {
-    $epid = fork // die "fork: $!";
+    $epid = ChildGuard::guarded_fork() // die "fork: $!";
     if (!$epid) {
         open STDERR, '>>', $exec_log or POSIX::_exit(127);
         $ENV{CTRL_EXEC_EXEC_ALLOW_UNPRIV} = 1;
@@ -382,7 +383,7 @@ subtest 'an executor without input support is reported, not misread' => sub {
     my $old = "$dir/old.sock";
     my $srv = IO::Socket::UNIX->new(Local => $old, Type => IO::Socket::UNIX::SOCK_STREAM(), Listen => 5)
         or die "listen: $!";
-    my $spid = fork // die;
+    my $spid = ChildGuard::guarded_fork() // die;
     if (!$spid) {
         while (my $c = $srv->accept) {
             my $hdr = ''; $c->sysread($hdr, 4);

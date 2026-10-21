@@ -20,7 +20,8 @@ use warnings;
 use Test::More;
 use File::Temp qw(tempdir);
 use FindBin    qw($Bin);
-use lib "$Bin/../lib";
+use lib "$Bin/../lib", "$Bin/lib";
+use ChildGuard ();
 use POSIX qw();
 
 use Exec::Agent::ExecClient qw();
@@ -43,7 +44,7 @@ my $CAP_NONE    = '0000000000000000';
 # A tempdir nobody can traverse+exec under (default tempdir mode is 0700).
 # Under /run (root-owned, 0755): the executor refuses a script under a directory
 # others can write (T-045), and /var/tmp is world-writable.
-my $TMP = tempdir(DIR => '/run', CLEANUP => 1);
+my $TMP = ChildGuard::dir(tempdir(DIR => '/run', CLEANUP => 1));
 chmod 0755, $TMP;
 my $BIN = "$TMP/ctrl-exec-executor";
 system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-executor.c", '-lcap') == 0
@@ -81,7 +82,7 @@ sub run_under_profile {
     close $s;
 
     my $sock = "$TMP/exec.$label.sock";
-    my $pid  = fork();
+    my $pid  = ChildGuard::guarded_fork();
     die "fork: $!" unless defined $pid;
     if ($pid == 0) {
         # Silence the executor's own stderr so a deliberate config rejection does
@@ -170,7 +171,7 @@ subtest 'unannotated script with no [profile default] is refused, never run as r
     close $s;
 
     my $sock = "$TMP/exec.nodef.sock";
-    my $pid  = fork();
+    my $pid  = ChildGuard::guarded_fork();
     die "fork: $!" unless defined $pid;
     if ($pid == 0) {
         open STDERR, '>', "$TMP/serve.nodef.err";

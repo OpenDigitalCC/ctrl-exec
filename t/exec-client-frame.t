@@ -13,20 +13,21 @@ use warnings;
 use Test::More;
 use File::Temp qw(tempdir);
 use FindBin    qw($Bin);
-use lib "$Bin/../lib";
+use lib "$Bin/../lib", "$Bin/lib";
+use ChildGuard ();
 use IO::Socket::UNIX qw();
 use POSIX qw();
 
 use Exec::Agent::ExecClient qw();
 
-my $dir  = tempdir(CLEANUP => 1);
+my $dir  = ChildGuard::dir(tempdir(CLEANUP => 1));
 my $sock = "$dir/stub.sock";
 my $cap  = "$dir/frame";
 
 # Stub executor: store the request frame, answer exit 0.
 my $srv = IO::Socket::UNIX->new(Local => $sock, Type => IO::Socket::UNIX::SOCK_STREAM(), Listen => 5)
     or die "listen: $!";
-my $spid = fork // die "fork: $!";
+my $spid = ChildGuard::guarded_fork() // die "fork: $!";
 if (!$spid) {
     while (my $c = $srv->accept) {
         my $hdr = ''; $c->sysread($hdr, 4);

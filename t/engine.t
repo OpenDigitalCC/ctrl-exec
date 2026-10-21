@@ -3,7 +3,8 @@ use strict;
 use warnings;
 use Test::More;
 use FindBin qw($Bin);
-use lib "$Bin/../lib";
+use lib "$Bin/../lib", "$Bin/lib";
+use ChildGuard ();
 
 use Exec::Engine qw();
 
@@ -111,7 +112,7 @@ use Exec::Engine qw();
     ) or BAIL_OUT("Cannot start mock server: $!");
     my $mock_port = $server->sockport;
 
-    my $child = fork();
+    my $child = ChildGuard::guarded_fork();
     BAIL_OUT("fork failed: $!") unless defined $child;
 
     if ($child == 0) {

@@ -18,7 +18,8 @@ use warnings;
 use Test::More;
 use File::Temp qw(tempdir);
 use FindBin    qw($Bin);
-use lib "$Bin/../lib";
+use lib "$Bin/../lib", "$Bin/lib";
+use ChildGuard ();
 use IO::Socket::UNIX qw();
 use JSON::PP ();
 use POSIX qw();
@@ -51,7 +52,7 @@ my $SENTINEL = 'SENTINEL-root-5d0b2e-k3y-material-WV';
 # executor's input directory is <socket dir>/input, so the socket dir must be
 # traversable by the run_as user (0755) and owned by root.
 umask 022;
-my $TMP = tempdir(DIR => '/run', CLEANUP => 1);
+my $TMP = ChildGuard::dir(tempdir(DIR => '/run', CLEANUP => 1));
 chmod 0755, $TMP;
 my $BIN = "$TMP/ctrl-exec-executor";
 system($cc, '-O2', '-o', $BIN, "$Bin/../src/ctrl-exec-executor.c", '-lcap') == 0
@@ -120,7 +121,7 @@ my $sock = "$TMP/exec.sock";
 my $exec_log = "$TMP/exec.log";
 my $epid;
 sub start_executor {
-    $epid = fork // die "fork: $!";
+    $epid = ChildGuard::guarded_fork() // die "fork: $!";
     if (!$epid) {
         open STDERR, '>>', $exec_log or POSIX::_exit(127);
         exec($BIN, 'serve', $sock, $agent_conf, $scripts_conf, 'root') or POSIX::_exit(127);

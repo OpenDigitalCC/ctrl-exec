@@ -15,6 +15,7 @@ use Test::More;
 use FindBin qw($Bin);
 use lib "$Bin/../lib";
 use lib "$Bin/lib";
+use ChildGuard ();
 use File::Temp qw(tempdir);
 use IO::Socket::INET ();
 use IO::Socket::UNIX ();
@@ -26,9 +27,8 @@ use Errno qw(EACCES);
 
 use Exec::API qw();
 
-my $tmp = tempdir(CLEANUP => 1);
-my %LIVE;
-END { kill 'TERM', keys %LIVE if %LIVE; }
+my $tmp = ChildGuard::dir(tempdir(CLEANUP => 1));
+my %LIVE;    # running API children; ChildGuard stops any a failed test leaves
 
 sub slurp ($p) { open my $fh, '<', $p or return ''; local $/; scalar <$fh> // '' }
 sub spew ($p, $c) { open my $fh, '>', $p or die "$p: $!"; print $fh $c; close $fh; $p }
@@ -47,7 +47,7 @@ sub start_api (%conf) {
     my $id  = ++$n;
     my $out = "$tmp/api-$id.out";
     my $err = "$tmp/api-$id.err";
-    my $pid = fork // die "fork: $!";
+    my $pid = ChildGuard::guarded_fork() // die "fork: $!";
     if (!$pid) {
         open STDOUT, '>', $out or die;
         open STDERR, '>', $err or die;

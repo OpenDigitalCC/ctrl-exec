@@ -20,7 +20,8 @@ use warnings;
 use Test::More;
 use File::Temp qw(tempdir);
 use FindBin    qw($Bin);
-use lib "$Bin/../lib";
+use lib "$Bin/../lib", "$Bin/lib";
+use ChildGuard ();
 use Fcntl qw(F_GETFD F_SETFD FD_CLOEXEC);
 use IO::Socket::UNIX qw();
 use JSON::PP ();
@@ -47,7 +48,7 @@ my $JSON = JSON::PP->new->canonical;
 # executor's input directory is <socket dir>/input, so the socket dir must be
 # traversable by the run_as user (0755) and owned by root.
 umask 022;
-my $TMP = tempdir(DIR => '/run', CLEANUP => 1);
+my $TMP = ChildGuard::dir(tempdir(DIR => '/run', CLEANUP => 1));
 chmod 0755, $TMP;
 my $SRC = $ENV{CE_EXECUTOR_SRC} // "$Bin/../src/ctrl-exec-executor.c";
 my $BIN = "$TMP/ctrl-exec-executor";
@@ -126,7 +127,7 @@ is scalar(keys %$allowlist), 6, 'all test scripts allowlisted' or diag explain $
 my $sock     = "$TMP/exec.sock";
 my $exec_log = "$TMP/exec.log";
 my $LEAK_FD  = 9;
-my $epid = fork // die "fork: $!";
+my $epid = ChildGuard::guarded_fork() // die "fork: $!";
 if (!$epid) {
     open STDERR, '>>', $exec_log or POSIX::_exit(127);
     # An fd the launcher left open across exec (fd 9, close-on-exec off).
