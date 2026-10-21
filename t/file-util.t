@@ -61,7 +61,7 @@ subtest 'slurp vs slurp_maybe on a missing file' => sub {
     my $dir = tempdir(CLEANUP => 1);
     eval { Exec::FileUtil::slurp("$dir/absent") };
     like $@, qr/Cannot read/, 'slurp croaks on a missing file';
-    is Exec::FileUtil::slurp_maybe("$dir/absent"), undef,
+    is scalar(Exec::FileUtil::slurp_maybe("$dir/absent")), undef,
         'slurp_maybe returns undef on a missing file';
 };
 

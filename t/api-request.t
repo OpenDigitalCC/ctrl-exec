@@ -102,8 +102,8 @@ subtest '/run rejects args holding a reference or undef with 400' => sub {
 
 subtest 'Exec::Http::args_problem accepts plain scalars' => sub {
     require Exec::Http;
-    is Exec::Http::args_problem([]),              undef, 'empty array ok';
-    is Exec::Http::args_problem(['a', 1, 2.5, '']), undef, 'strings and numbers ok';
+    is scalar(Exec::Http::args_problem([])),              undef, 'empty array ok';
+    is scalar(Exec::Http::args_problem(['a', 1, 2.5, ''])), undef, 'strings and numbers ok';
     ok defined Exec::Http::args_problem('x'),     'non-array is a problem';
     ok defined Exec::Http::args_problem([\'x']),  'scalar ref is a problem';
 };

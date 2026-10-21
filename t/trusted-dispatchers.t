@@ -216,20 +216,20 @@ subtest 'remove is a no-op for an absent serial or file' => sub {
 
 subtest 'resolves a trusted serial to its identity' => sub {
     my $map = { deadbeef => 'automation', ff => 'human' };
-    is( Exec::Agent::AgentPairing::dispatcher_trusted('deadbeef', $map),
+    is( scalar(Exec::Agent::AgentPairing::dispatcher_trusted('deadbeef', $map)),
         'automation', 'hex peer serial resolves' );
     # IO::Socket::SSL hands serials as decimal; 255 must match hex 'ff'.
-    is( Exec::Agent::AgentPairing::dispatcher_trusted('255', $map),
+    is( scalar(Exec::Agent::AgentPairing::dispatcher_trusted('255', $map)),
         'human', 'decimal peer serial matches hex map entry' );
 };
 
 subtest 'an unknown or empty serial is untrusted' => sub {
     my $map = { deadbeef => 'automation' };
-    is( Exec::Agent::AgentPairing::dispatcher_trusted('cafef00d', $map),
+    is( scalar(Exec::Agent::AgentPairing::dispatcher_trusted('cafef00d', $map)),
         undef, 'unknown serial -> undef' );
-    is( Exec::Agent::AgentPairing::dispatcher_trusted('', $map),
+    is( scalar(Exec::Agent::AgentPairing::dispatcher_trusted('', $map)),
         undef, 'empty serial -> undef' );
-    is( Exec::Agent::AgentPairing::dispatcher_trusted('deadbeef', {}),
+    is( scalar(Exec::Agent::AgentPairing::dispatcher_trusted('deadbeef', {})),
         undef, 'empty map -> undef' );
 };
 

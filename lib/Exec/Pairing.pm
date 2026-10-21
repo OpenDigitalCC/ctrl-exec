@@ -519,10 +519,10 @@ sub _effective_port ($override, $reported) {
 # 'unknown', and hostnames so a garbage agent-reported value is never stored as
 # an address. Deliberately loose - a sanity check, not full address validation.
 sub _valid_ip ($v) {
-    return undef unless defined $v && length $v;
+    return unless defined $v && length $v;
     return $v if $v =~ /^\d{1,3}(?:\.\d{1,3}){3}$/;      # IPv4
     return $v if $v =~ /^[0-9A-Fa-f:]+:[0-9A-Fa-f:]+$/;  # IPv6 (loose)
-    return undef;
+    return;
 }
 
 # Effective IP for an approval, in priority order: operator override

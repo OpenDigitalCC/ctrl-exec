@@ -48,7 +48,7 @@ sub _require_dispatcher ($conn, $peer, $peer_serial, $trusted, $reqid = undef) {
         PEER_SERIAL => $peer_serial,
         REQID       => (defined $reqid ? $reqid : '(none)'),
     });
-    return undef;
+    return;
 }
 
 sub handle_connection ($conn, $peer, $allowlist, $config, $revoked, $trusted, $peer_serial = undef, $schemas = undef, $version = undef, $skipped = undef) {
@@ -716,7 +716,7 @@ sub handle_capabilities ($conn, $peer, $allowlist, $config, $trusted, $peer_seri
             name       => $name,
             path       => $path,
             executable => ((defined $path && -x $path) ? JSON::true : JSON::false),
-            profile    => Exec::Agent::Config::script_profile($name, $allowlist),
+            profile    => scalar(Exec::Agent::Config::script_profile($name, $allowlist)),
             input      => Exec::Agent::Config::script_input_mode($name, $allowlist),
             output     => Exec::Agent::Config::script_output_mode($name, $allowlist),
         };

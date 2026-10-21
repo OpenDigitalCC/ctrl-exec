@@ -311,7 +311,7 @@ sub _start_tls ($conn, $ctx, $peer) {
         PEER   => $peer,
         ERROR  => ($IO::Socket::SSL::SSL_ERROR // 'unknown'),
     });
-    return undef;
+    return;
 }
 
 # Create the unix socket listener at $path, mode 0660, group $gid (when given).
@@ -362,7 +362,7 @@ sub _make_unix_server ($path, $gid) {
 # { pid_t pid; uid_t uid; gid_t gid; }), or undef where unavailable.
 sub _peer_uid ($conn) {
     my $cred = eval { getsockopt($conn, SOL_SOCKET, Socket::SO_PEERCRED()) }
-        or return undef;
+        or return;
     my (undef, $uid) = unpack 'iI', $cred;
     return $uid;
 }
@@ -955,12 +955,12 @@ sub _log_status_read ($level, $result, $reqid, $peer, $submitter) {
 sub _parse_body ($conn, $body) {
     unless ($body && length $body) {
         _send_error($conn, 400, 'bad request', 'request body required');
-        return undef;
+        return;
     }
     my $req = eval { decode_json($body) };
     if ($@ || ref $req ne 'HASH') {
         _send_error($conn, 400, 'bad request', 'invalid JSON body');
-        return undef;
+        return;
     }
     return $req;
 }
@@ -978,14 +978,14 @@ sub _send_auth_denied ($conn, $auth, $config) {
     });
 }
 
-# Resolve a host list to dispatch targets, or send a 404 and return undef. On
+# Resolve a host list to dispatch targets, or send a 404 and return false. On
 # success returns the full resolve_dispatch result (callers read ->{hosts}).
 sub _resolve_or_404 ($conn, $hosts) {
     my $resolved = Exec::Registry::resolve_dispatch($hosts);
     return $resolved if $resolved->{ok};
     _send_error($conn, 404, 'unknown agent',
         'not a registered agent: ' . join(', ', @{ $resolved->{unknown} }));
-    return undef;
+    return;
 }
 
 sub _send_error ($conn, $status, $error, $detail = undef) {

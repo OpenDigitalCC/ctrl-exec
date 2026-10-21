@@ -100,10 +100,10 @@ sub record_async (%opts) {
 # Load a stored record by reqid, or undef if absent/corrupt.
 sub load ($reqid, $runs_dir = undef) {
     $runs_dir //= $DEFAULT_RUNS_DIR;
-    return undef unless _valid_reqid($reqid);
+    return unless _valid_reqid($reqid);
     my $file = "$runs_dir/$reqid.json";
-    return undef unless -f $file;
-    return eval { decode_json(slurp_maybe($file)) };
+    return unless -f $file;
+    return eval { decode_json(scalar slurp_maybe($file)) };
 }
 
 # Aggregate the current status of an async run: fetch results from every host
@@ -135,7 +135,7 @@ sub aggregate (%opts) {
     my $port     = $opts{port};
     my $resolver = $opts{resolver} // \&_default_resolver;
 
-    my $record = load($reqid, $runs_dir) or return undef;
+    my $record = load($reqid, $runs_dir) or return;
     return $record unless ($record->{mode} // '') eq 'async';
 
     my @pending = grep { $PENDING{ $record->{hosts}{$_}{status} // '' } }

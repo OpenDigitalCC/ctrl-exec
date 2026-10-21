@@ -60,9 +60,9 @@ plain   = /opt/s/a.sh
 after   = /opt/s/b.sh profile=cert-deploy
 before  = profile=read-only /opt/s/c.sh
 EOF
-    is Exec::Agent::Config::script_profile('plain',  $al), 'default',     'unannotated -> default';
-    is Exec::Agent::Config::script_profile('after',  $al), 'cert-deploy', 'profile after path';
-    is Exec::Agent::Config::script_profile('before', $al), 'read-only',   'profile before path';
+    is scalar(Exec::Agent::Config::script_profile('plain',  $al)), 'default',     'unannotated -> default';
+    is scalar(Exec::Agent::Config::script_profile('after',  $al)), 'cert-deploy', 'profile after path';
+    is scalar(Exec::Agent::Config::script_profile('before', $al)), 'read-only',   'profile before path';
     is $al->{before}{path}, '/opt/s/c.sh', 'path still resolved when profile is first';
 };
 

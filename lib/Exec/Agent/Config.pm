@@ -22,7 +22,7 @@ sub unreadable_path (@paths) {
         if (open my $fh, '<', $p) { close $fh; next; }
         return $p if $!{EACCES};
     }
-    return undef;
+    return;
 }
 
 # Storage limits of the C executor (src/ctrl-exec-executor.c: MAX_PROFILES, MAX_CAPS,
@@ -429,10 +429,10 @@ sub load_allowlist_full ($path = undef, $script_dirs = undef) {
 # Why an 'input=' value in scripts.conf is not usable, or undef when it is:
 # context, raw, raw:<name> (name as for an input field) or fields.
 sub input_mode_problem ($value) {
-    return undef if $value =~ /\A(?:context|raw|fields)\z/;
+    return if $value =~ /\A(?:context|raw|fields)\z/;
     if ($value =~ /\Araw:(.*)\z/s) {
         my $f = $1;
-        return undef if $f =~ /\A[A-Za-z0-9_.-]{1,64}\z/ && $f ne '.' && $f ne '..';
+        return if $f =~ /\A[A-Za-z0-9_.-]{1,64}\z/ && $f ne '.' && $f ne '..';
         return "its input=raw:<name> field name is not valid (allowed: A-Z a-z 0-9 _ . -, 1-64 characters)";
     }
     my $shown = length $value > 40 ? substr($value, 0, 40) . '...' : $value;
@@ -442,7 +442,7 @@ sub input_mode_problem ($value) {
 # Why an 'output=' value in scripts.conf is not usable, or undef when it is:
 # stored (the default) or confidential (T-053).
 sub output_mode_problem ($value) {
-    return undef if $value =~ /\A(?:stored|confidential)\z/;
+    return if $value =~ /\A(?:stored|confidential)\z/;
     my $shown = length $value > 40 ? substr($value, 0, 40) . '...' : $value;
     return "its output mode '$shown' is not one of stored, confidential";
 }
@@ -509,13 +509,13 @@ sub _owner_node_problem ($shown, $st, $want, $exempt) {
     }
     else {
         return "'$shown' is not a directory" unless Fcntl::S_ISDIR($mode);
-        return undef if $exempt->{"$dev:$ino"};
+        return if $exempt->{"$dev:$ino"};
     }
     return "'$shown' is owned by uid $uid, not root"
         unless grep { $_ == $uid } @TRUSTED_OWNERS;
     return "'$shown' is world-writable" if $mode & 0002;
     return "'$shown' is group-writable" if $mode & 0020;
-    return undef;
+    return;
 }
 
 # dev:ino of each strict ancestor of $TRUSTED_TOP (test seam), else empty.
@@ -641,7 +641,7 @@ sub validate_script ($name, $allowlist, $script_dirs = undef) {
 # The profile name assigned to a script in the allowlist ('default' when unset).
 sub script_profile ($name, $allowlist) {
     my $entry = $allowlist->{$name};
-    return undef unless defined $entry;
+    return unless defined $entry;
     return ref $entry eq 'HASH' ? ($entry->{profile} // 'default') : 'default';
 }
 
@@ -750,11 +750,11 @@ sub _path_in_dirs ($path, $dirs) {
 # the canonical string, or undef if the address is not a well-formed IPv4. Used
 # at config load so ip_allowed only ever compares canonical octets.
 sub _normalize_ipv4 ($addr) {
-    return undef unless defined $addr;
+    return unless defined $addr;
     my @oct = split /\./, $addr, -1;
-    return undef unless @oct == 4;
+    return unless @oct == 4;
     for my $o (@oct) {
-        return undef unless $o =~ /^\d{1,3}$/ && $o <= 255;
+        return unless $o =~ /^\d{1,3}$/ && $o <= 255;
     }
     return join '.', map { $_ + 0 } @oct;
 }

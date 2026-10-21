@@ -13,14 +13,14 @@ use Exec::Pairing qw();
 # tests cover the validation and precedence that drive that.
 
 subtest '_valid_ip: accepts IP literals, rejects junk' => sub {
-    is Exec::Pairing::_valid_ip('192.168.1.10'), '192.168.1.10', 'IPv4';
-    is Exec::Pairing::_valid_ip('172.18.0.1'),   '172.18.0.1',   'IPv4 (docker gateway)';
-    is Exec::Pairing::_valid_ip('2001:db8::1'),  '2001:db8::1',  'IPv6';
-    is Exec::Pairing::_valid_ip('fe80::1'),      'fe80::1',      'IPv6 link-local';
-    is Exec::Pairing::_valid_ip(undef),     undef, 'undef rejected';
-    is Exec::Pairing::_valid_ip(''),        undef, 'empty rejected';
-    is Exec::Pairing::_valid_ip('unknown'), undef, "'unknown' rejected";
-    is Exec::Pairing::_valid_ip('agent.example.com'), undef, 'hostname rejected';
+    is scalar(Exec::Pairing::_valid_ip('192.168.1.10')), '192.168.1.10', 'IPv4';
+    is scalar(Exec::Pairing::_valid_ip('172.18.0.1')),   '172.18.0.1',   'IPv4 (docker gateway)';
+    is scalar(Exec::Pairing::_valid_ip('2001:db8::1')),  '2001:db8::1',  'IPv6';
+    is scalar(Exec::Pairing::_valid_ip('fe80::1')),      'fe80::1',      'IPv6 link-local';
+    is scalar(Exec::Pairing::_valid_ip(undef)),     undef, 'undef rejected';
+    is scalar(Exec::Pairing::_valid_ip('')),        undef, 'empty rejected';
+    is scalar(Exec::Pairing::_valid_ip('unknown')), undef, "'unknown' rejected";
+    is scalar(Exec::Pairing::_valid_ip('agent.example.com')), undef, 'hostname rejected';
 };
 
 subtest '_effective_ip: operator override > queued value' => sub {

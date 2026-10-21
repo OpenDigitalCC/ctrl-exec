@@ -358,9 +358,9 @@ sub load_trusted_dispatchers (%opts) {
 # when either input is empty). Normalises the serial the same way the loader
 # does, so a decimal serial from IO::Socket::SSL matches a hex map entry.
 sub dispatcher_trusted ($peer_serial, $trusted) {
-    return undef unless ref $trusted eq 'HASH';
+    return unless ref $trusted eq 'HASH';
     my $hex = Exec::CertInfo::serial_to_hex($peer_serial // '');
-    return undef unless length $hex;
+    return unless length $hex;
     my $id = $trusted->{$hex};
     return (defined $id && length $id) ? $id : undef;
 }

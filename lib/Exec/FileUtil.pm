@@ -28,7 +28,7 @@ sub slurp ($path) {
 
 # Like slurp, but returns undef on failure instead of dying.
 sub slurp_maybe ($path) {
-    open my $fh, '<', $path or return undef;
+    open my $fh, '<', $path or return;
     local $/;
     return scalar <$fh>;
 }
@@ -74,7 +74,7 @@ sub write_atomic ($path, $content, %opts) {
 # harmless if the file already existed.
 sub open_lock ($path) {
     my $existed = -e $path;
-    sysopen(my $fh, $path, O_CREAT | O_RDWR | O_NOFOLLOW, 0660) or return undef;
+    sysopen(my $fh, $path, O_CREAT | O_RDWR | O_NOFOLLOW, 0660) or return;
     chmod 0660, $fh unless $existed;    # by handle: a path chmod would follow a swapped-in symlink
     return $fh;
 }

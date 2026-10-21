@@ -114,10 +114,10 @@ sub _resolve_dispatch_hosts ($hosts) {
 # if unparseable. Surfaces cert age so operators see which agents are approaching
 # renewal/restart well in advance (negative = already expired).
 sub _days_until_expiry ($expiry_str) {
-    return undef unless defined $expiry_str && length $expiry_str;
+    return unless defined $expiry_str && length $expiry_str;
     require Time::Piece;
     my $epoch = eval { Time::Piece->strptime($expiry_str, '%b %d %H:%M:%S %Y %Z')->epoch };
-    return undef unless $epoch;
+    return unless $epoch;
     return int(($epoch - time()) / 86400);
 }
 
@@ -598,10 +598,10 @@ sub _pairing_stop {
 }
 
 sub _pairing_read_pidfile {
-    open my $fh, '<', $PAIRING_PIDFILE or return undef;
+    open my $fh, '<', $PAIRING_PIDFILE or return;
     my $line = <$fh>;
     close $fh;
-    return undef unless defined $line;
+    return unless defined $line;
     chomp $line;
     return ($line =~ /^(\d+)$/) ? $1 : undef;
 }

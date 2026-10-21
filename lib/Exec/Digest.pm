@@ -70,7 +70,7 @@ sub canonical_csr ($csr_pem) {
     print $fh $csr_pem;
     close $fh;
     my $out = `openssl req -in \Q$path\E -outform PEM 2>/dev/null`;
-    return undef unless $? == 0 && defined $out
+    return unless $? == 0 && defined $out
         && $out =~ /\A-----BEGIN CERTIFICATE REQUEST-----\n/;
     return $out;
 }

@@ -19,7 +19,7 @@ use Socket qw(getaddrinfo getnameinfo
 # (default 2s) so a missing or slow resolver cannot hang an interactive prompt.
 sub reverse_lookup ($ip, $timeout = undef) {
     $timeout //= 2;
-    return undef unless defined $ip && length $ip && $ip ne 'unknown';
+    return unless defined $ip && length $ip && $ip ne 'unknown';
 
     my $out = eval {
         local $SIG{ALRM} = sub { die "timeout\n" };

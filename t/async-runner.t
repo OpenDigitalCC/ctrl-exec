@@ -101,7 +101,7 @@ sub write_script {
     );
     is $second->{ok},     0,      'concurrent run of the same script refused';
     is $second->{reason}, 'busy', 'refusal reason is busy';
-    is Exec::Agent::AsyncRunner::result('aabbccdd00220002', $dir), undef,
+    is scalar(Exec::Agent::AsyncRunner::result('aabbccdd00220002', $dir)), undef,
         'no record written for the refused run';
 
     # A different script is unaffected by the lock on 'conc'.
@@ -134,7 +134,7 @@ sub write_script {
 # --- result() for unknown reqid, and purge_expired ---
 {
     my $dir = tempdir(CLEANUP => 1);
-    is Exec::Agent::AsyncRunner::result('deadbeef', $dir), undef,
+    is scalar(Exec::Agent::AsyncRunner::result('deadbeef', $dir)), undef,
         'unknown reqid returns undef';
 
     my $script = "$dir/q.sh";
@@ -190,7 +190,7 @@ sub write_script {
     # namespace, not flat, and is invisible to a lookup scoped to another owner.
     ok -f "$dir/automation/$reqid.json", 'record stored under the owner namespace';
     ok !-f "$dir/$reqid.json",           'record not stored flat';
-    is Exec::Agent::AsyncRunner::result($reqid, $dir, 'human'), undef,
+    is scalar(Exec::Agent::AsyncRunner::result($reqid, $dir, 'human')), undef,
         'another dispatcher cannot see the run (structural isolation)';
 }
 

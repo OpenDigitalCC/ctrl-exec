@@ -38,7 +38,7 @@ sub args_problem ($args) {
         return 'args must be an array of strings or numbers'
             if !defined $a || ref $a;
     }
-    return undef;
+    return;
 }
 
 # Write a raw (already-serialised) JSON body as an HTTP/1.0 response.

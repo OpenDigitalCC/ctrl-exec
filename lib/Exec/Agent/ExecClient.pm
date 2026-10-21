@@ -57,7 +57,7 @@ sub probe ($path) {
     my $sock = IO::Socket::UNIX->new(Peer => $path, Type => IO::Socket::UNIX::SOCK_STREAM());
     return unavailable_message($path, $! + 0) unless $sock;
     close $sock;
-    return undef;
+    return;
 }
 
 sub _field ($s) { pack('N', length $s) . $s }
@@ -81,14 +81,14 @@ sub _read_all ($sock, $n) {
     my $buf = '';
     while (length $buf < $n) {
         my $r = $sock->sysread(my $chunk, $n - length $buf);
-        return undef unless defined $r && $r > 0;   # closed / error
+        return unless defined $r && $r > 0;   # closed / error
         $buf .= $chunk;
     }
     return $buf;
 }
 
 sub _read_field ($sock) {
-    my $lh = _read_all($sock, 4) // return undef;
+    my $lh = _read_all($sock, 4) // return;
     my $len = unpack 'N', $lh;
     return '' if $len == 0;
     return _read_all($sock, $len);

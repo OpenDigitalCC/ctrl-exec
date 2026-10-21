@@ -201,7 +201,7 @@ my $resolver = sub { $_[0] };
 # --- load unknown, purge, and reqid validation ---
 {
     my $dir = tempdir(CLEANUP => 1);
-    is Exec::RunStore::load('deadbeef', $dir), undef, 'unknown reqid loads undef';
+    is scalar(Exec::RunStore::load('deadbeef', $dir)), undef, 'unknown reqid loads undef';
 
     Exec::RunStore::record_async(
         reqid => 'aabbccdd00090001', script => 'x',

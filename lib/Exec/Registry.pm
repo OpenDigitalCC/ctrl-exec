@@ -275,7 +275,7 @@ sub get_agent (%opts) {
     my $dir      = $opts{registry_dir} // $REGISTRY_DIR;
     my $path     = "$dir/$hostname.json";
 
-    return undef unless -f $path;
+    return unless -f $path;
     return eval { decode_json(slurp($path)) };
 }
 

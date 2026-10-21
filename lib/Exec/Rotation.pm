@@ -89,7 +89,7 @@ sub rotate (%opts) {
 # Return the current rotation state, or undef if no rotation has occurred.
 sub load_state (%opts) {
     my $path = $opts{path} // $ROTATION_FILE;
-    return undef unless -f $path;
+    return unless -f $path;
     my $data = eval { decode_json(slurp($path)) };
     if ($@) {
         Exec::Log::log_action('ERR', {
@@ -98,7 +98,7 @@ sub load_state (%opts) {
             ERROR  => $@,
             REASON => 'JSON parse failed - rotation state unreadable',
         });
-        return undef;
+        return;
     }
     return $data;
 }

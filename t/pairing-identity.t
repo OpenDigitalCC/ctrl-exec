@@ -9,9 +9,9 @@ use Exec::Pairing qw();
 
 # --- _reverse_lookup: graceful on bad/absent input (no DNS dependency) ---
 
-is Exec::Pairing::Identity::reverse_lookup(undef),       undef, 'reverse: undef IP -> undef';
-is Exec::Pairing::Identity::reverse_lookup(''),          undef, 'reverse: empty IP -> undef';
-is Exec::Pairing::Identity::reverse_lookup('unknown'),   undef, "reverse: 'unknown' -> undef";
+is scalar(Exec::Pairing::Identity::reverse_lookup(undef)),       undef, 'reverse: undef IP -> undef';
+is scalar(Exec::Pairing::Identity::reverse_lookup('')),          undef, 'reverse: empty IP -> undef';
+is scalar(Exec::Pairing::Identity::reverse_lookup('unknown')),   undef, "reverse: 'unknown' -> undef";
 
 # --- _identity_recommendation: keyed on the reverse-DNS signal ---
 

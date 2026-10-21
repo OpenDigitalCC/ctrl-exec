@@ -147,8 +147,8 @@ sub submit (%opts) {
 sub result ($reqid, $runs_dir = undef, $owner = undef) {
     $runs_dir //= $DEFAULT_RUNS_DIR;
     my $file = _record_path($runs_dir, $owner, $reqid);
-    return undef unless -f $file;
-    return eval { decode_json(slurp_maybe($file)) };
+    return unless -f $file;
+    return eval { decode_json(scalar slurp_maybe($file)) };
 }
 
 # True if a run record belongs to the dispatcher whose stable identity is $id.
@@ -218,10 +218,10 @@ sub _acquire_script_lock ($runs_dir, $script) {
     # O_NOFOLLOW open: a symlink planted at the lock path is refused (undef, so
     # the submit reports busy) rather than followed.
     my ($fh, $got) = flock_path_nb($path);
-    return undef unless $fh;
+    return unless $fh;
     unless ($got) {
         close $fh;
-        return undef;
+        return;
     }
     return $fh;
 }

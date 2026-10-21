@@ -28,10 +28,10 @@ our $LEGACY_DIR = '/etc/ctrl-exec';
 # to the new directory, else undef. The binaries call this first so the refusal
 # is logged and exits 78 (EX_CONFIG) before any mode runs.
 sub legacy_dir_error () {
-    return undef unless -e $LEGACY_DIR || -l $LEGACY_DIR;
+    return unless -e $LEGACY_DIR || -l $LEGACY_DIR;
     my $new = abs_path($CONF_DIR);
     my $old = -l $LEGACY_DIR ? abs_path($LEGACY_DIR) : undef;
-    return undef if defined $old && defined $new && $old eq $new;
+    return if defined $old && defined $new && $old eq $new;
     return "ctrl-exec: refusing to start: the old config directory $LEGACY_DIR "
          . "exists and is not a symlink to $CONF_DIR.\n"
          . "The dispatcher's config now lives in $CONF_DIR, and running on "

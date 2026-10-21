@@ -52,7 +52,7 @@ my $tmp = tempdir(CLEANUP => 1);
 {
     my $path = "$tmp/live.sock";
     my $l = IO::Socket::UNIX->new(Local => $path, Listen => 1) or die $!;
-    is Exec::Agent::ExecClient::probe($path), undef, 'live: probe is clean';
+    is scalar(Exec::Agent::ExecClient::probe($path)), undef, 'live: probe is clean';
 }
 
 # `cea self-check` with executor_socket set: reports the missing executor and

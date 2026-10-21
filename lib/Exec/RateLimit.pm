@@ -11,9 +11,9 @@ use Exec::Log qw();
 # the dispatcher pairing config and the agent config, which each built the same
 # split-and-validate-three-ints inline.
 sub parse_limit_spec ($raw) {
-    return undef unless defined $raw;
+    return unless defined $raw;
     my ($limit, $window, $block) = split m{/}, $raw, 3;
-    return undef unless defined $limit  && $limit  =~ /^\d+$/
+    return unless defined $limit  && $limit  =~ /^\d+$/
                      && defined $window && $window =~ /^\d+$/
                      && defined $block  && $block  =~ /^\d+$/;
     return [ int($limit), int($window), int($block) ];
