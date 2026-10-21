@@ -46,7 +46,7 @@ Options:
 : leave the last scenario's containers up to inspect. The next run (or
   `--cleanup`) removes them.
 
-Scenarios: `s1 s1b s2 s3 s4`, default all. Exit 0 only when every scenario
+Scenarios: `s1 s1b s2 s3 s4 s5`, default all. Exit 0 only when every scenario
 passed.
 
 Needs docker (with compose), git and `dpkg-buildpackage` on the host; no root.
@@ -64,8 +64,12 @@ with apt each run (network needed) and removes them afterwards.
 | s2 | Dispatcher on the deb, config in `/etc/ctrl-exec` (0.12), token auth hook named in `ctrl-exec.conf`, API on all interfaces; stock agent stays on FROM | dispatcher only | `ctrl-exec-api` active and serving; `ced list-agents` and `ced run` work; the hook still allows the token and denies a wrong one; the maintenance unit runs |
 | s3 | Cloudient-style dispatcher container: the 0.12-era compose layout (`estates/cloudient-dispatcher/`), data volume at `/etc/ctrl-exec`, the estate's entrypoint, run-jobs calling `http://dispatcher:7445` with a job that parses `ctrl-exec-cli ... 2>&1` as JSON; stock agent host on FROM | A: rebuild the dispatcher image with the TO debs, nothing else. B: the operator's documented compose change (`compose-0.13.yml`, `entrypoint-0.13.sh`) | `PASS` if A works; `OPERATOR-STEP` if only B works (A's failures are listed: what an operator meets without the change); `FAIL` otherwise |
 | s4 | Dispatcher and agent hosts, FROM then TO; after the upgrade the agent adopts an `input=fields` script. A job pipes `--input-fields -` to `ctrl-exec-cli`, plain HTTP to `http://dispatcher:7445` (not loopback), captures `2>&1` and parses it with jq (the shape of `deploy-cert.sh`) | both hosts | the CLI exits 0, the captured output parses, result exit 0, the field reached the script, the value is not in the output. A control run of the same job on loopback must pass, so a failure is the plain-HTTP handling only |
+| s5 | Agent and dispatcher installed on TO only (no upgrade), the s1 layout with `/srv/scripts` root-owned and `agent-cert-deploy` declared `input=fields` (T-059) | none | with no reload of the agent: A the field sequence (deploy `--test` without input, deploy with three fields, then the context scripts, twice) all run; B the deploy line pasted with NBSPs, tabs or CRLF runs as the plain line does, with one `config-nonascii-space` notice; C `input=fields` edited onto the context lines, a script added and one removed are in effect at the next run, with no mismatch refusal; D a line naming an undefined profile skips only that script; E SIGHUP still reloads |
 
-Every scenario first checks that its estate works on FROM; if not it reports
+s5 checks the release under test rather than an upgrade: run it as
+`run.sh --from <last release> --to <ref> s5` (FROM is not installed).
+
+Every other scenario first checks that its estate works on FROM; if not it reports
 `ERROR` (the estate, not the upgrade, is wrong). The estates are generic
 stand-ins (no host names or real values) for the deployments recorded for
 cloudient: the scripts only print who they run as and exercise their

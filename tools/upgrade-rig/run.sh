@@ -20,7 +20,7 @@
 #   --cleanup      remove every rig container, network, volume and image
 #                  (the host image too), then exit
 #
-#   scenarios: s1 s1b s2 s3 s4 (default: all, in that order)
+#   scenarios: s1 s1b s2 s3 s4 s5 (default: all, in that order)
 #
 # Exit 0 when every scenario passed. Evidence: out/<label>/.
 set -euo pipefail
@@ -52,11 +52,11 @@ while [ $# -gt 0 ]; do
         --keep)     KEEP=1; shift ;;
         --cleanup)  CLEANUP=1; shift ;;
         -h|--help)  usage; exit 0 ;;
-        s1|s1b|s2|s3|s4) SCENARIOS+=("$1"); shift ;;
+        s1|s1b|s2|s3|s4|s5) SCENARIOS+=("$1"); shift ;;
         *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
-[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(s1 s1b s2 s3 s4)
+[ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(s1 s1b s2 s3 s4 s5)
 
 # shellcheck source=lib.sh
 source "$HERE/lib.sh"
@@ -160,6 +160,7 @@ for s in "${SCENARIOS[@]}"; do
         s2)  cmd=("$HERE/scenarios/s2-dispatcher-etc-dir.sh") ;;
         s3)  cmd=("$HERE/scenarios/s3-cloudient-compose.sh") ;;
         s4)  cmd=("$HERE/scenarios/s4-cli-input-plain-http.sh") ;;
+        s5)  cmd=("$HERE/scenarios/s5-input-mode-after-fields-run.sh") ;;
     esac
     echo
     echo "=== $s"

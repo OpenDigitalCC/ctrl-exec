@@ -117,15 +117,15 @@ fi
 exit 0
 '
 
-# dispatcher_install <container>: a dispatcher on the FROM debs as the 0.12
-# install guide leaves it: package config directory (wherever FROM's postinst
-# puts it), CA and dispatcher cert, the API on all interfaces behind a token
-# auth hook, ctrl-exec-api enabled and started under systemd. Prints the
-# config directory used.
+# dispatcher_install <container> [from|to]: a dispatcher on the FROM debs (or
+# the named set) as the 0.12 install guide leaves it: package config directory
+# (wherever the postinst puts it), CA and dispatcher cert, the API on all
+# interfaces behind a token auth hook, ctrl-exec-api enabled and started under
+# systemd. Prints the config directory used.
 dispatcher_install() {
-    local name=$1
-    install_debs "$name" from common dispatcher >> "${RIG_EVIDENCE:-/dev/null}" 2>&1 \
-        || die_setup "$name: dpkg -i of the FROM dispatcher debs failed"
+    local name=$1 set=${2:-from}
+    install_debs "$name" "$set" common dispatcher >> "${RIG_EVIDENCE:-/dev/null}" 2>&1 \
+        || die_setup "$name: dpkg -i of the $set dispatcher debs failed"
     x "$name" 'set -e
         if [ -d /etc/ctrl-exec-dispatcher ]; then d=/etc/ctrl-exec-dispatcher; else d=/etc/ctrl-exec; fi
         conf=$d/ctrl-exec.conf
@@ -139,11 +139,13 @@ dispatcher_install() {
         echo "$d"' <<< "$AUTH_HOOK" || die_setup "$name: dispatcher setup failed"
 }
 
-# agent_install <container>: the FROM agent debs (config left as the package
-# seeds it: executor on, [profile default] run_as nobody).
+# agent_install <container> [from|to]: the FROM agent debs, or the named set
+# (config left as the package seeds it: executor on, [profile default] run_as
+# nobody).
 agent_install() {
-    install_debs "$1" from common agent >> "${RIG_EVIDENCE:-/dev/null}" 2>&1 \
-        || die_setup "$1: dpkg -i of the FROM agent debs failed"
+    local set=${2:-from}
+    install_debs "$1" "$set" common agent >> "${RIG_EVIDENCE:-/dev/null}" 2>&1 \
+        || die_setup "$1: dpkg -i of the $set agent debs failed"
 }
 
 # pair <dispatcher container> <agent container> <agent alias>: pair the agent
