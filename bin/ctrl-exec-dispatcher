@@ -25,8 +25,8 @@ use Sys::Hostname       qw(hostname);
 our $VERSION = 'UNINSTALLED';
 
 # Default: /etc/ctrl-exec-dispatcher/ctrl-exec.conf - resolved on first use by
-# _load_config. A real /etc/ctrl-exec still present is refused (exit 78), see
-# Exec::DispatcherConfig.
+# _load_config. A real config still at /etc/ctrl-exec is used in place; an
+# ambiguous one is refused (exit 78), see Exec::DispatcherConfig.
 my $CONFIG_PATH;
 my $PAIR_PORT   = 7444;
 my $PAIRING_PIDFILE = '/var/lib/ctrl-exec/pairing-mode.pid';
@@ -56,18 +56,11 @@ sub main {
 
     Exec::Log::init('ctrl-exec-dispatcher');
 
-    # T-047: a real old config directory is refused up front, whatever the mode,
-    # so it is logged and exits 78 (EX_CONFIG) rather than failing part way.
-    if (defined(my $legacy = Exec::DispatcherConfig::legacy_dir_error())) {
-        Exec::Log::log_action('ERR', {
-            ACTION => 'config-dir',
-            RESULT => 'refused',
-            OLD    => $Exec::DispatcherConfig::LEGACY_DIR,
-            NEW    => $Exec::DispatcherConfig::CONF_DIR,
-        });
-        print STDERR $legacy;
-        exit 78;
-    }
+    # T-047/T-065: an ambiguous config directory is refused up front, whatever
+    # the mode, so it is logged and exits 78 (EX_CONFIG) rather than failing part
+    # way; a real config still at the old /etc/ctrl-exec is used in place and
+    # logged.
+    Exec::DispatcherConfig::startup_check();
 
     my %dispatch = (
         'run'               => \&mode_run,

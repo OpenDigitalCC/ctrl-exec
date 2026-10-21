@@ -1,7 +1,9 @@
 #!/usr/bin/perl
 # t/debian-migrate.t
 #
-# The .deb maintainer scripts migrate a pre-0.13 install (T-008). They cannot be
+# The .deb maintainer scripts migrate a pre-0.13 install (T-008, T-065: the
+# move itself is Exec::DispatcherConfig::migrate_legacy_dir, which the postinst
+# runs with this checkout's lib on PERL5LIB here). They cannot be
 # run as dpkg would, so the migration blocks are cut out of the scripts and run
 # against a temp tree (the absolute /etc/ and /run/ and /usr/sbin/ paths are
 # re-rooted by text substitution). Checks the dispatcher postinst's config-dir
@@ -26,6 +28,7 @@ sub migrate {
     my ($root) = @_;
     (my $b = $block) =~ s{/etc/}{$root/etc/}g;
     spew("$root/block.sh", "set -e\n$b");
+    local $ENV{PERL5LIB} = "$Bin/../lib";
     my $out = `sh $root/block.sh 2>&1`;
     return ($? >> 8, $out);
 }
@@ -49,13 +52,29 @@ sub migrate {
     is $rc2, 0, 'second run (symlink in place) is a no-op';
     unlike $out2, qr/moved/, 'second run does not move again';
 }
-{   # both
+{   # old real, new seeded (no CA): moved, the seeded dir kept aside
     my $r = tempdir(CLEANUP => 1);
     make_path("$r/etc/ctrl-exec", "$r/etc/ctrl-exec-dispatcher");
+    spew("$r/etc/ctrl-exec/ctrl-exec.conf", "cert = $r/etc/ctrl-exec/dispatcher.crt\n");
     spew("$r/etc/ctrl-exec/ca.key", "OLD\n");
+    spew("$r/etc/ctrl-exec-dispatcher/ctrl-exec.conf", "# seeded\n");
+    my ($rc, $out) = migrate($r);
+    is $rc, 0, 'seeded new: block runs' or diag($out);
+    is slurp("$r/etc/ctrl-exec-dispatcher/ca.key"), "OLD\n", 'seeded new: real config moved in';
+    ok -l "$r/etc/ctrl-exec", 'seeded new: symlink left';
+    is slurp("$r/etc/ctrl-exec-dispatcher.seeded/ctrl-exec.conf"), "# seeded\n", 'seeded new: seeded dir kept aside';
+}
+{   # both hold a CA: left alone
+    my $r = tempdir(CLEANUP => 1);
+    make_path("$r/etc/ctrl-exec", "$r/etc/ctrl-exec-dispatcher");
+    for my $d ("$r/etc/ctrl-exec", "$r/etc/ctrl-exec-dispatcher") {
+        spew("$d/ctrl-exec.conf", "cert = $d/dispatcher.crt\n");
+        spew("$d/ca.key", "K $d\n");
+    }
     my ($rc, $out) = migrate($r);
     is $rc, 0, 'both: block runs';
-    like $out, qr/both .* exist/, 'both: says so';
+    like $out, qr/leaving \S+ alone/, 'both: says so';
+    like $out, qr/Both .* hold .* CA/, 'both: names the reason';
     ok !-l "$r/etc/ctrl-exec" && -f "$r/etc/ctrl-exec/ca.key", 'both: old left alone';
 }
 {   # fresh

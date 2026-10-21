@@ -16,28 +16,20 @@ case "$1" in
                 --shell /usr/sbin/nologin ctrl-exec
         fi
 
-        # Upgrade from before 0.13 (T-008): the config directory was /etc/ctrl-exec
-        # and is now /etc/ctrl-exec-dispatcher. If only the old one exists, move it,
-        # leave a symlink at the old name for one release (removed in 0.14), and
-        # point the paths inside ctrl-exec.conf at the new directory so nothing
-        # depends on the symlink (previous file kept as ctrl-exec.conf.pre-0.13).
-        # If both exist the old one is left for the operator, and the dispatcher
-        # refuses to run until it is merged and removed (T-047).
+        # Upgrade from before 0.13 (T-008, T-065): the config directory was
+        # /etc/ctrl-exec and is now /etc/ctrl-exec-dispatcher. Only a real old
+        # config (ctrl-exec.conf and ca.key) is moved, and only when the new
+        # directory is absent or just the seeded example (no CA; kept aside as
+        # /etc/ctrl-exec-dispatcher.seeded): one rename, a symlink left at the old
+        # name, the paths inside ctrl-exec.conf pointed at the new directory
+        # (previous file kept as ctrl-exec.conf.pre-0.13). A mount point is never
+        # moved, and both directories holding a CA are left for the operator;
+        # ced and ctrl-exec-api then run in place or refuse (Exec::DispatcherConfig,
+        # the one implementation). Never fails the configure.
         if [ -d /etc/ctrl-exec ] && [ ! -L /etc/ctrl-exec ]; then
-            if [ -e /etc/ctrl-exec-dispatcher ]; then
-                echo "ctrl-exec: both /etc/ctrl-exec and /etc/ctrl-exec-dispatcher exist;" >&2
-                echo "ctrl-exec: leaving /etc/ctrl-exec alone. ced and ctrl-exec-api refuse to run" >&2
-                echo "ctrl-exec: until you merge it into /etc/ctrl-exec-dispatcher and remove it." >&2
-            else
-                mv /etc/ctrl-exec /etc/ctrl-exec-dispatcher
-                ln -s /etc/ctrl-exec-dispatcher /etc/ctrl-exec
-                echo "ctrl-exec: moved /etc/ctrl-exec to /etc/ctrl-exec-dispatcher (symlink left until 0.14)."
-                conf=/etc/ctrl-exec-dispatcher/ctrl-exec.conf
-                if [ -f "$conf" ] && grep -q '=[[:space:]]*/etc/ctrl-exec/' "$conf"; then
-                    cp -p "$conf" "$conf.pre-0.13"
-                    sed -i 's|\(=[[:space:]]*\)/etc/ctrl-exec/|\1/etc/ctrl-exec-dispatcher/|' "$conf"
-                fi
-            fi
+            perl -MExec::DispatcherConfig -e 'Exec::DispatcherConfig::installer_migrate()' \
+                /etc/ctrl-exec /etc/ctrl-exec-dispatcher \
+                || echo "ctrl-exec: config directory migration did not run; ced and ctrl-exec-api decide at start." >&2
         fi
 
         # Config directory.

@@ -121,30 +121,21 @@ install_unit() {
 # --- migration of pre-0.13 installs (T-008) ---
 
 # The dispatcher's config directory was /etc/ctrl-exec; it is now
-# /etc/ctrl-exec-dispatcher. If only the old one exists, move it and leave a
-# symlink at the old name for one release (removed in 0.14), and point the paths
-# inside ctrl-exec.conf at the new directory so nothing depends on the symlink.
-# The previous file is kept as ctrl-exec.conf.pre-0.13. If both exist the new one
-# is left untouched for the operator to reconcile, and the dispatcher refuses to
-# run until they have (T-047).
+# /etc/ctrl-exec-dispatcher (T-008, T-065). Only a real old config
+# (ctrl-exec.conf and ca.key) is moved, and only when the new directory is
+# absent or just the seeded example (no CA; kept aside as <new>.seeded): one
+# rename, a symlink left at the old name, the paths inside ctrl-exec.conf
+# pointed at the new directory (previous file kept as ctrl-exec.conf.pre-0.13).
+# A mount point is never moved, and both directories holding a CA are left for
+# the operator; ced and ctrl-exec-api then run in place or refuse. The deb
+# postinst runs the same code, Exec::DispatcherConfig::migrate_legacy_dir
+# (install_lib has installed it by now).
 migrate_dispatcher_conf_dir() {
-    local old="$LEGACY_EXEC_CONF_DIR" new="$EXEC_CONF_DIR"
+    local old="$LEGACY_EXEC_CONF_DIR"
     [[ -d "$old" && ! -L "$old" ]] || return 0
-    if [[ -e "$new" ]]; then
-        warn "Both $old and $new exist; leaving $old alone."
-        warn "ced and ctrl-exec-api refuse to run until you merge anything you still"
-        warn "need from $old into $new and remove $old."
-        return 0
-    fi
-    mv "$old" "$new" || die "Could not move $old to $new."
-    ln -s "$new" "$old" || warn "Could not leave a symlink at $old."
-    info "Moved $old -> $new (symlink left at $old until 0.14)."
-    local conf="$new/ctrl-exec.conf"
-    if [[ -f "$conf" ]] && grep -q "=[[:space:]]*$old/" "$conf"; then
-        cp -p "$conf" "$conf.pre-0.13"
-        sed -i "s|\(=[[:space:]]*\)$old/|\1$new/|" "$conf"
-        info "Updated paths in $conf (previous copy: $conf.pre-0.13)."
-    fi
+    perl -I"$LIB_DIR" -MExec::DispatcherConfig \
+        -e 'Exec::DispatcherConfig::installer_migrate()' "$old" "$EXEC_CONF_DIR" \
+        || warn "Config directory migration did not run; ced and ctrl-exec-api decide at start."
 }
 
 # The executor was ctrl-exec-exec (binary, ctrl-exec-exec.service); it is now

@@ -44,6 +44,7 @@ set -euo pipefail
 source "$install_sh"
 EXEC_CONF_DIR="$r/etc/ctrl-exec-dispatcher"
 LEGACY_EXEC_CONF_DIR="$r/etc/ctrl-exec"
+LIB_DIR="$Bin/../lib"
 SBIN_DIR="$r/sbin"
 SYSTEMD_DIR="$r/systemd"
 HAS_SYSTEMD=true
@@ -82,14 +83,31 @@ END
     is slurp("$r/etc/ctrl-exec-dispatcher/ctrl-exec.conf"), $conf, 'conf dir: second run leaves the config alone';
 }
 
-# --- config dir: both exist -> nothing moved, warning ---
+# --- config dir: old real, new seeded (no CA) -> moved, seeded kept aside ---
 {
     my $r = host();
     make_path("$r/etc/ctrl-exec", "$r/etc/ctrl-exec-dispatcher");
+    spew("$r/etc/ctrl-exec/ctrl-exec.conf", "cert = $r/etc/ctrl-exec/dispatcher.crt\n");
     spew("$r/etc/ctrl-exec/ca.key", "OLD\n");
+    spew("$r/etc/ctrl-exec-dispatcher/ctrl-exec.conf", "# seeded\n");
+    my ($rc, $out) = run($r, 'migrate_dispatcher_conf_dir');
+    is $rc, 0, 'seeded new: exits 0' or diag($out);
+    is slurp("$r/etc/ctrl-exec-dispatcher/ca.key"), "OLD\n", 'seeded new: real config moved in';
+    ok -l "$r/etc/ctrl-exec", 'seeded new: symlink left';
+    is slurp("$r/etc/ctrl-exec-dispatcher.seeded/ctrl-exec.conf"), "# seeded\n", 'seeded new: seeded dir kept aside';
+}
+
+# --- config dir: both hold a CA -> nothing moved, says so ---
+{
+    my $r = host();
+    make_path("$r/etc/ctrl-exec", "$r/etc/ctrl-exec-dispatcher");
+    for my $d ("$r/etc/ctrl-exec", "$r/etc/ctrl-exec-dispatcher") {
+        spew("$d/ctrl-exec.conf", "cert = $d/dispatcher.crt\n");
+        spew("$d/ca.key", "K\n");
+    }
     my ($rc, $out) = run($r, 'migrate_dispatcher_conf_dir');
     is $rc, 0, 'both dirs: exits 0';
-    like $out, qr/Both .* exist/, 'both dirs: warns';
+    like $out, qr/leaving \S+ alone/, 'both dirs: says so';
     ok !-l "$r/etc/ctrl-exec", 'both dirs: old directory left as a real directory';
     ok -f "$r/etc/ctrl-exec/ca.key", 'both dirs: old contents untouched';
 }
