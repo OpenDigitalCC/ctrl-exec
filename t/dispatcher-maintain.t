@@ -3,7 +3,7 @@
 #
 # The dispatcher is loaded as a modulino (its `main() unless caller` guard keeps
 # main() from running) and mode_maintain is called in-process, so the real
-# phases run: ping fan-out, rotate, broadcast, expire, purge.
+# phases run: ping fan-out, rotate, broadcast, expire, retire, purge.
 #
 # What is real: mode_maintain, Exec::Registry (a temp registry dir),
 # Exec::Rotation (a temp config, no dispatcher cert), Exec::RunStore::purge (a
@@ -66,6 +66,7 @@ my $LAST_EXIT;              # exit status of the last run_maintain
     my $real_rot   = \&Exec::Rotation::check_and_rotate;
     my $real_bc    = \&Exec::Rotation::broadcast_serial;
     my $real_exp   = \&Exec::Rotation::expire_stale_agents;
+    my $real_ret   = \&Exec::Rotation::retire_previous_serial;
 
     # $CONFIG_PATH is a file lexical in the dispatcher, so redirect the real
     # loader to the temp config instead.
@@ -91,6 +92,9 @@ my $LAST_EXIT;              # exit status of the last run_maintain
     *Exec::Rotation::expire_stale_agents = sub {
         $phase_ran{expire}++;  die "expire boom\n" if $die_in{expire};
         $real_exp->(@_) };
+    *Exec::Rotation::retire_previous_serial = sub {
+        $phase_ran{retire}++;  die "retire boom\n" if $die_in{retire};
+        $real_ret->(@_) };
     *Exec::RunStore::purge = sub {
         $phase_ran{purge}++;   die "purge boom\n" if $die_in{purge};
         $real_purge->("$TMP/runs", 3600) };
@@ -135,7 +139,7 @@ subtest 'empty registry: runs, harmless, exits normally' => sub {
     ok $ok, 'mode_maintain returns without dying' or diag $err;
     is scalar(@ping_calls), 0, 'no agents -> ping fan-out not attempted';
     is_deeply [ err_phases() ], [], 'no phase logged an error';
-    is $phase_ran{$_}, 1, "phase $_ still ran" for qw(rotate broadcast expire purge);
+    is $phase_ran{$_}, 1, "phase $_ still ran" for qw(rotate broadcast expire retire purge);
     like $out, qr/^Maintenance run: 0\/0 agents pinged, dispatcher cert checked\.$/,
         'text summary reports 0/0';
 
@@ -179,8 +183,8 @@ subtest '--json output shape' => sub {
 
 # --- phase isolation -------------------------------------------------------
 subtest 'phase isolation: one failing phase does not stop the others' => sub {
-    my @steps = qw(rotate broadcast expire purge);
-    for my $bad (qw(ping rotate broadcast expire purge)) {
+    my @steps = qw(rotate broadcast expire retire purge);
+    for my $bad (qw(ping rotate broadcast expire retire purge)) {
         reset_run();
         $ping_result = sub { [ { ok => 1 }, { ok => 1 } ] };
         $die_in{$bad} = 1;
@@ -203,15 +207,15 @@ subtest 'phase isolation: one failing phase does not stop the others' => sub {
 
     # Every phase failing at once: all reported, all attempted.
     reset_run();
-    %die_in = map { $_ => 1 } qw(ping rotate broadcast expire purge);
+    %die_in = map { $_ => 1 } qw(ping rotate broadcast expire retire purge);
     my ($ok, undef, $out) = run_maintain({ json => 1 });
     ok $ok, 'all phases failing: still no die';
-    is_deeply [ err_phases() ], [ sort qw(ping rotate broadcast expire purge) ],
+    is_deeply [ err_phases() ], [ sort qw(ping rotate broadcast expire retire purge) ],
         'all phases failing: each one reported';
     is $LAST_EXIT, 1, 'all phases failing: exit status 1';
     my $aj = eval { decode_json($out) } || {};
     is $aj->{ok}, 0, 'all phases failing: json ok is 0';
-    is_deeply $aj->{failed}, [ qw(ping rotate broadcast expire purge) ],
+    is_deeply $aj->{failed}, [ qw(ping rotate broadcast expire retire purge) ],
         'all phases failing: json lists every phase, in run order';
     ok scalar(grep { $_->[0] eq 'INFO' && $_->[1]{ACTION} eq 'maintain' } @log),
         'all phases failing: closing INFO summary still logged';

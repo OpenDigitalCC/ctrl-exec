@@ -321,7 +321,9 @@ sub mode_ping ($opts, @hosts) {
 #      /renew-complete). The agent stages the new cert and adopts it on its next
 #      restart (its own renew timer triggers that).
 #   2. Rotates the dispatcher's own cert when it nears expiry, broadcasts the new
-#      serial to agents, and expires agents long out of contact.
+#      serial to agents (finishing an interrupted rotation), expires agents long
+#      out of contact, and retires the previous serial once the overlap window
+#      has passed.
 # Each phase is independent: a failure in one is logged and does not stop the rest.
 # Failed phases are collected and reported: --json gives ok:0 and a "failed" array
 # (always present, empty when all passed), the text output names them, and the
@@ -361,7 +363,8 @@ sub mode_maintain ($opts) {
         [ 'rotate',    sub { Exec::Rotation::check_and_rotate(config => $config) } ],
         [ 'broadcast', sub { Exec::Rotation::broadcast_serial(config => $config) } ],
         [ 'expire',    sub { Exec::Rotation::expire_stale_agents(config => $config) } ],
-        [ 'purge',     sub { Exec::RunStore::purge() } ],
+        [ 'retire',    sub { Exec::Rotation::retire_previous_serial(config => $config) } ],
+        [ 'purge',    sub { Exec::RunStore::purge() } ],
     ) {
         next if eval { $step->[1]->(); 1 };
         Exec::Log::log_action('ERR',
@@ -806,14 +809,18 @@ sub mode_rotate_cert ($opts) {
         die "Rotation failed: " . ($result->{error} // 'unknown error') . "\n";
     }
 
+    # The rotation broadcast the new serial with the current certificate, then
+    # installed the new one (Exec::Rotation::_do_rotation). An interrupted
+    # rotation is finished rather than replaced.
+    print "Finished an interrupted rotation.\n" if $result->{resumed};
     printf "New serial:      %s\n", $result->{serial};
     printf "Old serial:      %s\n", $result->{old_serial} || '(none)';
     printf "Overlap expires: %s\n", $result->{overlap_expires};
     printf "Agents pending:  %d\n", $result->{agents_pending};
 
     if ($result->{agents_pending} > 0) {
-        print "\nBroadcasting new serial to agents...\n";
-        my $report = Exec::Rotation::broadcast_serial(config => $config);
+        print "\nBroadcast of the new serial to agents:\n";
+        my $report = $result->{broadcast} // [];
 
         my @ok     = grep { $_->{status} eq 'ok'     } @$report;
         my @failed = grep { $_->{status} eq 'failed' } @$report;
@@ -826,8 +833,9 @@ sub mode_rotate_cert ($opts) {
             for my $r (@failed) {
                 printf "  %-30s  %s\n", $r->{hostname}, $r->{error} // 'failed';
             }
-            print "\nFailed agents will be retried automatically by the check loop.\n";
-            print "Agents offline longer than the overlap window will require re-pairing.\n";
+            print "\nFailed agents are retried automatically (maintain, check loop) with the\n";
+            print "previous certificate until the overlap window closes; an agent offline\n";
+            print "longer than that will require re-pairing.\n";
         }
     }
 }

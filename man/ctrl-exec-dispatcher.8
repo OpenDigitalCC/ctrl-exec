@@ -80,12 +80,14 @@ One-time certificate authority initialisation.
 Generate the control-host key and certificate.
 .TP
 .B rotate-cert
-Rotate the control-host certificate and broadcast the new serial.
+Rotate the control-host certificate: broadcast the new serial with the current
+certificate, then install the new one.
 .TP
 .B maintain
 Run one maintenance pass: ping all agents (renewing certificates that are past
 half-life), rotate and broadcast the control-host certificate, expire stale
-agents and purge expired run records. Every phase runs even if another fails.
+agents, retire the previous serial after the overlap window and purge expired
+run records. Every phase runs even if another fails.
 Exits 0 when all phases succeeded; if any failed, names them (or lists them in
 the
 .B failed

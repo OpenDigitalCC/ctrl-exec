@@ -358,7 +358,9 @@ Operational signals worth alerting on:
 
 - All agents returning `ACTION=serial-reject` simultaneously after a rotation
   indicates the rotation broadcast failed or was corrupted. Run
-  `ced serial-status` and `ced rotate-cert` immediately.
+  `ced serial-status` and `ced doctor`: agents still `pending` are retried by
+  `ced maintain` while the previous cert is kept; `doctor` names any that
+  need pairing again (`agent-missed-rotation`).
 - A sudden increase in `ACTION=run EXIT=non-zero` across multiple agents may
   indicate a script was modified or a dependency broke. Correlate with
   deployment events. Note that non-zero exit is logged at INFO priority on

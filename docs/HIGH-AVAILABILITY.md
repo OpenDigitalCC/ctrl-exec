@@ -371,9 +371,12 @@ Seamless rotation (0.9.0)
   `/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers` automatically. The serial
   broadcast (`broadcast_serial` → built-in `/rotate-serial`) **adds** the new
   serial to the map against the dispatcher's stable `dispatcher_id`, while the
-  **old** serial stays trusted through the overlap window — so the live cert
-  (the old one before the instances restart, the new one after) is accepted
-  throughout. After the overlap window the dispatcher broadcasts removal of the
+  **old** serial stays trusted through the overlap window — so an instance
+  presenting either cert is accepted throughout. The broadcast is sent with the
+  old certificate, the one the agents already trust, and the new certificate
+  is installed only after it (0.14; before, the broadcast presented the new
+  certificate, every agent refused it, and the rotation cut the dispatcher off
+  - see `rotate-cert` in REFERENCE.md). After the overlap window the dispatcher broadcasts removal of the
   old serial (`retire_previous_serial`, logged as `serial-retire`), so the
   retired cert stops being trusted. Because `dispatcher_id` is stable across
   rotation, trust and attribution carry over, and the agent can rewrite its own
@@ -384,9 +387,11 @@ Seamless rotation (0.9.0)
 Rotation procedure for HA:
 
 1. Run `ced rotate-cert` on one designated node. This generates the
-   new cert, writes it to `/etc/ctrl-exec-dispatcher/dispatcher.crt` and
-   `/etc/ctrl-exec-dispatcher/dispatcher.key`, and broadcasts the new serial to all
-   agents via their built-in `/rotate-serial` operation.
+   new cert, broadcasts its serial to all agents via their built-in
+   `/rotate-serial` operation (authenticated with the current cert), then
+   installs it as the `cert` and `key` named in `ctrl-exec.conf`. The previous
+   pair is kept beside them as `<cert>.prev` and `<key>.prev` until the old
+   serial is retired; the node that rotated retries unreachable agents with it.
 2. Sync the updated `/etc/ctrl-exec-dispatcher/` to all other dispatcher instances. The
    old serial stays trusted through the overlap window, so an instance still
    presenting the old cert continues to be accepted while the sync and restarts
@@ -398,8 +403,9 @@ Rotation procedure for HA:
    systemctl restart ctrl-exec-api
    ```
 
-   `ctrl-exec-api` reads its cert at startup. There is no live cert
-   reload — a restart is required.
+   The dispatcher cert itself needs no restart: every outbound connection to
+   an agent loads the files named in `ctrl-exec.conf` when it is made. The
+   restart matters only if `api_tls_cert` (the API's own listener cert) changed.
 
 Each agent's built-in `/rotate-serial` handler adds the new serial to the
 trusted-dispatcher map and sends SIGHUP to the agent process; the agent reloads

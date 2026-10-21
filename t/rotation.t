@@ -365,7 +365,9 @@ subtest 'retire_previous_serial: removes the old serial from current agents afte
     is scalar @calls, 1, 'exactly one removal dispatch';
     is $calls[0]{action}, 'remove', 'rotate action is remove';
     is $calls[0]{serial}, '0000ffff', 'removes the previous serial';
-    is_deeply $calls[0]{hosts}, ['agent-01'], 'targets only the confirmed agent';
+    is_deeply [ map { $_->{name} } @{ $calls[0]{hosts} } ], ['agent-01'],
+        'targets only the confirmed agent';
+    is $calls[0]{hosts}[0]{target}, 'agent-01', '...at its registered address (T-069)';
 
     my $state = decode_json(read_file($rotFile));
     ok !exists $state->{previous_serial}, 'previous_serial cleared after retirement';
@@ -590,6 +592,14 @@ subtest '_do_rotation: registered agents marked pending after rotation' => sub {
             dispatcher_serial => '0123456789abcdef',
         }));
     }
+
+    # The broadcast that follows the rotation is not under test here: both
+    # agents are unreachable, so they stay pending.
+    no warnings 'redefine';
+    local *Exec::Engine::rotate_all = sub {
+        my %o = @_;
+        return [ map { { host => $_->{name}, exit => -1, error => 'unreachable' } } @{ $o{hosts} } ];
+    };
 
     my $result = Exec::Rotation::_do_rotation(config => config(
         ca_dir        => $caDir,

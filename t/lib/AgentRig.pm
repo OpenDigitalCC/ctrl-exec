@@ -128,7 +128,7 @@ sub new {
     my $self = bless {
         dir => $dir, port => _free_port(), log => "$dir/agent.log",
         conf => "$dir/agent.conf", allow => "$dir/scripts.conf", pid => undef,
-        ca_file => $ca_file,
+        ca_file => $ca_file, owner => $$,
     }, $class;
     $self->set_conf($o{extra_conf} // '');
     open my $a, '>', $self->{allow} or die;
@@ -184,6 +184,9 @@ sub hup { my ($self) = @_; kill 'HUP', $self->{pid}; }
 sub stop {
     my ($self) = @_;
     return unless $self->{pid};
+    # A forked child of the test (Engine::_fan_out's workers) ends with exit,
+    # so it destroys its copy of the rig too: only the test stops the agent.
+    return unless $$ == ($self->{owner} // $$);
     kill 'TERM', $self->{pid};
     waitpid($self->{pid}, 0);
     $self->{pid} = undef;

@@ -1566,8 +1566,9 @@ ACTION=cert-renewal-start DAYS_LEFT=85
 
 ### cert-rotated
 
-Emitted on successful completion of a cert rotation. The new cert has been
-written and all agents have been marked pending for serial broadcast.
+Emitted when a rotation has staged its new cert (`<cert>.next`) and marked
+all agents pending for the serial broadcast. The served cert changes only
+after the broadcast (`cert-switch`).
 
 Priority
 : INFO
@@ -1581,9 +1582,73 @@ Fields
 | NEW_SERIAL | string | Lowercase hex serial of the new cert |
 | OVERLAP_EXPIRES | string | ISO 8601 UTC timestamp when the overlap window closes |
 | AGENTS | integer | Number of agents marked pending for serial broadcast |
+| KEPT_PREVIOUS | string | Present when the last rotation's overlap window was still open with agents pending: the serial of the previous cert that was kept for the broadcast instead of OLD_SERIAL's (OLD_SERIAL is then retired with it) |
 
 ```
 ACTION=cert-rotated OLD_SERIAL=09abcdef NEW_SERIAL=0a1b2c3d OVERLAP_EXPIRES=2026-04-13T14:30:00Z AGENTS=12
+```
+
+### cert-switch
+
+Emitted when a rotation installs its staged cert and key as the `cert` and
+`key` named in `ctrl-exec.conf`, after the serial broadcast. Every later
+connection to an agent presents the new cert.
+
+Priority
+: INFO
+
+Fields
+
+| Field | Type | Description |
+| --- | --- | --- |
+| ACTION | string | `cert-switch` |
+| NEW_SERIAL | string | Lowercase hex serial now served |
+| CERT | string | The served cert path |
+
+```
+ACTION=cert-switch NEW_SERIAL=0a1b2c3d CERT=/etc/ctrl-exec-dispatcher/ctrl-exec.crt
+```
+
+### cert-switch-fail
+
+Emitted when a staged cert cannot be installed, or when the staged cert has
+gone before it was installed. The dispatcher goes on serving its previous
+cert; the next `maintain` or `rotate-cert` retries (a lost staged cert starts
+a new rotation).
+
+Priority
+: ERR
+
+Fields
+
+| Field | Type | Description |
+| --- | --- | --- |
+| ACTION | string | `cert-switch-fail` |
+| SERIAL | string | The staged serial |
+| ERROR | string | Why |
+
+```
+ACTION=cert-switch-fail SERIAL=0a1b2c3d ERROR="cannot install ..."
+```
+
+### cert-rotation-resume
+
+Emitted when `rotate-cert` or the automatic rotation finds a rotation that
+was interrupted after it was staged, and finishes it instead of starting
+another.
+
+Priority
+: INFO
+
+Fields
+
+| Field | Type | Description |
+| --- | --- | --- |
+| ACTION | string | `cert-rotation-resume` |
+| NEW_SERIAL | string | The staged serial being finished |
+
+```
+ACTION=cert-rotation-resume NEW_SERIAL=0a1b2c3d
 ```
 
 ### cert-rotation-fail
@@ -1607,7 +1672,8 @@ ACTION=cert-rotation-fail ERROR="openssl x509 failed: ..."
 ### serial-broadcast
 
 Emitted when `broadcast_serial` begins calling the built-in `/rotate-serial`
-operation on pending agents.
+operation on pending agents. The broadcast is authenticated with the previous
+cert (`<cert>.prev`), which the pending agents still trust, while it is kept.
 
 Priority
 : INFO
@@ -1620,9 +1686,10 @@ Fields
 | HOSTS | string | Comma-separated list of agents receiving the broadcast |
 | SERIAL | string | The serial being broadcast |
 | DISPATCHER | string | Id of the dispatcher whose serial is being added |
+| CERT | string | The cert the broadcast presents |
 
 ```
-ACTION=serial-broadcast HOSTS=web-01,db-01,db-02 SERIAL=0a1b2c3d DISPATCHER=ctrl-exec-primary
+ACTION=serial-broadcast HOSTS=web-01,db-01,db-02 SERIAL=0a1b2c3d DISPATCHER=ctrl-exec-primary CERT=/etc/ctrl-exec-dispatcher/ctrl-exec.crt.prev
 ```
 
 ### serial-retire

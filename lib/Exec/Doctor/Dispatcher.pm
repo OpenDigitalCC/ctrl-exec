@@ -4,8 +4,9 @@ package Exec::Doctor::Dispatcher;
 # (T-047/T-065, Exec::DispatcherConfig::conf_dir_state), ctrl-exec.conf, the
 # dispatcher's certificate and CA, the auth hook, the API listener settings
 # (Exec::API::listen_plan, as ctrl-exec-api checks them at start) and its unix
-# socket, and the agent registry (agents whose certificate another
-# dispatcher's CA issued, T-062). Report only, except under --fix.
+# socket, the agent registry (agents whose certificate another
+# dispatcher's CA issued, T-062), and certificate rotation (an interrupted
+# rotation, agents that missed one, T-069). Report only, except under --fix.
 #
 # The automatic fixes (--fix), and why each is safe:
 #   api-socket-mode   the API's unix socket gets mode 0660 again, the mode
@@ -117,6 +118,7 @@ sub checks (%o) {
     push @f, _auth_checks($config, $path);
     push @f, _api_checks($config, $path);
     push @f, _registry_checks($config);
+    push @f, _rotation_checks($config);
     return \@f;
 }
 
@@ -254,6 +256,47 @@ sub _registry_checks ($config) {
                 "re-pair it: on $h: sudo ctrl-exec-agent request-pairing --dispatcher <this-host>,"
                 . ' then: sudo ctrl-exec-dispatcher approve <reqid>');
         }
+    }
+    return @f;
+}
+
+# Certificate rotation (T-069). A rotation stages the new certificate,
+# broadcasts its serial with the current one, then installs it; an interrupted
+# one is finished by the next maintain or rotate-cert. An agent still 'pending'
+# is retried with the previous certificate (kept as '<cert>.prev') until the
+# overlap window closes. One that is 'stale', or 'pending' with no previous
+# certificate kept - the state a rotation before 0.14 left, which replaced the
+# certificate before telling the agents - refuses this dispatcher until it is
+# paired again.
+sub _rotation_checks ($config) {
+    require Exec::Rotation;
+    my $state = Exec::Rotation::load_state(path => $config->{rotation_file}) or return ();
+    my $new   = $state->{current_serial};
+    return () unless defined $new && length $new;
+    my $when  = $state->{rotated_at} // '?';
+    if ($state->{staged}) {
+        return Exec::Doctor::problem('rotation-unfinished', "A certificate rotation (new serial"
+            . " $new, started $when) was interrupted: this dispatcher still serves its previous"
+            . ' certificate, and agents were not all sent the new serial.',
+            'sudo ctrl-exec-dispatcher maintain (or rotate-cert), which finishes it');
+    }
+    my $prev = $state->{previous_serial} // '';
+    my $kept = length $prev && defined $config->{cert} && -f "$config->{cert}.prev"
+            && (Exec::CertInfo::serial_from_path("$config->{cert}.prev") // '') eq $prev;
+    my $agents = eval { Exec::Registry::list_agents(registry_dir => _registry_dir($config)) } // [];
+    my @f;
+    for my $a (@$agents) {
+        my $st = $a->{serial_status} // '';
+        next unless $st eq 'stale' || ($st eq 'pending' && !$kept);
+        my $h = $a->{hostname} // '?';
+        push @f, Exec::Doctor::problem('agent-missed-rotation', "Agent '$h' never took serial $new"
+            . " from the certificate rotation of $when, "
+            . ($st eq 'stale' ? 'and the overlap window has closed'
+                              : 'and the certificate it still trusts is gone (a rotation before'
+                              . ' 0.14 replaced it before telling the agents)')
+            . ': it refuses this dispatcher.',
+            "re-pair it: on $h: sudo ctrl-exec-agent request-pairing --dispatcher <this-host>,"
+            . ' then: sudo ctrl-exec-dispatcher approve <reqid>');
     }
     return @f;
 }

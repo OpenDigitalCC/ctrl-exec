@@ -541,11 +541,10 @@ Roles*.
 Generate the dispatcher's own key and certificate, signed by the CA.
 Run after `setup-ca`. If an existing cert is found and registered agents
 exist, the command displays the agent count and requires confirmation before
-proceeding - replacing the cert changes its serial. The new serial is then
-broadcast to agents over the run channel and added to each reachable agent's
-trusted-dispatcher map automatically, so rotation is seamless for agents that
-are online; only an agent that is offline during the broadcast and misses it
-will need re-pairing.
+proceeding - replacing the cert changes its serial, and `setup-ctrl-exec`
+does not tell the agents: each refuses the new certificate until it is paired
+again. To replace the certificate of a dispatcher with paired agents, use
+`rotate-cert`, which does tell them.
 
 ```bash
 ced setup-ctrl-exec
@@ -557,13 +556,37 @@ Writes to `/etc/ctrl-exec-dispatcher/`.
 
 ### rotate-cert
 
-Rotate the dispatcher certificate immediately. Generates a new cert, marks
-all registered agents as pending, broadcasts the new serial to all agents
-in parallel, and reports per-agent results.
+Rotate the dispatcher certificate immediately, in three steps, and report
+per-agent results:
+
+1. Stage: generate the new key and certificate as `<key>.next` and
+   `<cert>.next` beside the `cert` and `key` named in `ctrl-exec.conf`, copy
+   the current pair to `<cert>.prev` and `<key>.prev`, record both serials in
+   `/var/lib/ctrl-exec/rotation.json`, and mark every registered agent
+   `pending`. Nothing served has changed yet.
+2. Broadcast: tell every pending agent, in parallel and at its registered
+   address and port, to add the new serial to its trusted-dispatcher map. The
+   broadcast is authenticated with the current certificate - an agent accepts a
+   serial only from a dispatcher certificate it already trusts.
+3. Switch: install the `.next` pair as the `cert` and `key`. Every later
+   connection to an agent uses the new certificate; long-running processes
+   (`ctrl-exec-api`) need no restart, as each connection loads the files when
+   it is made.
 
 ```bash
 ced rotate-cert
 ```
+
+Before 0.14 the new certificate replaced the old one before the broadcast, so
+the broadcast presented a serial no agent trusted: every agent refused it
+(`serial-broadcast-fail ... serial mismatch`) and then refused the dispatcher.
+Such an agent needs pairing again; `doctor` names it (`agent-missed-rotation`).
+
+A rotation that was interrupted (the process killed between steps) is
+finished, not replaced, by the next `rotate-cert` or `maintain` run (or the
+pairing listener's check loop): the broadcast is sent again (adding a serial an
+agent already has changes nothing) and whichever `.next` file is left is
+installed. `doctor` reports it until then (`rotation-unfinished`).
 
 The new certificate is marked with the dispatcher role (0.14; see `setup-ca`),
 so rotating a certificate issued before 0.14 is what marks it. It also carries
@@ -572,9 +595,16 @@ OpenSSL 1.1 host lacks; upgrading keeps the old certificate until the next
 rotation. An agent that trusts two CAs with one name needs it (see *Two CAs
 with one name* under `request-pairing`).
 
-Agents that were unreachable during the broadcast are retried automatically
-by the internal check loop. Agents that remain unreachable after
-`cert_overlap_days` are marked `stale` and require re-pairing.
+Agents that were unreachable during the broadcast stay `pending` and refuse
+the new certificate until they are reached. Each `maintain` run (and the
+pairing listener's check loop) retries them, authenticated with the previous
+certificate they still trust. Agents that remain unreachable after
+`cert_overlap_days` are marked `stale` and require re-pairing. Once the overlap
+window has passed, `maintain` removes the old serial from the agents that took
+the new one and deletes the `.prev` pair. Running `rotate-cert` again while
+agents of the last rotation are still `pending` keeps the previous pair they
+trust, so they are still reached, and retires the serial in between with the
+old one.
 
 The broadcast uses the agent's built-in `/rotate-serial` operation, so it
 needs no `scripts.conf` allowlist entry — cert rotation is a first-class
@@ -586,15 +616,17 @@ control-plane operation, not an allowlisted script.
 
 Run one maintenance pass: ping every registered agent (which triggers
 certificate renewal for agents past half-life), rotate the dispatcher's own
-cert if it nears expiry, broadcast the serial, expire agents long out of
-contact, and purge expired async run records. This is what
+cert if it nears expiry, broadcast the serial to agents that have not taken it
+(finishing an interrupted rotation), expire agents long out of contact, retire
+the previous serial once the overlap window has passed, and purge expired async
+run records. This is what
 `ctrl-exec-maintenance.timer` runs; it needs root for CA-key access.
 
 ```bash
 ced maintain [--json]
 ```
 
-Each phase (`ping`, `rotate`, `broadcast`, `expire`, `purge`) runs
+Each phase (`ping`, `rotate`, `broadcast`, `expire`, `retire`, `purge`) runs
 independently: a failure is logged at ERR (`ACTION=maintain PHASE=<phase>`)
 and the remaining phases still run.
 
@@ -670,6 +702,7 @@ Checks (the `check` id in `--json` in brackets):
 | Auth hook | `auth_hook` names a missing or non-executable file, so every request is denied (problem, `auth-hook-missing`, `auth-hook-not-executable`); the hook allows everything - after comments, nothing but `exit 0`, as the shipped example (problem, `auth-hook-allow-all`) |
 | API listener | settings `ctrl-exec-api` refuses (problem, `api-config`, with its reason); `api_socket` absent (note, `api-socket-absent`: the API is not running); the socket wider than 0660, or not in `api_socket_group` (problem, `api-socket-mode`, `api-socket-group`) |
 | Registry | an agent paired keeping a certificate another dispatcher's CA issued (`approve` pinned the CA), expiring within 30 days: this dispatcher never renews it (problem, `agent-cert-pinned-expiry`); any other agent whose certificate has expired (problem, `agent-cert-expired`) |
+| Certificate rotation | a rotation interrupted before its new certificate was installed (problem, `rotation-unfinished`; `maintain` or `rotate-cert` finishes it); an agent that missed a rotation and refuses this dispatcher: `stale` (the overlap window closed), or `pending` with no previous certificate kept to reach it with, as a rotation before 0.14 left it (problem, `agent-missed-rotation`; pair it again). An agent `pending` within the overlap window is retried automatically and not reported |
 
 `--fix` also makes the changes that cannot lose data or widen access, and
 lists each as `fixed`: the API socket's mode back to 0660 and its group back to
@@ -847,7 +880,8 @@ Key settings:
 
 `cert_overlap_days`
 : After rotation, continue retrying agents that missed the serial broadcast for
-  this many days before marking them `stale` (requiring re-pair). Default: 30.
+  this many days before marking them `stale` (requiring re-pair); the old
+  serial stays trusted, and the previous certificate kept, for as long. Default: 30.
   Configurable to accommodate fleets with agents that are offline for extended
   periods.
 

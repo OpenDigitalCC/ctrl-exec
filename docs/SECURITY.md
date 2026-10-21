@@ -744,6 +744,8 @@ Agent-side hook
 /etc/ctrl-exec-dispatcher/ca.crt              0644  root         CA certificate
 /etc/ctrl-exec-dispatcher/dispatcher.key      0600  ctrl-exec    dispatcher private key (API service user reads it; root also can)
 /etc/ctrl-exec-dispatcher/dispatcher.crt      0644  root         dispatcher certificate
+/etc/ctrl-exec-dispatcher/dispatcher.key.prev 0600  ctrl-exec    previous key, kept from a rotation until the old serial is retired
+/etc/ctrl-exec-dispatcher/dispatcher.crt.prev 0644  root         previous certificate, likewise
 /etc/ctrl-exec-dispatcher/auth-hook           0755  root         Auth hook executable
 /etc/ctrl-exec-dispatcher/                    0750  root:ctrl-exec
 
@@ -930,10 +932,12 @@ Async result ownership
   dispatcher requests another dispatcher's result.
 
 `/renew` and `/renew-complete` are intentionally exempt from the map check.
-During cert rotation, the dispatcher presents its new cert before agents
-receive the updated serial. Applying the map check to the renewal endpoints
-would cause every agent to reject the serial broadcast, breaking the rotation
-mechanism. The renewal endpoints require a valid CA-signed cert (mTLS still
+After a dispatcher cert rotation, an agent the serial broadcast has not
+reached yet (offline at the time, still `pending`) sees the dispatcher's new
+cert before its map holds the new serial; the map check on the renewal
+endpoints would stop that agent's certificate renewal until the broadcast
+reaches it. (The broadcast itself, `/rotate-serial`, is map-checked: it is
+sent with the previous cert, which the agent trusts.) The renewal endpoints require a valid CA-signed cert (mTLS still
 applies) but do not require the peer serial to be a key in the map. See Cert
 Rotation below.
 
@@ -956,9 +960,15 @@ Renewal trigger
   remain (default: 90), it generates a new cert automatically.
 
 Broadcast
-: Immediately after generating the new cert, the dispatcher POSTs to each
-  registered agent's built-in `/rotate-serial` operation in parallel, carrying
-  the new serial. The agent's rotate handler adds the new serial to its
+: The new cert and key are first written beside the served pair
+  (`<cert>.next`, `<key>.next`) and the served pair is copied to `<cert>.prev`
+  and `<key>.prev`. The dispatcher then POSTs to each registered agent's
+  built-in `/rotate-serial` operation in parallel, carrying the new serial and
+  authenticated with the previous cert - the one the agent already trusts -
+  and only after that installs the new pair as the served one. (Before 0.14
+  the new cert was installed first, so the broadcast presented a serial no
+  agent trusted, every agent refused it, and a rotation cut the dispatcher off
+  from its fleet.) The agent's rotate handler adds the new serial to its
   trusted-dispatcher map and sends itself SIGHUP. The dispatcher identity is
   derived from the caller's authenticated cert serial — it is never sent in the
   request — so an agent only ever adds a serial under the calling dispatcher's
@@ -977,9 +987,8 @@ Broadcast
     over the run channel, with no re-pairing, via add-then-remove. On rotation
     the dispatcher broadcasts the *new* serial together with its stable
     `dispatcher_id`; each reachable agent *adds* it to the map against that
-    identity. The *old* serial stays trusted through the overlap window, so the
-    dispatcher's live cert — the old one before its process restarts, the new
-    one after — is accepted throughout. After the overlap window the dispatcher
+    identity. The *old* serial stays trusted through the overlap window, so a
+    dispatcher instance presenting either cert is accepted throughout. After the overlap window the dispatcher
     broadcasts removal of the old serial (`retire_previous_serial`, logged as
     `serial-retire`), so the retired cert stops being trusted. Because
     `dispatcher_id` is stable across rotation, trust and attribution carry over;
@@ -991,7 +1000,9 @@ Broadcast
 
 Overlap window
 : Agents that were offline during the broadcast are marked `pending`. The
-  dispatcher retries them on each subsequent check interval. After
+  dispatcher retries them on each subsequent check interval (and each
+  `maintain` run), authenticated with the kept previous cert, which they still
+  trust. After
   `cert_overlap_days` (default: 30, configurable) the overlap expires and
   any remaining `pending` agents are marked `stale`. A stale agent needs
   re-pairing - it has missed the rotation window. `/run`, `/ping`, and

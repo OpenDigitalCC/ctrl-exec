@@ -560,7 +560,7 @@ stale sandbox drop-in
 ## ctrl-exec-maintenance.service shows as failed
 
 `ced maintain` (run by `ctrl-exec-maintenance.timer`) runs the ping/renewal,
-rotate, broadcast, expire and purge phases independently, then exits 1 if any
+rotate, broadcast, expire, retire and purge phases independently, then exits 1 if any
 of them failed. The unit therefore shows as failed in `systemctl --failed`
 until the next successful run. It is not restarted in a loop; the timer simply
 fires again at its next interval.
@@ -646,7 +646,9 @@ of rotations is safe: every link is authorised by the link before it.
 :::
 
 The broadcast is add-then-remove with an overlap window, so a reachable agent is
-never without a trusted serial during the change. Only an agent that is offline
-for the whole broadcast needs re-pairing. The end-to-end check is in
+never without a trusted serial during the change: the broadcast is sent with the
+certificate the agent already trusts, and the new one is served only after it.
+An agent offline during the broadcast is retried with the previous certificate;
+only one offline for the whole overlap window needs re-pairing. The end-to-end check is in
 `MANUAL-CHECKS.md` (*Cert Rotation Broadcast*); the security properties are in
 `SECURITY-OPERATIONS.md` (*Cert-Rotation Security*).

@@ -235,31 +235,49 @@ Fail
 
 ## 8. Cert Rotation Broadcast
 
-Confirms that `ced rotate-cert` reaches all registered agents and that
-each agent updates its trusted-dispatcher map automatically.
+Confirms that `ced rotate-cert` reaches all registered agents, that each
+agent updates its trusted-dispatcher map automatically, and that every agent
+still accepts the dispatcher afterwards.
 
 Rotation is seamless and needs no re-pairing for reachable agents. The
-automatic serial broadcast updates the trusted-dispatcher map at
-`/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers` add-then-remove: the
-dispatcher broadcasts the new serial with its stable identity and each agent
-adds it (the old serial stays trusted through the overlap window), then after
-the overlap window the dispatcher broadcasts removal of the old serial. Only
-an agent that is offline during the broadcast and misses it needs re-pairing.
+rotation stages the new certificate (`<cert>.next`), broadcasts its serial to
+each agent with the current certificate (the one the agents already trust),
+and only then installs the new one. Each agent adds the new serial to its
+trusted-dispatcher map at `/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers`
+under the dispatcher's stable identity; the old serial stays trusted through
+the overlap window, after which `maintain` removes it. An agent offline during
+the broadcast is retried with the previous certificate (`<cert>.prev`) until
+the overlap window closes; only one still offline then needs re-pairing.
 
 ```bash
 sudo ced rotate-cert
 sudo ced serial-status
+sudo ced ping <agent>
+sudo cat /var/lib/ctrl-exec-agent/ctrl-exec-dispatchers   # on an agent
 ```
 
 Pass
-: All agents show `current` in `serial-status` output. `ACTION=serial-confirmed`
-  appears in the log on each agent during the broadcast, and
-  `ACTION=serial-retire` once the overlap window closes.
+: `rotate-cert` reports every agent `Updated`; `serial-status` shows all
+  agents `current`; `ced ping` succeeds for each with the new certificate. On
+  each agent the log shows `ACTION=rotate SERIAL_ACTION=add` and no
+  `serial-reject`, and its map lists both serials for the dispatcher. No
+  `<cert>.next` file is left beside the dispatcher cert. After the overlap
+  window (shorten `cert_overlap_days` to test), `ced maintain` logs
+  `ACTION=serial-retire`, each agent's map lists only the new serial, and the
+  `.prev` pair is gone.
+
+Pass (offline agent)
+: Stop one agent before `rotate-cert`: it is reported failed and stays
+  `pending`, and `ced ping` to it fails with a serial mismatch once it is
+  back. The next `ced maintain` reaches it (`ACTION=serial-confirmed`) and the
+  ping succeeds.
 
 Fail
-: One or more agents remain `pending`. The agent was unreachable during the
-  broadcast. Re-run `rotate-cert` after restoring connectivity. If the overlap
-  window expires, the offline agent requires re-pairing.
+: `serial-broadcast-fail ... serial mismatch` on the dispatcher with
+  `serial-reject` on the agent means the broadcast presented a serial the agent
+  does not trust (the pre-0.14 fault this check exists for). An agent still
+  `pending` after the overlap window is marked `stale` and requires
+  re-pairing; `ced doctor` names it (`agent-missed-rotation`).
 
 
 ## 9. Revocation Takes Effect
