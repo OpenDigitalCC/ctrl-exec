@@ -297,24 +297,12 @@ sub mode_remove_dispatcher ($opts) {
         print "No running agent found to reload. If it runs, reload it (SIGHUP) or restart it:\n"
             . "    " . _reload_command() . "\n";
     }
-    if (@gone) {
-        print "The agent's TLS listener reads $ca only at start, so the removed CA stays in\n"
-            . "the listener until the agent is restarted; until then a certificate from it\n"
-            . "still completes the handshake and is refused as not trusted. To finish:\n"
-            . "    " . _restart_command() . "\n";
-    }
 }
 
 sub _reload_command {
     return 'sudo systemctl reload ctrl-exec-agent' if -d '/run/systemd/system';
     return 'sudo /etc/init.d/ctrl-exec-agent reload' if -e '/etc/init.d/ctrl-exec-agent';
     return 'sudo kill -HUP <pid of ctrl-exec-agent serve>';
-}
-
-sub _restart_command {
-    return 'sudo systemctl restart ctrl-exec-agent' if -d '/run/systemd/system';
-    return 'sudo /etc/init.d/ctrl-exec-agent restart' if -e '/etc/init.d/ctrl-exec-agent';
-    return 'stop and start ctrl-exec-agent serve';
 }
 
 # ctrl-exec-agent list-dispatchers: one line per trusted dispatcher and CA,

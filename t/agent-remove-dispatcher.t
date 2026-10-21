@@ -73,7 +73,7 @@ subtest 'removing one of two dispatchers, each with its own CA' => sub {
     like $out, qr/Removed dispatcher 'd2': 1 trusted-map entry/, 'says what went';
     like $out, qr/CA removed from \S+: \Q$f2\E/, 'names the CA removed from the bundle';
     like $out, qr/Reloaded the running agent \(SIGHUP to pid $rig->{pid}\)/, 'reloaded the agent';
-    like $out, qr/restart/i, 'and says the listener needs a restart for the CA';
+    unlike $out, qr/restart/i, 'no restart needed: the listener follows ca.crt (T-062)';
     like $out, qr/ACTION=remove-dispatcher CA=\Q$f2\E ENTRIES=1 ID=d2 RESULT=ok/, 'logged with the id and CA'
         or diag $out;
 
@@ -83,14 +83,9 @@ subtest 'removing one of two dispatchers, each with its own CA' => sub {
     is AgentRig::fingerprint($rig->{ca_file}), $f1, 'and it is the other dispatcher\'s';
 
     ok reloaded($rig, $from), 'the agent reloaded';
-    isnt $rig->request(as => 'd2') // 0, 200, 'dispatcher 2 is refused at once, on reload';
+    is $rig->request(as => 'd2'), undef,
+        'dispatcher 2 cannot even connect: its CA left the listener at the reload, no restart';
     is $rig->request(as => 'trusted'), 200, 'dispatcher 1 still runs';
-
-    # After a restart the CA is gone from the listener too: no handshake.
-    $rig->stop;
-    $rig->start or BAIL_OUT('rig agent did not restart: ' . $rig->log_text);
-    is $rig->request(as => 'd2'), undef, 'after a restart dispatcher 2 cannot even connect';
-    is $rig->request(as => 'trusted'), 200, 'dispatcher 1 runs';
     $rig->stop;
 };
 

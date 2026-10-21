@@ -77,8 +77,8 @@ Stop trusting one control host (root). Removes its trusted-map entries and
 each of its CAs from the CA bundle unless another trusted control host is under
 that CA, then sends SIGHUP to the running agent and logs
 .BR ACTION=remove-dispatcher .
-The map change takes effect at the reload; the CA leaves the TLS listener at
-the next restart, which the command says. The last CA is never removed, so
+The map change, and a CA removed from the TLS listener, take effect at the
+reload; no restart is needed. The last CA is never removed, so
 removing the last control host leaves an agent that starts but refuses every
 caller;
 .B self-check

@@ -1460,12 +1460,10 @@ sudo ctrl-exec-agent remove-dispatcher <id>
 An unknown id changes nothing, exits 1 and names the known ids:
 `unknown dispatcher 'x' (known: d1, d2)`. No id: usage, exit 2.
 
-Reload and restart. The TLS listener reads `ca.crt` only when the agent
-starts. After a reload the map no longer trusts the dispatcher, but its CA is
-still in the listener, so its certificate still completes the handshake and is
-then refused (HTTP 403). The CA is gone from the listener at the next restart,
-and the command prints that restart command when it removed a CA. Revoking
-trust is complete at the reload; the restart only closes the handshake.
+Reload. The agent follows `ca.crt` and the map without a restart (T-062): at
+the reload the map no longer trusts the dispatcher, and a CA removed from
+`ca.crt` leaves the TLS listener, so a certificate from it no longer completes
+the handshake. No restart is needed.
 
 The dispatcher that issued the agent's own certificate. `self-ping` checks the
 agent's certificate against `ca.crt`, and renewal is pinned to its issuing CA,
