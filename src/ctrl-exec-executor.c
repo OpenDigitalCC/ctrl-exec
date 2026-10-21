@@ -117,6 +117,26 @@ static char *trim(char *s) {
     return s;
 }
 
+/* Pasted non-ASCII spaces (T-059): U+00A0, U+2000-U+200A (U+2007 among them)
+ * and U+202F, UTF-8 encoded, each become one ASCII space, in place, before a
+ * scripts.conf or agent.conf line is parsed. A line copied from a terminal or
+ * chat UI then reads as typed. Mirrors Exec::Agent::Config::_ascii_spaces
+ * (same sequences, same single-space replacement). Returns how many. */
+static int ascii_spaces(char *s) {
+    char *w = s;
+    int n = 0;
+    for (const char *r = s; *r; ) {
+        const unsigned char *u = (const unsigned char *)r;
+        if (u[0] == 0xC2 && u[1] == 0xA0) { *w++ = ' '; r += 2; n++; continue; }
+        if (u[0] == 0xE2 && u[1] == 0x80 && ((u[2] >= 0x80 && u[2] <= 0x8A) || u[2] == 0xAF)) {
+            *w++ = ' '; r += 3; n++; continue;
+        }
+        *w++ = *r++;
+    }
+    *w = '\0';
+    return n;
+}
+
 /* Split src on any char in `seps`, preserving order, into dst[][len].
  * Empty fields are dropped (matches Perl `grep { length } split`). Returns -1
  * when there are more than maxn fields or a field does not fit stride: a
@@ -310,6 +330,7 @@ static int parse_agent_conf(const char *path, config_t *c) {
             fprintf(stderr, "Malformed config line in '%s': contains a NUL byte\n", path);
             rc = -1; break;
         }
+        ascii_spaces(line);
         char *s = line;
         while (isspace((unsigned char)*s)) s++;
         if (!*s || *s == '#') continue;            /* blank / full-line comment */
@@ -440,6 +461,7 @@ static int find_script(const char *path, const char *want,
     while ((len = getline(&line, &cap, f)) != -1) {
         if (len && line[len - 1] == '\n') line[--len] = '\0';
         if ((size_t)len != strlen(line)) continue;   /* NUL byte: skipped */
+        ascii_spaces(line);
         char *s = trim(line);
         if (!*s || *s == '#') continue;
         char *eq = strchr(s, '=');

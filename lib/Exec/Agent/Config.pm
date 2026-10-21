@@ -39,6 +39,28 @@ use constant {
     VALLEN       => 4096,   # a path must be shorter than this
 };
 
+# Pasted non-ASCII spaces (T-059): U+00A0, U+2000-U+200A (U+2007 among them)
+# and U+202F, UTF-8 encoded, each become one ASCII space before a scripts.conf
+# or agent.conf line is parsed, so a line copied from a terminal or chat UI
+# reads as typed. The files are read as bytes. The executor does the same
+# (ascii_spaces in src/ctrl-exec-executor.c; t/exec-conformance.t). Returns
+# how many were replaced.
+sub _ascii_spaces ($lineref) {
+    return $$lineref =~ s/\xC2\xA0|\xE2\x80[\x80-\x8A\xAF]/ /g || 0;
+}
+
+# One line per file load that held any: the operator can find and clean the
+# file, nothing else changes.
+sub _log_ascii_spaces ($path, $lines) {
+    return unless $lines;
+    Exec::Log::log_action('INFO', {
+        ACTION => 'config-nonascii-space',
+        FILE   => $path,
+        LINES  => $lines,
+        REASON => 'non-ASCII spaces (such as U+00A0) read as ordinary spaces',
+    });
+}
+
 # Load and validate agent.conf
 # Returns hashref of config values or dies with error
 sub load_config ($path = undef) {
@@ -50,6 +72,7 @@ sub load_config ($path = undef) {
     my %config;
     my $section = '';      # current section name; '' means top-level
     my $cur_profile;       # name of the [profile <name>] currently being read
+    my $spaced = 0;        # lines with pasted non-ASCII spaces
 
     while (my $line = <$fh>) {
         chomp $line;
@@ -58,6 +81,7 @@ sub load_config ($path = undef) {
         # different values.
         croak "Malformed config line in '$path': contains a NUL byte"
             if index($line, "\0") >= 0;
+        $spaced++ if _ascii_spaces(\$line);
         next if $line =~ /^\s*#/;   # skip comments
         next if $line =~ /^\s*$/;   # skip blank lines
 
@@ -108,6 +132,7 @@ sub load_config ($path = undef) {
     close $fh;
 
     _validate_config(\%config, $path);
+    _log_ascii_spaces($path, $spaced);
     return \%config;
 }
 
@@ -336,12 +361,14 @@ sub load_allowlist_full ($path = undef, $script_dirs = undef, $ownership = 'warn
         or croak "Cannot open allowlist '$path': $!";
 
     my (%allowlist, %skipped);
+    my $spaced = 0;        # lines with pasted non-ASCII spaces
     while (my $line = <$fh>) {
         chomp $line;
         if (index($line, "\0") >= 0) {
             warn "Allowlist: skipping line containing a NUL byte\n";
             next;
         }
+        $spaced++ if _ascii_spaces(\$line);
         next if $line =~ /^\s*#/;
         next if $line =~ /^\s*$/;
         if ($line =~ /^\s*([\w-]+)\s*=\s*(.+?)\s*$/) {
@@ -443,6 +470,7 @@ sub load_allowlist_full ($path = undef, $script_dirs = undef, $ownership = 'warn
         }
     }
     close $fh;
+    _log_ascii_spaces($path, $spaced);
 
     return (\%allowlist, \%skipped);
 }

@@ -642,6 +642,76 @@ push @fixtures, (
     )),
 );
 
+# --- lines pasted from a terminal or chat UI (T-059) ---------------------------
+# Both parsers read U+00A0, U+2000-U+200A and U+202F (UTF-8) as an ordinary
+# space, so a pasted line reads as typed. Other bytes (a bare Latin-1 0xA0, a
+# zero-width space) are not spaces: both parsers keep them in the token. The
+# lines around the pasted one stay as they are.
+my $DEPLOY_OK = 'OK path=/opt/deploy.sh|profile=cd|run_as=root|nnp=1|caps=|writable=|input=fields|';
+push @fixtures, (
+    map { my ($lbl, $line, $eol, $want) = @$_; $eol //= "\n"; +{
+        label   => "scripts paste: $lbl",
+        agent   => $REQUIRED . "[profile default]\nrun_as = nobody\n[profile cd]\nrun_as = root\n"
+                 . "[profile sr]\nrun_as = nobody\n",
+        scripts => "# allowlist$eol$line$eol"
+                 . "restart = /opt/restart.sh  profile=sr$eol"
+                 . "check   = /opt/check.sh$eol",
+        names   => [qw(deploy restart check)],
+        expect  => ($eol eq "\r"
+                     # the file is one line (CR-only ends): skipped by both
+                     ? { restart => 'DENY not-allowlisted', check => 'DENY not-allowlisted' }
+                     : { restart => 'OK path=/opt/restart.sh|profile=sr|run_as=nobody|nnp=1|caps=|writable=|input=context|',
+                         check   => 'OK path=/opt/check.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|',
+                         ($want ? (deploy => $want) : ()) }),
+    } } (
+        ['plain',                          "deploy = /opt/deploy.sh profile=cd input=fields", undef, $DEPLOY_OK],
+        ['NBSP before input=',             "deploy = /opt/deploy.sh profile=cd\xc2\xa0input=fields", undef, $DEPLOY_OK],
+        ['NBSP before profile=',           "deploy = /opt/deploy.sh\xc2\xa0profile=cd input=fields", undef, $DEPLOY_OK],
+        ['NBSP around =',                  "deploy\xc2\xa0=\xc2\xa0/opt/deploy.sh profile=cd input=fields", undef, $DEPLOY_OK],
+        ['NBSP leading the line',          "\xc2\xa0deploy = /opt/deploy.sh profile=cd input=fields", undef, $DEPLOY_OK],
+        ['NBSP ending the line',           "deploy = /opt/deploy.sh profile=cd input=fields\xc2\xa0", undef, $DEPLOY_OK],
+        ['only NBSPs as separators',       "deploy\xc2\xa0=\xc2\xa0/opt/deploy.sh\xc2\xa0profile=cd\xc2\xa0input=fields", undef, $DEPLOY_OK],
+        ['narrow NBSP U+202F',             "deploy = /opt/deploy.sh profile=cd\xe2\x80\xafinput=fields", undef, $DEPLOY_OK],
+        ['figure space U+2007',            "deploy = /opt/deploy.sh profile=cd\xe2\x80\x87input=fields", undef, $DEPLOY_OK],
+        ['en quad U+2000',                 "deploy = /opt/deploy.sh profile=cd\xe2\x80\x80input=fields", undef, $DEPLOY_OK],
+        ['hair space U+200A',              "deploy = /opt/deploy.sh profile=cd\xe2\x80\x8ainput=fields", undef, $DEPLOY_OK],
+        ['NBSP then a space',              "deploy = /opt/deploy.sh profile=cd\xc2\xa0 input=fields", undef, $DEPLOY_OK],
+        ['Latin-1 0xA0 is not a space',    "deploy = /opt/deploy.sh profile=cd\xa0input=fields", undef, 'DENY undefined-profile'],
+        ['zero-width space is not a space', "deploy = /opt/deploy.sh profile=cd\xe2\x80\x8binput=fields", undef, 'DENY undefined-profile'],
+        ['U+200B next to U+2000-200A',     "deploy = /opt/deploy.sh\xe2\x80\x8bprofile=cd", undef, undef],
+        ['NBSP inside the path splits it', "deploy = /opt/my\xc2\xa0dir/deploy.sh", undef, 'DENY not-allowlisted'],
+        ['tabs throughout',                "deploy\t=\t/opt/deploy.sh\tprofile=cd\tinput=fields", undef, $DEPLOY_OK],
+        ['CRLF line ends',                 "deploy = /opt/deploy.sh profile=cd input=fields", "\r\n", $DEPLOY_OK],
+        ['CRLF and NBSP',                  "deploy = /opt/deploy.sh profile=cd\xc2\xa0input=fields\xc2\xa0", "\r\n", $DEPLOY_OK],
+        ['CR-only line ends',              "deploy = /opt/deploy.sh profile=cd input=fields", "\r", undef],
+        ['LF CR line ends',                "deploy = /opt/deploy.sh profile=cd input=fields", "\n\r", $DEPLOY_OK],
+        ['input= on a line of its own',    "deploy = /opt/deploy.sh profile=cd\ninput=fields", undef,
+                                           'OK path=/opt/deploy.sh|profile=cd|run_as=root|nnp=1|caps=|writable=|input=context|'],
+    )
+);
+
+# agent.conf pasted the same way: both parsers read the same profile.
+push @fixtures, (
+    map { my ($lbl, $body, $want) = @$_; +{
+        label   => "agent paste: $lbl",
+        agent   => $REQUIRED . $body,
+        scripts => "s = /opt/s.sh profile=p\n",
+        names   => [qw(s)],
+        ($want ? (expect => { s => $want }) : ()),
+    } } (
+        ['NBSP around =',          "[profile p]\nrun_as\xc2\xa0=\xc2\xa0nobody\n",
+                                   'OK path=/opt/s.sh|profile=p|run_as=nobody|nnp=1|caps=|writable=|'],
+        ['NBSP in the header',     "[profile\xc2\xa0p]\nrun_as = nobody\n",
+                                   'OK path=/opt/s.sh|profile=p|run_as=nobody|nnp=1|caps=|writable=|'],
+        ['NBSP between caps',      "[profile p]\ncaps = CAP_CHOWN\xc2\xa0CAP_KILL\n",
+                                   'OK path=/opt/s.sh|profile=p|run_as=|nnp=1|caps=CAP_CHOWN,CAP_KILL|writable=|'],
+        ['narrow NBSP ending a value', "[profile p]\nrun_as = nobody\xe2\x80\xaf\n",
+                                   'OK path=/opt/s.sh|profile=p|run_as=nobody|nnp=1|caps=|writable=|'],
+        ['NBSP inside a writable path', "[profile p]\nwritable = /srv/a\xc2\xa0b:/srv/c\n", undef],
+        ['NBSP before a comment',  "\xc2\xa0# note\n[profile p]\nrun_as = nobody\n", undef],
+    )
+);
+
 for my $fx (@fixtures) {
     my $a = wf($fx->{agent});
     my $s = wf($fx->{scripts});
