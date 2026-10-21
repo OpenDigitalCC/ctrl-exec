@@ -82,11 +82,13 @@ the next restart, which the command says. The last CA is never removed, so
 removing the last control host leaves an agent that starts but refuses every
 caller;
 .B self-check
-says so. An unknown id changes nothing, exits 1 and names the known ids.
+says so. The CA that issued the agent's own certificate is likewise kept (self-ping and
+renewal need it); the command then warns that the removed control host can no longer
+renew the certificate, and when it expires, so the agent should be re-paired. An unknown id changes nothing, exits 1 and names the known ids.
 .TP
 .B list-dispatchers
 Print each trusted control host as one line,
-.IR "id ca-fingerprint serial[,serial...]" ,
+.IR "id ca-fingerprint serial[,serial...] [issuer-of-agent-cert]" ,
 sorted by id then CA (the fingerprint is
 .B \-
 for an old map line not yet tied to a CA). Root only.

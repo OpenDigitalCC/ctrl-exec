@@ -1467,6 +1467,15 @@ then refused (HTTP 403). The CA is gone from the listener at the next restart,
 and the command prints that restart command when it removed a CA. Revoking
 trust is complete at the reload; the restart only closes the handshake.
 
+The dispatcher that issued the agent's own certificate. `self-ping` checks the
+agent's certificate against `ca.crt`, and renewal is pinned to its issuing CA,
+so that CA is never removed from the bundle. Removing the dispatcher still
+removes its map entries and the command prints and logs (`REASON=agent-cert-issuer`)
+`WARNING: This agent's certificate was issued by '<id>', which can no longer
+renew it; it expires on <date>`. To keep the remaining dispatchers, re-pair
+with one of them (`ctrl-exec-agent request-pairing --dispatcher <host>`)
+before that date.
+
 The last dispatcher. Removing the only remaining dispatcher is allowed. The
 map is then empty and the agent refuses every caller, but it still starts and
 answers: `ca.crt` is never left empty (an empty CA file would stop the TLS
@@ -1486,15 +1495,19 @@ One line per dispatcher and CA, sorted by id then CA, fields separated by one
 space:
 
 ```
-<id> <ca-fingerprint> <serial>[,<serial>...]
+<id> <ca-fingerprint> <serial>[,<serial>...] [issuer-of-agent-cert]
 ```
+
+The optional last field, `issuer-of-agent-cert`, is present only on a line
+whose CA issued this agent's own certificate (`cert` in `agent.conf`).
 
 `<ca-fingerprint>` is the 64-hex SHA-256 of the issuing CA (the value
 `ctrl-exec-dispatcher ca-fingerprint` prints without the `SHA256:` prefix, in
 lowercase), or `-` for an old map line that could not be tied to a CA.
 `<serial>` is the certificate serial in lowercase hex; a dispatcher with a
 rotation overlap lists both. Nothing is printed when no dispatcher is trusted.
-`self-check` prints the ids on one `Dispatchers:` line.
+`self-check` prints the ids on one `Dispatchers:` line, and an `Agent certificate
+issued by:` line naming the issuing dispatcher.
 
 ---
 

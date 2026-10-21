@@ -917,10 +917,26 @@ sub remove_from_ca_bundle (%opts) {
     return @gone;
 }
 
+# The fingerprints of the bundle CAs that issued the agent's own certificate
+# ($opts{cert_path}); empty when the certificate or bundle cannot be read.
+# self-ping verifies that certificate against the bundle and renewal is pinned
+# to its issuer, so such a CA must stay in the bundle.
+sub agent_cert_issuers (%opts) {
+    my $text = defined $opts{cert_path} ? Exec::FileUtil::slurp_maybe($opts{cert_path}) : undef;
+    my ($pem) = pem_certs($text);
+    return () unless defined $pem && defined $opts{ca_path};
+    my $bundle = load_ca_bundle($opts{ca_path});
+    my @fprs   = pem_issuers($pem, $bundle);
+    free_ca_bundle($bundle);
+    return @fprs;
+}
+
 # The trusted dispatchers as a list sorted by id then CA:
 #   [ { id => 'd1', ca => '<fpr>' | undef, serials => [ '3ea', ... ] }, ... ]
-# one element per (id, CA). ca is undef for a pre-0.14 line that could not be
-# upgraded (no CA bundle). Opts: path (the map), ca_path (to upgrade it).
+# one element per (id, CA), with issued_agent_cert => 1 when that CA issued the
+# agent's own certificate (opt cert_path). ca is undef for a pre-0.14 line that
+# could not be upgraded (no CA bundle). Opts: path (the map), ca_path (to
+# upgrade it), cert_path.
 sub list_trusted_dispatchers (%opts) {
     my $path = $opts{path} or croak "path required";
     my $trusted = load_trusted_dispatchers(path => $path, ca_path => $opts{ca_path});
@@ -929,10 +945,12 @@ sub list_trusted_dispatchers (%opts) {
         my ($fpr, $serial) = $k =~ / / ? split(/ /, $k, 2) : (undef, $k);
         push @{ $group{ $trusted->{$k} }{ $fpr // '' } }, $serial;
     }
+    my %own = map { $_ => 1 } agent_cert_issuers(%opts);
     my @list;
     for my $id (sort keys %group) {
         for my $ca (sort keys %{ $group{$id} }) {
             push @list, {
+                issued_agent_cert => ($own{$ca} ? 1 : 0),
                 id      => $id,
                 ca      => length $ca ? $ca : undef,
                 serials => [ sort @{ $group{$id}{$ca} } ],
@@ -949,8 +967,12 @@ sub list_trusted_dispatchers (%opts) {
 # first, so a failure part-way leaves trust withdrawn, never extended. Dies,
 # naming the known ids, when the id has no entry.
 #
-# Opts: path (map), ca_path (bundle), id.
-# Returns { entries => N, cas_removed => [fpr...], cas_kept => [fpr...],
+# A CA that issued the agent's own certificate (opt cert_path) is kept as well:
+# self-ping and renewal need it. The removed dispatcher can then no longer
+# renew that certificate.
+#
+# Opts: path (map), ca_path (bundle), id, cert_path.
+# Returns { cas_kept_agent => [fpr...], entries => N, cas_removed => [fpr...], cas_kept => [fpr...],
 #           cas_kept_last => [fpr...], remaining => N }
 #   cas_kept      CAs of the removed entries that another dispatcher still uses
 #   cas_kept_last CAs kept only because the bundle may not be left empty
@@ -975,7 +997,9 @@ sub remove_dispatcher (%opts) {
     }
     my %still = map { /\A([0-9a-f]{64}) / ? ($1 => 1) : () } keys %$trusted;
     my @cas_kept = sort grep {  $still{$_} } keys %cas;
-    my @drop     = sort grep { !$still{$_} } keys %cas;
+    my %own      = map { $_ => 1 } agent_cert_issuers(%opts);
+    my @kept_own = sort grep { !$still{$_} &&  $own{$_} } keys %cas;
+    my @drop     = sort grep { !$still{$_} && !$own{$_} } keys %cas;
 
     _write_trusted($path, $trusted);
 
@@ -995,6 +1019,7 @@ sub remove_dispatcher (%opts) {
         cas_removed   => \@removed,
         cas_kept      => \@cas_kept,
         cas_kept_last => \@kept_last,
+        cas_kept_agent => \@kept_own,
         remaining     => scalar(keys %$trusted),
     };
 }

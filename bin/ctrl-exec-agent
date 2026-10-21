@@ -198,6 +198,7 @@ sub _trust_paths ($config) {
     return (
         $config->{trusted_dispatchers_path} // '/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers',
         $config->{ca},
+        $config->{cert},
     );
 }
 
@@ -242,11 +243,11 @@ sub mode_remove_dispatcher ($opts) {
         print STDERR "ctrl-exec-agent: remove-dispatcher: $err\n";
         exit 1;
     }
-    my ($map, $ca) = _trust_paths($config);
+    my ($map, $ca, $cert) = _trust_paths($config);
     _need_root('remove-dispatcher', $CONFIG_PATH, $map, $ca);
 
     my $r = eval {
-        Exec::Agent::AgentPairing::remove_dispatcher(path => $map, ca_path => $ca, id => $id)
+        Exec::Agent::AgentPairing::remove_dispatcher(path => $map, ca_path => $ca, cert_path => $cert, id => $id)
     };
     if (!$r) {
         my $err = $@ || 'failed'; $err =~ s/ at \S+ line \d+\.?\s*$//; $err =~ s/\s+\z//;
@@ -257,9 +258,12 @@ sub mode_remove_dispatcher ($opts) {
     }
 
     my @gone = @{ $r->{cas_removed} };
+    my @own = @{ $r->{cas_kept_agent} };
+    my $expiry = @own ? (Exec::CertInfo::expiry_from_path($cert) // 'unknown') : undef;
     Exec::Log::log_action('INFO', {
         ACTION  => 'remove-dispatcher',
         ID      => $id,
+        (@own ? (AGENT_CERT_ISSUER => 1, AGENT_CERT_EXPIRY => $expiry) : ()),
         ENTRIES => $r->{entries},
         CA      => scalar(@gone) ? join(',', @gone) : '-',
         RESULT  => 'ok',
@@ -271,6 +275,15 @@ sub mode_remove_dispatcher ($opts) {
     print "CA kept in $ca (another dispatcher still uses it): $_\n" for @{ $r->{cas_kept} };
     print "CA kept in $ca (the last CA: the file is never left empty): $_\n"
         for @{ $r->{cas_kept_last} };
+    if (@own) {
+        print "CA kept in $ca (it issued this agent's certificate): $_\n" for @own;
+        my $msg = "This agent's certificate was issued by '$id', which can no longer renew it;"
+                . " it expires on $expiry. To keep the remaining dispatchers, re-pair with one"
+                . " of them before then: ctrl-exec-agent request-pairing --dispatcher <host>";
+        print "WARNING: $msg\n";
+        Exec::Log::log_action('WARNING', {
+            ACTION => 'remove-dispatcher', ID => $id, REASON => 'agent-cert-issuer', MESSAGE => $msg });
+    }
     if (!$r->{remaining}) {
         print "No trusted dispatchers remain: the agent will start and answer, but refuse every caller.\n";
     }
@@ -305,7 +318,8 @@ sub _restart_command {
 }
 
 # ctrl-exec-agent list-dispatchers: one line per trusted dispatcher and CA,
-#   <id> <ca-fingerprint> <serial>[,<serial>...]
+#   <id> <ca-fingerprint> <serial>[,<serial>...] [issuer-of-agent-cert]
+# the last field only on a line whose CA issued this agent's own certificate;
 # sorted by id then CA; serials are lowercase hex. <ca-fingerprint> is the 64
 # hex SHA-256 of the issuing CA, or "-" for an old map line not yet tied to a CA.
 # Nothing is printed when no dispatcher is trusted.
@@ -316,10 +330,12 @@ sub mode_list_dispatchers ($opts) {
         print STDERR "ctrl-exec-agent: list-dispatchers: $err\n";
         exit 1;
     }
-    my ($map, $ca) = _trust_paths($config);
+    my ($map, $ca, $cert) = _trust_paths($config);
     _need_root('list-dispatchers', $CONFIG_PATH, $map, $ca);
-    for my $e (Exec::Agent::AgentPairing::list_trusted_dispatchers(path => $map, ca_path => $ca)) {
-        print join(' ', $e->{id}, $e->{ca} // '-', join(',', @{ $e->{serials} })), "\n";
+    for my $e (Exec::Agent::AgentPairing::list_trusted_dispatchers(
+            path => $map, ca_path => $ca, cert_path => $cert)) {
+        print join(' ', $e->{id}, $e->{ca} // '-', join(',', @{ $e->{serials} }),
+                   ($e->{issued_agent_cert} ? 'issuer-of-agent-cert' : ())), "\n";
     }
 }
 
@@ -1081,13 +1097,16 @@ sub mode_self_check {
     # Who this agent serves: the trusted-dispatcher map (list-dispatchers has
     # the detail).
     {
-        my ($map, $ca) = _trust_paths($config);
+        my ($map, $ca, $cert) = _trust_paths($config);
         my @d = eval {
-            Exec::Agent::AgentPairing::list_trusted_dispatchers(path => $map, ca_path => $ca)
+            Exec::Agent::AgentPairing::list_trusted_dispatchers(
+                path => $map, ca_path => $ca, cert_path => $cert)
         };
         my %ids = map { $_->{id} => 1 } @d;
+        my @own = sort keys %{{ map { $_->{id} => 1 } grep { $_->{issued_agent_cert} } @d }};
         if (%ids) {
             printf "  Dispatchers: %d trusted (%s)\n", scalar(keys %ids), join(', ', sort keys %ids);
+            print "  Agent certificate issued by: " . join(', ', @own) . "\n" if @own;
         }
         else {
             print "  Dispatchers: NONE trusted - the agent starts but refuses every caller;"

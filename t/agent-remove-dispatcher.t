@@ -64,8 +64,8 @@ subtest 'removing one of two dispatchers, each with its own CA' => sub {
 
     my ($out, $rc) = cea($rig, 'list-dispatchers');
     is $rc, 0, 'list-dispatchers succeeds';
-    is $out, "d2 $f2 7d2\ntest-dispatcher $f1 3ea\n",
-        'one line per id and CA: <id> <ca-fpr> <serials>';
+    is $out, "d2 $f2 7d2\ntest-dispatcher $f1 3ea issuer-of-agent-cert\n",
+        'one line per id and CA: <id> <ca-fpr> <serials>, the agent certificate\'s issuer marked';
 
     my $from = $rig->log_len;
     ($out, $rc) = cea($rig, 'remove-dispatcher', 'd2');
@@ -106,13 +106,14 @@ subtest 'a CA used by two dispatchers stays until the last goes' => sub {
     like $out, qr/No running agent found/, 'no agent running: told how to reload';
     is ncerts($rig->{ca_file}), 2, 'bundle unchanged';
 
-    ($out, $rc) = cea($rig, 'remove-dispatcher', 'd1');
-    is $rc, 0, 'd1 removed' or diag $out;
-    like $out, qr/CA removed from \S+: \Q$f1\E/, 'now its CA goes';
+    # The agent's own certificate is from the first CA, so that CA stays (below);
+    # make d2's CA shared too and remove it last.
+    ($out, $rc) = cea($rig, 'remove-dispatcher', 'd2');
+    is $rc, 0, 'd2 removed' or diag $out;
+    like $out, qr/CA removed from \S+: \Q$f2\E/, 'its CA, used by nobody else, goes';
     is ncerts($rig->{ca_file}), 1, 'bundle holds one CA';
-    is AgentRig::fingerprint($rig->{ca_file}), $f2, 'the one still in use';
-    is slurp("$d/dispatchers"), "# ctrl-exec trusted dispatchers: <ca-fingerprint> <serial> <id>, one per line.\n"
-        . "# Managed by pairing - do not edit by hand.\n$f2 7d2 d2\n", 'map holds d2 only';
+    is AgentRig::fingerprint($rig->{ca_file}), $f1, 'the one still in use';
+    like slurp("$d/dispatchers"), qr/^\Q$f1\E 3ea d1$/m, 'd1 still trusted';
 };
 
 subtest 'removing the last dispatcher' => sub {
@@ -126,7 +127,7 @@ subtest 'removing the last dispatcher' => sub {
     my $from = $rig->log_len;
     my ($out, $rc) = cea($rig, 'remove-dispatcher', 'test-dispatcher');
     is $rc, 0, 'removed' or diag $out;
-    like $out, qr/CA kept in \S+ \(the last CA/, 'the last CA stays: ca.crt is never left empty';
+    like $out, qr/CA kept in \S+ \(it issued this agent's certificate\)/, 'its CA stays (it issued the agent certificate)';
     like $out, qr/No trusted dispatchers remain: the agent will start and answer, but refuse every caller/,
         'says the agent now serves no one';
     is slurp("$d/ca.crt"), $ca_before, 'ca.crt unchanged';
@@ -146,6 +147,17 @@ subtest 'removing the last dispatcher' => sub {
     $rig->stop;
 };
 
+subtest 'the last CA is kept when no agent certificate pins it' => sub {
+    my $rig = AgentRig->new();
+    my $d   = $rig->{dir};
+    unlink "$d/agent.crt";
+    my $before = slurp("$d/ca.crt");
+    my ($out, $rc) = cea($rig, 'remove-dispatcher', 'test-dispatcher');
+    is $rc, 0, 'removed' or diag $out;
+    like $out, qr/CA kept in \S+ \(the last CA: the file is never left empty\)/, 'the last CA stays';
+    is slurp("$d/ca.crt"), $before, 'ca.crt unchanged';
+};
+
 subtest 'an unknown id' => sub {
     my $rig = AgentRig->new(second_ca => 1);
     my $d   = $rig->{dir};
@@ -158,6 +170,38 @@ subtest 'an unknown id' => sub {
     is slurp($rig->{ca_file}), $ca, 'bundle untouched';
     ($out, $rc) = cea($rig, 'remove-dispatcher');
     is $rc, 2, 'no id: usage, exit 2';
+};
+
+subtest 'the dispatcher that issued the agent certificate' => sub {
+    my $rig = AgentRig->new(second_ca => 1);
+    my $d   = $rig->{dir};
+    my ($f1, $f2) = (AgentRig::fingerprint("$d/ca.crt"), AgentRig::fingerprint("$d/ca2.crt"));
+    my $expiry = `openssl x509 -noout -enddate -in $d/agent.crt`;
+    $rig->start or BAIL_OUT('rig agent did not start: ' . $rig->log_text);
+
+    my ($out, $rc) = cea($rig, 'self-check');
+    like $out, qr/Agent certificate issued by: test-dispatcher/, 'self-check names the issuer';
+
+    my $from = $rig->log_len;
+    ($out, $rc) = cea($rig, 'remove-dispatcher', 'test-dispatcher');
+    is $rc, 0, 'removed' or diag $out;
+    like $out, qr/CA kept in \S+ \(it issued this agent's certificate\): \Q$f1\E/, 'its CA is kept';
+    like $out, qr/WARNING: This agent's certificate was issued by 'test-dispatcher', which can no longer renew it; it expires on \w{3} .*GMT.*request-pairing --dispatcher <host>/,
+        'warns about renewal and expiry, and how to re-pair';
+    like $out, qr/ACTION=remove-dispatcher .*REASON=agent-cert-issuer/s, 'and logs it';
+    unlike $out, qr/CA removed from/, 'no CA left the bundle';
+    is ncerts($rig->{ca_file}), 2, 'bundle unchanged';
+    is system("openssl verify -CAfile $rig->{ca_file} $d/agent.crt >/dev/null 2>&1"), 0,
+        'ca.crt still verifies the agent certificate';
+
+    ok reloaded($rig, $from), 'reloaded';
+    isnt $rig->request(as => 'trusted') // 0, 200, 'the removed dispatcher is refused';
+    is $rig->request(as => 'd2'), 200, 'the other still runs';
+    ($out, $rc) = cea($rig, 'self-ping');
+    is $rc, 0, 'self-ping still works' or diag $out;
+    ($out, $rc) = cea($rig, 'list-dispatchers');
+    is $out, "d2 $f2 7d2\n", 'list-dispatchers: only d2, not marked';
+    $rig->stop;
 };
 
 done_testing;
