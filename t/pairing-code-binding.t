@@ -53,7 +53,7 @@ sub gen_csr ($name) {
 sub gen_cert ($name) {
     system('openssl', 'req', '-x509', '-newkey', 'rsa:2048',
         '-keyout', "$dir/$name.key", '-out', "$dir/$name.crt", '-days', '1',
-        '-nodes', '-subj', "/CN=$name", '-quiet') == 0
+        '-nodes', '-subj', "/CN=$name") == 0
         or die "cert generation failed";
     return ("$dir/$name.crt", "$dir/$name.key");
 }
@@ -287,15 +287,39 @@ sub start_relay ($dport) {
     my $d = IO::Socket::SSL->new(PeerHost => '127.0.0.1', PeerPort => $dport,
         Timeout => 5, SSL_verify_mode => IO::Socket::SSL::SSL_VERIFY_NONE())
         or POSIX::_exit(1);
+    # Non-blocking reads: a socket can turn readable with a TLS record that is
+    # not application data (the pairing listener's TLS 1.3 session ticket,
+    # which with OpenSSL 1.1 arrives after the relay's handshake), and a
+    # blocking read would then wait for data the dispatcher sends only once
+    # the relay has forwarded the request.
+    $_->blocking(0) for $a, $d;
     my $sel = IO::Select->new($a, $d);
     while (my @r = $sel->can_read($STEP)) {
         for my $s (@r) {
-            my $n = sysread $s, my $buf, 16384;
-            POSIX::_exit(0) unless $n;
-            syswrite(($s == $a ? $d : $a), $buf);
+            my $out = $s == $a ? $d : $a;
+            while (1) {
+                my $n = sysread $s, my $buf, 16384;
+                last if !defined $n && ($!{EAGAIN} || $!{EWOULDBLOCK});
+                POSIX::_exit(0) unless $n;
+                relay_write($out, $buf);
+                last unless $s->pending;
+            }
         }
     }
     POSIX::_exit(0);
+}
+
+# Write all of $buf to the non-blocking $sock.
+sub relay_write ($sock, $buf) {
+    while (length $buf) {
+        my $n = syswrite $sock, $buf;
+        if (!defined $n) {
+            POSIX::_exit(1) unless $!{EAGAIN} || $!{EWOULDBLOCK};
+            IO::Select->new($sock)->can_write(1);
+            next;
+        }
+        substr($buf, 0, $n, '');
+    }
 }
 
 # Stop a helper and everything it started (the listener's per-connection

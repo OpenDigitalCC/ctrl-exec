@@ -75,15 +75,19 @@ sub config {
 sub make_cert {
     my ($days, $outfile) = @_;
     my $keyfile = $outfile . '.key';
-    return system(
+    # Key generation chatter goes to /dev/null (OpenSSL 1.1 has no -quiet).
+    open my $save, '>&', \*STDERR or die;
+    open STDERR, '>', '/dev/null';
+    my $ok = system(
         'openssl', 'req', '-x509', '-newkey', 'rsa:2048',
         '-keyout', $keyfile,
         '-out',    $outfile,
         '-days',   $days,
         '-nodes',
         '-subj',   '/CN=test-ctrl-exec-dispatcher',
-        qw(-quiet)
     ) == 0;
+    open STDERR, '>&', $save;
+    return $ok;
 }
 
 # ---------------------------------------------------------------------------

@@ -55,10 +55,30 @@ sub fingerprint {
     return $f;
 }
 
+# 1 when the openssl on PATH is the 1.1 (or older) line.
+sub openssl_11 { return `openssl version 2>/dev/null` =~ /\AOpenSSL (?:0|1)\./ ? 1 : 0 }
+
+# Key identifier lines for a leaf's extfile. By default the leaf carries Subject
+# and Authority Key Identifiers, as every certificate Exec::CA issues from 0.14
+# does. They matter once a bundle holds two CAs with one subject name: OpenSSL
+# (1.1 and 3 alike) takes as the issuer the first CA of that name whose key
+# identifier the AKI does not contradict, so a leaf without an AKI is checked
+# against the first same-named CA, and fails its signature when another one
+# issued it. `openssl x509 -req` adds the identifiers itself on OpenSSL 3 and
+# never on 1.1 (T-067), so they are asked for explicitly. With $aki false the
+# leaf has none on either, as 0.13.2 and earlier issued them on a 1.1 host.
+sub key_id_ext {
+    my ($aki) = @_;
+    return "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n" if $aki;
+    return openssl_11() ? '' : "subjectKeyIdentifier=none\nauthorityKeyIdentifier=none\n";
+}
+
+# _make_leaf($dir, $ca, $name, $serial, aki => 0): see key_id_ext.
 sub _make_leaf {
-    my ($dir, $ca, $name, $serial) = @_;
+    my ($dir, $ca, $name, $serial, %o) = @_;
     open my $x, '>', "$dir/$name.ext" or die;
-    print $x "subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth,clientAuth\n";
+    print $x "subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth,clientAuth\n",
+        key_id_ext($o{aki} // 1);
     close $x;
     _sh("openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes "
       . "-keyout $dir/$name.key -out $dir/$name.csr -subj /CN=$name 2>/dev/null");
@@ -67,29 +87,33 @@ sub _make_leaf {
 }
 
 # new(extra_conf => "key = value\n...", allowlist => "name = /path\n",
-#     second_ca => 1)
+#     second_ca => 1, aki => 0)
 #
 # second_ca: the agent's CA file is a bundle of 'ca' and 'ca2' (a second
 # dispatcher CA with the SAME subject name as 'ca', as two CAs made with the
 # defaults have), 'd2' is a dispatcher certificate from ca2 (serial 2002, in
 # the map as d2), and 'evil' is a ca2 certificate carrying the serial of
 # 'trusted' (1002). The map is written in the issuer-keyed form.
+#
+# aki => 0: every leaf is issued without key identifiers (key_id_ext), as a
+# pre-0.14 dispatcher on an OpenSSL 1.1 host issued them.
 sub new {
     my ($class, %o) = @_;
     my $dir = ChildGuard::dir(tempdir(CLEANUP => 1));
+    my @aki = (aki => $o{aki} // 1);
     _make_ca($dir, 'ca');
     _make_ca($dir, 'rogue-ca');
-    _make_leaf($dir, 'ca', 'agent',     1001);
-    _make_leaf($dir, 'ca', 'trusted',   1002);   # in the trusted-dispatcher map
-    _make_leaf($dir, 'ca', 'untrusted', 1003);   # CA-signed, not paired
-    _make_leaf($dir, 'rogue-ca', 'rogue', 1004); # fails the agent's handshake
+    _make_leaf($dir, 'ca', 'agent',     1001, @aki);
+    _make_leaf($dir, 'ca', 'trusted',   1002, @aki);   # in the trusted-dispatcher map
+    _make_leaf($dir, 'ca', 'untrusted', 1003, @aki);   # CA-signed, not paired
+    _make_leaf($dir, 'rogue-ca', 'rogue', 1004, @aki); # fails the agent's handshake
 
     my $ca_file = "$dir/ca.crt";
     open my $t, '>', "$dir/dispatchers" or die;
     if ($o{second_ca}) {
         _make_ca($dir, 'ca2', 'ca');
-        _make_leaf($dir, 'ca2', 'd2',   2002);
-        _make_leaf($dir, 'ca2', 'evil', 1002);
+        _make_leaf($dir, 'ca2', 'd2',   2002, @aki);
+        _make_leaf($dir, 'ca2', 'evil', 1002, @aki);
         $ca_file = "$dir/bundle.crt";
         system("cat $dir/ca.crt $dir/ca2.crt > $ca_file") == 0 or die;
         my ($f1, $f2) = (fingerprint("$dir/ca.crt"), fingerprint("$dir/ca2.crt"));

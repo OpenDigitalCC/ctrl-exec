@@ -47,10 +47,14 @@ subtest 'run_pairing_mode: auto-stops at the deadline' => sub {
     my $dir  = tempdir(CLEANUP => 1);
     my $cert = "$dir/d.crt";
     my $key  = "$dir/d.key";
-    plan skip_all => 'openssl cert generation failed'
-        unless system('openssl', 'req', '-x509', '-newkey', 'rsa:2048',
-            '-keyout', $key, '-out', $cert, '-days', '1', '-nodes',
-            '-subj', '/CN=test-dispatcher', qw(-quiet)) == 0;
+    # Key generation chatter goes to /dev/null (OpenSSL 1.1 has no -quiet).
+    open my $save, '>&', \*STDERR or die;
+    open STDERR, '>', '/dev/null';
+    my $made = system('openssl', 'req', '-x509', '-newkey', 'rsa:2048',
+        '-keyout', $key, '-out', $cert, '-days', '1', '-nodes',
+        '-subj', '/CN=test-dispatcher') == 0;
+    open STDERR, '>&', $save;
+    plan skip_all => 'openssl cert generation failed' unless $made;
 
     my ($reason, $elapsed);
     # The caller's own INT/TERM handlers, to check they are back afterwards.

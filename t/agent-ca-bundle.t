@@ -100,10 +100,18 @@ subtest 'two dispatcher CAs on one agent' => sub {
     $rig->stop;
 };
 
+# Certificates as 0.13.2 issued them on an OpenSSL 1.1 host: no key identifiers.
+sub has_aki {
+    my ($path) = @_;
+    return scalar(`openssl x509 -noout -text -in $path 2>/dev/null`) =~ /Authority Key Identifier/ ? 1 : 0;
+}
+
 subtest 'a pre-0.14 agent: one CA, two-field map' => sub {
-    my $rig = AgentRig->new();
+    my $rig = AgentRig->new(aki => 0);
     my $d   = $rig->{dir};
     my $f1  = AgentRig::fingerprint("$d/ca.crt");
+    is has_aki("$d/trusted.crt") + has_aki("$d/agent.crt"), 0,
+        'its certificates carry no AKI, as a 1.1 host issued them before 0.14';
     is slurp("$d/dispatchers"), "3ea test-dispatcher\n", 'map starts in the old form';
     $rig->start or BAIL_OUT('rig agent did not start: ' . $rig->log_text);
 
@@ -112,6 +120,28 @@ subtest 'a pre-0.14 agent: one CA, two-field map' => sub {
         'map upgraded in place with the CA fingerprint';
     like $rig->log_text, qr/ACTION=trusted-map-upgrade/, 'the upgrade is logged';
     is $rig->request(as => 'untrusted'), 403, 'an unpaired cert from the same CA is still refused';
+    isnt $rig->request(as => 'rogue') // 0, 200, 'a cert from another CA fails the handshake';
+    $rig->stop;
+};
+
+# Two CAs with one name (both made before 0.14) and dispatcher certificates
+# without an AKI (issued before 0.14 on an OpenSSL 1.1 host): the TLS chain is
+# built by name, so the second dispatcher's certificate is checked against the
+# first CA and fails, on every OpenSSL version. That stays a refusal - nothing
+# is accepted that OpenSSL did not verify - and the first dispatcher is
+# unaffected. The certificate the second dispatcher's CA issues from 0.14 on
+# (rotate-cert) carries an AKI and is accepted (the first subtest).
+subtest 'same-named CAs, certificates without an AKI: refused, not accepted' => sub {
+    my $rig = AgentRig->new(second_ca => 1, aki => 0);
+    my $d   = $rig->{dir};
+    is has_aki("$d/d2.crt"), 0, 'd2 carries no AKI';
+    $rig->start or BAIL_OUT('rig agent did not start: ' . $rig->log_text);
+    is $rig->request(as => 'trusted'), 200, 'dispatcher 1 (first CA of the name) runs';
+    my $from = $rig->log_len;
+    isnt $rig->request(as => 'd2') // 0, 200, 'dispatcher 2 is refused';
+    ok $rig->wait_log(qr/ACTION=tls-failure .*certificate verify failed/, 5, $from),
+        'at the handshake, as a verify failure' or diag substr($rig->log_text, $from);
+    ok $rig->alive, 'agent survived';
     $rig->stop;
 };
 

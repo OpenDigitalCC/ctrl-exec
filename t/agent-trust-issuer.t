@@ -272,10 +272,13 @@ subtest 'pairing a second dispatcher on a pre-0.14 agent' => sub {
 # ---------------------------------------------------------------------------
 
 subtest 'a renewed cert must come from the CA of the live cert' => sub {
+    # With key identifiers, as the CA issues a renewed cert, so on OpenSSL 1.1
+    # too the ca2 cert is refused by the pin and not by the same-name trap.
+    spew("$d/renew.ext", AgentRig::key_id_ext(1));
     for my $ca (qw(ca1 ca2)) {
         system("openssl req -new -key $d/agent.key -subj /CN=agent -out $d/renew.csr 2>/dev/null") == 0 or die;
         system("openssl x509 -req -in $d/renew.csr -CA $d/$ca.crt -CAkey $d/$ca.key "
-             . "-set_serial 0x5$ca -days 2 -out $d/renew-$ca.crt 2>/dev/null") == 0 or die;
+             . "-set_serial 0x5$ca -days 2 -extfile $d/renew.ext -out $d/renew-$ca.crt 2>/dev/null") == 0 or die;
     }
     my %o = (ca_path => "$d/bundle12.crt", key_path => "$d/agent.key",
              cert_path => "$d/agent.crt");
