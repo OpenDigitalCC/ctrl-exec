@@ -1432,7 +1432,8 @@ To move to the new path when convenient:
 An entrypoint of your own that creates the CA when none is found must look in
 the old mount too (as the entrypoint in this document does), or it would create
 a second CA in the image's directory and orphan every pairing. If both
-directories hold a CA, or `/etc/ctrl-exec` is a real directory without one,
+directories hold a CA, or `/etc/ctrl-exec` is a real directory without one
+beside the image's directory,
 `ced` and `ctrl-exec-api` cannot tell which config is meant: they print both
 paths, log `ACTION=config-dir RESULT=refused` and exit 78.
 

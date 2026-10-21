@@ -434,9 +434,10 @@ existing install; no manual steps are needed.
 If `ced` or `ctrl-exec-api` exits 78 with `refusing to start: the old config
 directory /etc/ctrl-exec exists and is not a symlink to
 /etc/ctrl-exec-dispatcher`, the host has a real `/etc/ctrl-exec` that is not
-the old layout an upgrade moves (`ctrl-exec.conf` and `ca.key` there, the new
-directory absent or without a CA): both directories hold a CA, the old one has
-no CA, or it is a symlink elsewhere. It is refused rather than guessed so that
+the old layout an upgrade moves (`ctrl-exec.conf` and `ca.key` there with the
+new directory absent or without a CA, or `ctrl-exec.conf` there and no new
+directory): both directories hold a CA, the old one has no CA while the new one
+exists, or it is a symlink elsewhere. It is refused rather than guessed so that
 the dispatcher never runs on the wrong config or creates a second CA. Keep the
 directory whose CA your agents trust, merge it into
 `/etc/ctrl-exec-dispatcher`, remove `/etc/ctrl-exec`, and change the paths

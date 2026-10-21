@@ -28,6 +28,9 @@ our @EXPORT_OK = qw(load_config conf_dir conf_path legacy_dir_error
 #
 #   old absent, or the migration symlink to the new dir   -> new (no change)
 #   old real, new absent or seeded (no CA)                 -> old, in place (T-065)
+#   old ctrl-exec.conf without ca.key, new absent          -> old, in place (no
+#     ambiguity: a CA kept elsewhere via ca =, or not yet initialised; the
+#     installers moved this before 0.14 too)
 #   anything else with the old path present                -> refused (T-047)
 #
 # Running in place never moves anything: the move is done only by the
@@ -79,7 +82,8 @@ sub conf_dir_state () {
         my $n = abs_path($new);
         return { action => 'new', dir => $new } if defined $o && defined $n && $o eq $n;
     }
-    elsif (_is_real($old) && !_is_real($new)) {
+    elsif ((_is_real($old) && !_is_real($new))
+        || (-d $old && -f "$old/ctrl-exec.conf" && !-e $new && !-l $new)) {
         return { action => 'in-place', dir => $old, mount => $IS_MOUNT->($old) ? 1 : 0 };
     }
     return { action => 'refuse', message => _refusal($old, $new) };
@@ -160,8 +164,9 @@ sub startup_check () {
 }
 
 # The installers' move (deb postinst, install.sh), run as root. Only the old
-# layout is touched: a real config at the old path, the new path absent or
-# seeded, the old path not a mount point. Then:
+# layout is touched: a real config at the old path and the new path absent or
+# seeded, or an old ctrl-exec.conf without ca.key and no new path; never a
+# mount point. Then:
 #   1. a seeded new directory is renamed aside to <new>.seeded (kept, not
 #      deleted);
 #   2. the old directory is renamed to the new path - one rename(2) within
@@ -275,7 +280,8 @@ sub installer_migrate () {
         // { message => "ctrl-exec: config directory migration skipped: $@" };
     if (($r->{result} // '') eq 'refused') {
         print "ctrl-exec: leaving $LEGACY_DIR alone: it is not the layout an upgrade "
-            . "moves (ctrl-exec.conf and ca.key there, $CONF_DIR absent or without a CA).\n"
+            . "moves (ctrl-exec.conf and ca.key there with $CONF_DIR absent or without a CA, "
+            . "or ctrl-exec.conf there and no $CONF_DIR).\n"
             . "ctrl-exec: ced and ctrl-exec-api refuse to start until it is resolved:\n";
     }
     print $r->{message} if defined $r->{message};

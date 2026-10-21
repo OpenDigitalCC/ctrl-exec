@@ -171,7 +171,10 @@ and the CA key `ca.key`. The packages and the container image seed
   (a seeded directory is kept as `/etc/ctrl-exec-dispatcher.seeded`), the paths
   inside `ctrl-exec.conf` pointed at the new directory (the old file kept as
   `ctrl-exec.conf.pre-0.13`), `/etc/ctrl-exec` left as a symlink to the new
-  directory, and `ACTION=config-migrated` logged. If the move fails, nothing is
+  directory, and `ACTION=config-migrated` logged. An old directory with
+  `ctrl-exec.conf` but no `ca.key` (a CA kept elsewhere through `ca =`, or a
+  dispatcher not yet initialised) is moved the same way when
+  `/etc/ctrl-exec-dispatcher` does not exist. If the move fails, nothing is
   changed.
 - **Where it is not moved** - `/etc/ctrl-exec` is a mount point (a container
   volume, a network mount), or the host has not been through the package
@@ -182,7 +185,8 @@ and the CA key `ca.key`. The packages and the container image seed
   sees no change.
 
 Anything else with a real `/etc/ctrl-exec` is refused, never guessed: both
-directories holding a CA, an old directory with no CA, or `/etc/ctrl-exec` a
+directories holding a CA, an old directory with no CA beside an existing
+`/etc/ctrl-exec-dispatcher`, or `/etc/ctrl-exec` a
 symlink to somewhere other than the new directory. `ced` and `ctrl-exec-api`
 then exit 78, print both paths on stderr and log
 `ACTION=config-dir RESULT=refused`. To fix it: stop `ctrl-exec-api`, keep the

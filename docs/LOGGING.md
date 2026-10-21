@@ -595,12 +595,13 @@ pre-0.13 config directory) is present and is not the symlink to
 
 `RESULT=in-place`: the real config (`ctrl-exec.conf` and `ca.key`) is still at
 `/etc/ctrl-exec` and `/etc/ctrl-exec-dispatcher` is absent or only the seeded
-example. It is used where it is. INFO when `/etc/ctrl-exec` is a mount point
+example (or `ctrl-exec.conf` without `ca.key` is there and
+`/etc/ctrl-exec-dispatcher` is absent). It is used where it is. INFO when `/etc/ctrl-exec` is a mount point
 (a container volume: remount it at the new path at leisure), WARNING otherwise
 (the package upgrade or `install.sh` would have moved it).
 
 `RESULT=refused`: the two directories are ambiguous (both hold a CA, the old
-one holds none, or it is a symlink elsewhere). The process prints both paths on
+one holds none while the new one exists, or it is a symlink elsewhere). The process prints both paths on
 stderr and exits 78.
 
 Priority

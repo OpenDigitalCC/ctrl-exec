@@ -148,15 +148,42 @@ sub migrate { my ($new, $old, %o) = @_;
     is slurp("$old/ca.key"), "OLDCAKEY\n", 'both with a CA: old CA untouched';
 }
 
-# --- old with no CA: not the old layout, refused as before (T-047) ---------------------
-{
+# --- old with no CA beside an existing new dir: ambiguous, refused (T-047) ------------
+for my $kind (qw(seeded real)) {
     my ($root, $new, $old) = fresh_root();
     seeded_config($old);
+    $kind eq 'real' ? real_config($new) : seeded_config($new);
     my ($d, $err) = with_dirs($new, $old, sub { Exec::DispatcherConfig::conf_dir() });
-    ok !defined $d, 'old dir with no CA: refused as before';
-    like $err, qr/\Q$old\E.*\Q$new\E/s, 'old dir with no CA: the T-047 message';
-    is migrate($new, $old)->{result}, 'refused', 'old dir with no CA: installer does not move it';
-    ok -d $old && !-l $old, 'old dir with no CA: untouched';
+    ok !defined $d, "old dir with no CA, new $kind: refused";
+    like $err, qr/\Q$old\E.*\Q$new\E/s, "old dir with no CA, new $kind: the T-047 message";
+    is migrate($new, $old)->{result}, 'refused', "old dir with no CA, new $kind: installer does not move it";
+    ok -d $old && !-l $old, "old dir with no CA, new $kind: untouched";
+}
+
+# --- old with ctrl-exec.conf but no ca.key, new absent: no ambiguity, so as before
+# 0.13 it is moved by the installers and used in place at start (a CA kept
+# elsewhere via ca =, or a dispatcher not yet initialised) -----------------------------
+{
+    my ($root, $new, $old) = fresh_root();
+    mkdir $old or die;
+    put("$old/ctrl-exec.conf", "cert = $old/dispatcher.crt\nca = /srv/ca/ca.crt\n");
+    my ($d, $err) = with_dirs($new, $old, sub { Exec::DispatcherConfig::conf_dir() });
+    is $err, '', 'old conf without CA, new absent: no refusal';
+    is $d, $old, 'old conf without CA, new absent: runs in place';
+    my $r = migrate($new, $old);
+    is $r->{result}, 'migrated', 'old conf without CA, new absent: installer migrates';
+    is readlink($old), $new, 'old conf without CA, new absent: symlink left';
+    my $conf = slurp("$new/ctrl-exec.conf");
+    like $conf, qr{^cert = \Q$new\E/dispatcher\.crt$}m, 'old conf without CA: path rewritten';
+    like $conf, qr{^ca = /srv/ca/ca\.crt$}m, 'old conf without CA: CA kept elsewhere untouched';
+}
+{
+    # An old directory with no ctrl-exec.conf at all is still not a config.
+    my ($root, $new, $old) = fresh_root();
+    mkdir $old or die;
+    my ($d) = with_dirs($new, $old, sub { Exec::DispatcherConfig::conf_dir() });
+    ok !defined $d, 'old dir with no ctrl-exec.conf, new absent: refused as before';
+    is migrate($new, $old)->{result}, 'refused', 'old dir with no ctrl-exec.conf: installer does not move it';
 }
 
 # --- the migration symlink and a fresh host: no change at all ---------------------------
