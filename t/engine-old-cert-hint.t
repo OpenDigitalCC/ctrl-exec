@@ -46,6 +46,11 @@ subtest 'the error text: only for a certificate without an AKI, only for a refus
     is xlate($tls, $cfg{with}), "TLS handshake with 'agent-01' failed - certificate or trust mismatch",
         'certificate with an AKI: unchanged';
     is xlate($closed, $cfg{with}), $closed, 'closed, certificate with an AKI: unchanged';
+    my $status = '500 Status read failed: ';
+    like xlate($status, $cfg{without}), qr/\A\Q$status\E/,
+        'older LWP wording of the same close (Debian 11): as before, first';
+    like xlate($status, $cfg{without}), $HINT, 'older LWP wording: the hint';
+    is xlate($status, $cfg{with}), $status, 'older LWP wording, certificate with an AKI: unchanged';
     is xlate($tls), "TLS handshake with 'agent-01' failed - certificate or trust mismatch",
         'no config: unchanged';
     is xlate($tls, { cert => "$without->{dir}/missing.crt" }),
