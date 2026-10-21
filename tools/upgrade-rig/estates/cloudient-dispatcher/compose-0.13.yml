@@ -1,0 +1,86 @@
+# The 0.12-era layout (compose-0.12.yml) after the operator's 0.13 change: the
+# dispatcher data volume is mounted at /etc/ctrl-exec-dispatcher (with the
+# 0.13 entrypoint, which looks there). Nothing else differs. Changes from
+# the deployed file, none of which touch the upgrade path: the rig labels its
+# objects, names its network and volumes ce-uprig-s3-*, publishes no ports, and
+# uses named volumes (nocopy, so they start empty like the bind mounts they
+# stand in for) instead of host bind mounts, and no /dev/log mount.
+#
+#   dispatcher  - ctrl-exec API. Config, CA and auth hook at /etc/ctrl-exec-dispatcher.
+#   run-jobs    - scheduler; calls the dispatcher at http://dispatcher:7445.
+
+x-hardened: &hardened
+  restart: unless-stopped
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 200
+  ulimits:
+    nofile: { soft: 1024, hard: 4096 }
+    nproc: 200
+  labels: [ce-upgrade-rig=1]
+
+services:
+
+  dispatcher:
+    <<: *hardened
+    build:
+      context: ./dispatcher
+    image: ${DISPATCHER_IMAGE}
+    hostname: dispatcher
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]
+    environment:
+      DISPATCHER_ID: dispatcher
+      API_BIND: 0.0.0.0
+      API_PORT: 7445
+      API_AUTH_DEFAULT: deny
+    volumes:
+      - type: volume
+        source: dispatcher-data
+        target: /etc/ctrl-exec-dispatcher # 0.13: was /etc/ctrl-exec
+        volume: { nocopy: true }
+      - type: volume
+        source: dispatcher-registry
+        target: /var/lib/ctrl-exec        # paired-agent registry, runs, locks
+        volume: { nocopy: true }
+    tmpfs: [/tmp, /run]
+    cpus: "1.0"
+    mem_limit: 128m
+    memswap_limit: 128m
+    mem_reservation: 64m
+    networks: [rig-net]
+
+  run-jobs:
+    <<: *hardened
+    build:
+      context: ./run-jobs
+    image: ${RUNJOBS_IMAGE}
+    user: "10002:10002"
+    environment:
+      CTRL_EXEC_API_URL: http://dispatcher:7445
+      CTRL_EXEC_USERNAME: run-jobs
+      CTRL_EXEC_TOKEN: ${CTRL_EXEC_TOKEN:-}
+      JOBS_SCRIPTS_DIR: /etc/run-jobs/scripts
+    volumes:
+      - ./run-jobs/scripts:/etc/run-jobs/scripts:ro
+    tmpfs: [/tmp, /run]
+    cpus: "0.25"
+    mem_limit: 128m
+    memswap_limit: 128m
+    mem_reservation: 64m
+    depends_on: [dispatcher]
+    networks: [rig-net]
+
+volumes:
+  dispatcher-data:
+    name: ce-uprig-s3-dispatcher-data
+    labels: [ce-upgrade-rig=1]
+  dispatcher-registry:
+    name: ce-uprig-s3-dispatcher-registry
+    labels: [ce-upgrade-rig=1]
+
+networks:
+  rig-net:
+    name: ce-uprig-s3-net
+    labels: [ce-upgrade-rig=1]

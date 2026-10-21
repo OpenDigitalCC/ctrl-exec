@@ -284,6 +284,24 @@ Skipping unit tests.
 ```
 
 
+## Upgrade Testing
+
+The unit and integration tests start from a fresh install. Upgrades are
+tested by `tools/upgrade-rig/run.sh`: it installs the last release's debs on
+realistic estates (an agent with its scripts in a group-writable `/srv/scripts`,
+a dispatcher with its config in the old directory, a dispatcher container in
+the 0.12 compose layout, a job that parses CLI output captured with `2>&1`),
+upgrades them to the debs built from a commit with no step in between, and
+checks that the scripts still list and run. It needs docker; see
+`tools/upgrade-rig/README.md`. It is a required step before a release cut.
+
+```bash
+tools/upgrade-rig/run.sh                               # 0.12.4 -> HEAD, all scenarios
+tools/upgrade-rig/run.sh --to <branch> s1 s1b          # a core branch, two scenarios
+tools/upgrade-rig/run.sh --cli-to <plugins branch> s4  # the CLI from a plugins branch
+```
+
+
 ## Test Library (`t/integration/lib.sh`)
 
 All integration test files source `lib.sh`, which provides:

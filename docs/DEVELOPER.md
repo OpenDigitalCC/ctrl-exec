@@ -1871,7 +1871,11 @@ git status
 #    For a patch release, VERSION is already at the right value from the
 #    previous release's auto-bump
 
-# 3. Run the release script
+# 3. Prove the upgrade from the last release on real estates (see
+#    tools/upgrade-rig/README.md): every scenario must PASS
+tools/upgrade-rig/run.sh --from <last release>
+
+# 4. Run the release script
 ./make-release.sh
 ```
 
@@ -1886,17 +1890,17 @@ git status
 - Auto-increment the patch version in `VERSION`
 
 ```bash
-# 4. Review the SBOM, then commit sbom.json and the bumped VERSION together
+# 5. Review the SBOM, then commit sbom.json and the bumped VERSION together
 git add sbom.json VERSION
 git commit -m "release: <version>"
 
-# 5. Push the tag
+# 6. Push the tag
 git push origin v<version>
 
-# 6. Publish the tarball and checksum
+# 7. Publish the tarball and checksum
 ```
 
-The clean-tree check at step 3 is the guard against accidental double-releases:
+The clean-tree check at step 4 is the guard against accidental double-releases:
 `make-release.sh` blocks until `sbom.json` and the bumped `VERSION` are
 committed, making it impossible to release the same version twice or skip a
 version without a deliberate commit.
