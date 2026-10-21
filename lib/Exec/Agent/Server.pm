@@ -318,6 +318,29 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
         return;
     }
 
+    # dispatchers= (T-063): a script limited to named dispatchers runs only for
+    # them. $dispatcher is the id this agent resolved from its own trusted map
+    # for the connection's certificate (issuing CA + serial), never a value
+    # from the request. The executor checks the same limit from its own read
+    # of scripts.conf.
+    unless (Exec::Agent::Config::script_permits_dispatcher($name, $allowlist, $dispatcher)) {
+        Exec::Log::log_action('WARNING', {
+            ACTION     => 'deny',
+            REASON     => 'dispatcher not in dispatchers=',
+            SCRIPT     => $name,
+            PEER       => $peer,
+            DISPATCHER => $dispatcher,
+            REQID      => $reqid,
+        });
+        _send_json($conn, {
+            script => $name,
+            exit   => -1,
+            error  => "script not permitted: dispatcher '$dispatcher' is not in its dispatchers= list",
+            reqid  => $reqid,
+        });
+        return;
+    }
+
     # The script's declared input mode must be satisfiable by this request.
     my $input_mode = Exec::Agent::Config::script_input_mode($name, $allowlist);
     if (defined(my $why = _input_mode_problem($input_mode, $iv->{names}))) {
@@ -736,6 +759,9 @@ sub handle_capabilities ($conn, $peer, $allowlist, $config, $trusted, $peer_seri
 
     my @scripts;
     for my $name (sort keys %$allowlist) {
+        # A script limited to other dispatchers (dispatchers=, T-063) is not
+        # disclosed to this one.
+        next unless Exec::Agent::Config::script_permits_dispatcher($name, $allowlist, $dispatcher);
         my $path  = Exec::Agent::Config::validate_script($name, $allowlist);
         my $entry = {
             name       => $name,

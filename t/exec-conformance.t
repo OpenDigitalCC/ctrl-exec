@@ -71,7 +71,11 @@ sub perl_resolve {
     # the same mode, or the front end would report a script the executor
     # refuses (or the reverse).
     my $own = $config->{script_ownership};
-    return "OK path=$path|profile=$prof|run_as=$runas|nnp=$nnp|caps=$caps|writable=$writ|input=$input|output=$output|ownership=$own";
+    # dispatchers= (T-063): the executor holds the agent to the same limit; '*'
+    # is no limit.
+    my $d    = Exec::Agent::Config::script_dispatchers($name, $al);
+    my $disp = $d ? join(',', @$d) : '*';
+    return "OK path=$path|profile=$prof|run_as=$runas|nnp=$nnp|caps=$caps|writable=$writ|input=$input|output=$output|ownership=$own|dispatchers=$disp";
 }
 
 # --- fixtures: each names the scripts to resolve against one config pair -------
@@ -336,6 +340,55 @@ push @fixtures, (
         agent   => $REQUIRED . "[profile default]\nrun_as = nobody\n",
         scripts => "dup = /opt/first.sh\ndup = rel.sh\n",
         names   => [qw(dup)],
+    },
+    # -- scripts.conf: dispatchers= (T-063) ------------------------------------
+    {
+        label   => 'scripts: dispatchers= placement, lists, repeats',
+        expect  => {
+            none   => 'OK path=/opt/n.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn|dispatchers=*',
+            one    => 'OK path=/opt/o.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn|dispatchers=d1',
+            before => 'OK path=/opt/b.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn|dispatchers=d1,d2',
+            rep    => 'OK path=/opt/r.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn|dispatchers=d2',
+            odd    => 'OK path=/opt/x.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn|dispatchers=A.b_c-9,d1,d1',
+            max    => 'OK path=/opt/m.sh',
+        },
+        agent   => $REQUIRED . "[profile default]\nrun_as = nobody\n",
+        scripts => "none = /opt/n.sh\none = /opt/o.sh dispatchers=d1\n"
+                 . "before = dispatchers=d1,d2 /opt/b.sh\n"
+                 . "rep = /opt/r.sh dispatchers=d1 dispatchers=d2\n"
+                 . "odd = /opt/x.sh dispatchers=A.b_c-9,d1,d1\n"
+                 . "max = /opt/m.sh dispatchers=" . ('m' x 64) . "\n",
+        names   => [qw(none one before rep odd max)],
+    },
+    {
+        label   => 'scripts: bad dispatchers= values skip the entry',
+        expect  => { map { $_ => 'DENY not-allowlisted' }
+                     qw(empty trail lead dbl dash dot long space sep upperkey utf8 star toolong) },
+        agent   => $REQUIRED . "[profile default]\nrun_as = nobody\n",
+        scripts => "empty = /opt/s.sh dispatchers=\ntrail = /opt/s.sh dispatchers=d1,\n"
+                 . "lead = /opt/s.sh dispatchers=,d1\ndbl = /opt/s.sh dispatchers=d1,,d2\n"
+                 . "dash = /opt/s.sh dispatchers=-d1\ndot = /opt/s.sh dispatchers=.d1\n"
+                 . "long = /opt/s.sh dispatchers=" . ('a' x 65) . "\n"
+                 . "space = /opt/s.sh dispatchers=d1, d2\nsep = /opt/s.sh dispatchers=d1;d2\n"
+                 . "upperkey = /opt/s.sh Dispatchers=d1\n"
+                 . "utf8 = /opt/s.sh dispatchers=caf\xc3\xa9\nstar = /opt/s.sh dispatchers=*\n"
+                 . "toolong = /opt/s.sh dispatchers=" . join(',', ('abcdefgh') x 460) . "\n",
+        names   => [qw(empty trail lead dbl dash dot long space sep upperkey utf8 star toolong)],
+    },
+    {
+        label   => 'scripts: dispatchers= with pasted NBSPs and a later skipped line',
+        expect  => {
+            nb  => 'OK path=/opt/nb.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn|dispatchers=d1,d2',
+            nnb => 'OK path=/opt/nnb.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn|dispatchers=d1',
+            in  => 'DENY not-allowlisted',
+            dup => 'OK path=/opt/first.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn|dispatchers=d1',
+        },
+        agent   => $REQUIRED . "[profile default]\nrun_as = nobody\n",
+        scripts => "nb = /opt/nb.sh\xc2\xa0dispatchers=d1,d2\n"
+                 . "nnb = /opt/nnb.sh\xe2\x80\xafdispatchers=d1\xc2\xa0\n"
+                 . "in = /opt/in.sh dispatchers=d1,\xc2\xa0d2\n"
+                 . "dup = /opt/first.sh dispatchers=d1\ndup = /opt/second.sh dispatchers=d1,\n",
+        names   => [qw(nb nnb in dup)],
     },
     # -- agent.conf: comments, whitespace, sections ----------------------------
     {

@@ -1622,6 +1622,51 @@ marker is stored whole, which includes every result from an agent older than
 caller (a `ctrl-exec-cli` script, a job's own log) is responsible for what it
 does with the output it receives.
 
+### Scripts limited per dispatcher (scripts.conf `dispatchers=`)
+
+On an agent paired with several dispatchers, a script can be limited to some
+of them with `dispatchers=`, beside the path and any `profile=`, `input=` or
+`output=`, in any order:
+
+```
+rotate-keys = /opt/ctrl-exec-scripts/rotate-keys.sh dispatchers=d1
+report      = /opt/ctrl-exec-scripts/report.sh      dispatchers=d1,d2
+```
+
+The value is one or more dispatcher ids from the agent's trusted-dispatcher
+map (`/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers`, the id given at
+pairing), separated by commas with no spaces. Ids are compared exactly, case
+included. Certificate serials are not used, because they change on rotation.
+
+No `dispatchers=` (default)
+: Every trusted dispatcher can run and see the script, as before.
+
+With `dispatchers=`
+: A listed dispatcher runs the script as usual. Any other trusted dispatcher
+  does not see it in `/capabilities` (discovery), and a run of it is refused:
+  `script not permitted: dispatcher '<id>' is not in its dispatchers= list`,
+  logged as `deny` with the dispatcher. The dispatcher is the one the agent
+  identified from the connection's certificate (issuing CA and serial,
+  matched against its own trusted map), never anything the request says.
+  With `executor_socket` set, the executor reads the same entry from its own
+  `scripts.conf` and refuses a run for a dispatcher not listed
+  (`executor: script not permitted for dispatcher '<id>'`), so an agent that
+  has not yet picked up an edit cannot run the script for the wrong
+  dispatcher.
+
+An id that is not in the trusted map does not skip the entry: the agent logs
+`allowlist-unknown-dispatcher` once per load (start-up and each reload), and
+the script runs for that id once a dispatcher is paired under it. A value that
+is not a list of valid ids (empty, a trailing or doubled comma, a space after
+a comma, an id that does not start with a letter or digit or is longer than 64
+characters) skips the entry: a run of it reports `script not permitted: its
+dispatchers= value '<value>' is not a comma-separated list of dispatcher ids
+...`. The executor skips the same entries.
+
+`cea self-check` is local and lists every script, showing the limit
+(`(profile: default, dispatchers: d1,d2)`) and pointing out an id that no
+paired dispatcher has.
+
 ---
 
 ### Auth hook (agent-side)

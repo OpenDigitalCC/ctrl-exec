@@ -441,19 +441,65 @@ static int output_mode_ok(const char *v) {
     return strcmp(v, "stored") == 0 || strcmp(v, "confidential") == 0;
 }
 
+/* ---- dispatchers= (T-063) ------------------------------------------------ */
+/* A dispatcher id: an ASCII letter or digit, then letters, digits, '.', '_' or
+ * '-', at most 64 characters. Mirrors Exec::Agent::AgentPairing::
+ * valid_dispatcher_id (this file never calls setlocale, so isalnum is the C
+ * locale's). */
+#define DISP_ID_MAX 64
+
+static int disp_id_ok(const char *s, size_t n) {
+    if (n < 1 || n > DISP_ID_MAX || !isalnum((unsigned char)s[0])) return 0;
+    for (size_t i = 1; i < n; i++) {
+        unsigned char ch = (unsigned char)s[i];
+        if (!(isalnum(ch) || ch == '.' || ch == '_' || ch == '-')) return 0;
+    }
+    return 1;
+}
+
+/* A scripts.conf dispatchers= value: one or more dispatcher ids separated by
+ * single commas, shorter than VALLEN. Mirrors Exec::Agent::Config::
+ * dispatchers_problem; anything else skips the script. */
+static int dispatchers_ok(const char *v) {
+    if (strlen(v) >= VALLEN) return 0;
+    for (const char *p = v; ; ) {
+        const char *c = strchr(p, ',');
+        size_t n = c ? (size_t)(c - p) : strlen(p);
+        if (!disp_id_ok(p, n)) return 0;
+        if (!c) return 1;
+        p = c + 1;
+    }
+}
+
+/* Is `disp` one of the ids in a dispatchers= value that passed dispatchers_ok?
+ * Exact, case-sensitive comparison, as in the Perl front end. */
+static int dispatchers_has(const char *list, const char *disp) {
+    size_t dl = strlen(disp);
+    for (const char *p = list; ; ) {
+        const char *c = strchr(p, ',');
+        size_t n = c ? (size_t)(c - p) : strlen(p);
+        if (n == dl && memcmp(p, disp, n) == 0) return 1;
+        if (!c) return 0;
+        p = c + 1;
+    }
+}
+
 /* ---- scripts.conf lookup ---------------------------------------------- */
-/* Find one script by name. Returns 1 found (out_path/out_profile/out_input
- * set, and out_output when it is not NULL), 0 not present / skipped (matches a
- * Perl-skipped entry: not allowlisted). Mirrors load_allowlist: a skipped line
- * never replaces an earlier valid one and a later valid line replaces an
- * earlier one (last valid entry wins). Within a line the last profile=, the
- * last input= and the last output= win, as in the Perl annotation hash. */
+/* Find one script by name. Returns 1 found (out_path/out_profile/out_input/
+ * out_disp set, and out_output when it is not NULL), 0 not present / skipped
+ * (matches a Perl-skipped entry: not allowlisted). out_disp is the entry's
+ * dispatchers= value, or "" when it has none (every dispatcher). Mirrors
+ * load_allowlist: a skipped line never replaces an earlier valid one and a
+ * later valid line replaces an earlier one (last valid entry wins). Within a
+ * line the last profile=, input=, output= and dispatchers= win, as in the Perl
+ * annotation hash. */
 
 static int find_script(const char *path, const char *want,
                        char *out_path, size_t plen,
                        char *out_profile, size_t prlen,
                        char *out_input, size_t inlen,
-                       char *out_output, size_t outlen) {
+                       char *out_output, size_t outlen,
+                       char *out_disp, size_t dlen) {
     FILE *f = fopen(path, "re");
     if (!f) return 0;
     char *line = NULL; size_t cap = 0; ssize_t len; int found = 0;
@@ -479,7 +525,8 @@ static int find_script(const char *path, const char *want,
          * order-independent. Mirrors load_allowlist. */
         char *rest = trim(eq + 1);
         char scriptpath[VALLEN] = "", profile[NAMELEN] = "default";
-        const char *profv = NULL, *inputv = NULL, *outputv = NULL;  /* last of each wins */
+        const char *profv = NULL, *inputv = NULL, *outputv = NULL,  /* last of each wins */
+                   *dispv = NULL;
         int havepath = 0, twopaths = 0, toolong = 0;
         char *save = NULL, *tok = strtok_r(rest, " \t\r\n\v\f", &save);
         for (; tok; tok = strtok_r(NULL, " \t\r\n\v\f", &save)) {
@@ -493,6 +540,7 @@ static int find_script(const char *path, const char *want,
                     if (strcmp(tok, "profile") == 0)    profv  = te + 1;
                     else if (strcmp(tok, "input") == 0) inputv = te + 1;
                     else if (strcmp(tok, "output") == 0) outputv = te + 1;
+                    else if (strcmp(tok, "dispatchers") == 0) dispv = te + 1;
                     continue;
                 }
             }
@@ -511,11 +559,15 @@ static int find_script(const char *path, const char *want,
         /* Likewise a bad output= value (T-053): never run a script whose
          * confidentiality the front end could not establish. */
         if (outputv && !output_mode_ok(outputv)) continue;
+        /* Likewise a bad dispatchers= value (T-063): a typo must never widen
+         * the script to every dispatcher. */
+        if (dispv && !dispatchers_ok(dispv)) continue;
         if (scriptpath[0] != '/') continue;               /* relative -> skipped */
         snprintf(out_path, plen, "%s", scriptpath);
         snprintf(out_profile, prlen, "%s", profile);
         snprintf(out_input, inlen, "%s", inputv ? inputv : "context");
         if (out_output) snprintf(out_output, outlen, "%s", outputv ? outputv : "stored");
+        snprintf(out_disp, dlen, "%s", dispv ? dispv : "");   /* < VALLEN: fits */
         found = 1;                                        /* a later one may replace it */
     }
     free(line);
@@ -756,8 +808,9 @@ static int cmd_resolve(const char *agent_conf, const char *scripts_conf,
     if (parse_agent_conf(agent_conf, c) != 0) { free(c); return 2; }
 
     char spath[VALLEN], pname[NAMELEN], imode[INPUT_MODE_LEN], omode[OUTPUT_MODE_LEN];
+    char dlist[VALLEN];
     if (!find_script(scripts_conf, name, spath, sizeof(spath), pname, sizeof(pname),
-                     imode, sizeof(imode), omode, sizeof(omode))) {
+                     imode, sizeof(imode), omode, sizeof(omode), dlist, sizeof(dlist))) {
         printf("DENY not-allowlisted\n");
         free(c); return 0;
     }
@@ -786,10 +839,11 @@ static int cmd_resolve(const char *agent_conf, const char *scripts_conf,
         strncat(writ, p->writable[i], sizeof(writ) - strlen(writ) - 1);
     }
 
+    /* dispatchers=* : no limit, every trusted dispatcher (T-063). */
     printf("OK path=%s|profile=%s|run_as=%s|nnp=%d|caps=%s|writable=%s|input=%s|output=%s"
-           "|ownership=%s\n",
+           "|ownership=%s|dispatchers=%s\n",
            spath, pname, p->run_as, p->nnp, caps, writ, imode, omode,
-           c->ownership_strict ? "strict" : "warn");
+           c->ownership_strict ? "strict" : "warn", dlist[0] ? dlist : "*");
     free(c);
     return 0;
 }
@@ -809,6 +863,12 @@ static int cmd_resolve(const char *agent_conf, const char *scripts_conf,
  *   [i32 exit] [u32 len][stdout] [u32 len][stderr]
  * Length-prefixed throughout so args/stdin may hold arbitrary bytes (args still
  * cannot contain NUL - execv requires C strings - but stdin may).
+ *
+ * disp is the dispatcher id the agent resolved from its trusted map for the
+ * run's connection (issuing CA + certificate serial). Only scripts.conf
+ * dispatchers= (T-063) reads it: the executor refuses a limited script when
+ * disp is not in the list. It is the agent's attestation, not something this
+ * process can check against a certificate.
  *
  * v2 carries confidential run input. In v2, stdin is the context JSON for an
  * input=context script (with an "input" object when there is input), context
@@ -1696,7 +1756,8 @@ static void handle_conn(int cfd, config_t *cfg, const char *scripts_conf,
     int v2 = (total >= 4 && be32(frame) == FRAME_V2_MAGIC);
     if (v2) off = 4;
     char *reqid  = take_field(frame, total, &off, NULL);
-    char *disp   = take_field(frame, total, &off, NULL);
+    uint32_t displen = 0;
+    char *disp   = take_field(frame, total, &off, &displen);
     char *script = take_field(frame, total, &off, NULL);
     uint32_t inlen = 0;
     char *indata = take_field(frame, total, &off, &inlen);
@@ -1786,12 +1847,27 @@ static void handle_conn(int cfd, config_t *cfg, const char *scripts_conf,
          * With script_ownership = warn (T-054) a script that breaks that rule
          * runs anyway, and then a user who can write it or a directory on its
          * path can change what runs - the documented trade-off of warn. */
-        char spath[VALLEN], pname[NAMELEN], imode[INPUT_MODE_LEN];
+        char spath[VALLEN], pname[NAMELEN], imode[INPUT_MODE_LEN], dlist[VALLEN];
         profile_t *p = NULL;
+        char dwhy[160];
         /* The output mode is not needed here (see output_mode_ok): NULL. */
         if (!find_script(scripts_conf, script, spath, sizeof(spath), pname, sizeof(pname),
-                         imode, sizeof(imode), NULL, 0)) {
+                         imode, sizeof(imode), NULL, 0, dlist, sizeof(dlist))) {
             buf_add(&err, "executor: script not permitted\n", 31);
+        } else if (dlist[0] && !(disp_id_ok(disp, displen) && strlen(disp) == displen
+                                 && dispatchers_has(dlist, disp))) {
+            /* dispatchers= (T-063), from OUR scripts.conf. The id is the
+             * agent's statement of which trusted dispatcher it authenticated
+             * for this run (the frame's disp field); this process has no TLS
+             * view, so it cannot verify that statement, only hold the agent to
+             * the root-owned limit. An empty or malformed id never matches. */
+            if (disp_id_ok(disp, displen) && strlen(disp) == displen)
+                snprintf(dwhy, sizeof(dwhy), "executor: script not permitted for dispatcher "
+                         "'%s'\n", disp);
+            else
+                snprintf(dwhy, sizeof(dwhy), "executor: script not permitted: the request "
+                         "names no valid dispatcher\n");
+            buf_add(&err, dwhy, strlen(dwhy));
         } else if (!path_in_dirs(spath, cfg)) {
             buf_add(&err, "executor: script not in script_dirs\n", 36);
         } else if (!(p = find_profile(cfg, pname))) {

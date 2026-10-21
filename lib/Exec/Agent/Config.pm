@@ -9,6 +9,7 @@ use Cwd  qw(abs_path);
 use Fcntl qw();
 use Exec::Log qw();
 use Exec::RateLimit qw();
+use Exec::Agent::AgentPairing qw();
 
 
 # Return the first of the given paths that cannot be read because of a
@@ -332,7 +333,7 @@ sub _validate_config ($config, $path) {
 }
 
 # Load and parse scripts.conf allowlist
-# Returns hashref: { script_name => { path, profile, input, output } }
+# Returns hashref: { script_name => { path, profile, input, output[, dispatchers] } }
 # Dies on parse errors; unknown/bad entries are skipped with a warning
 #
 # Optional:
@@ -439,6 +440,19 @@ sub load_allowlist_full ($path = undef, $script_dirs = undef, $ownership = 'warn
                 }
                 $output_mode = $annot{output};
             }
+            # dispatchers= (T-063): the dispatcher ids (from the trusted map)
+            # that may run and see the script. Absent means every trusted
+            # dispatcher; a bad value skips the script, so a typo never widens
+            # it to every dispatcher.
+            my $dispatchers;
+            if (exists $annot{dispatchers}) {
+                if (defined(my $why = dispatchers_problem($annot{dispatchers}))) {
+                    $skipped{$name} = $why;
+                    warn "Allowlist: skipping '$name' - $why\n";
+                    next;
+                }
+                $dispatchers = [ split /,/, $annot{dispatchers} ];
+            }
             unless ($script_path =~ m{^/}) {
                 $skipped{$name} = "'$script_path' is not an absolute path";
                 warn "Allowlist: skipping '$name' - path must be absolute: $script_path\n";
@@ -462,6 +476,7 @@ sub load_allowlist_full ($path = undef, $script_dirs = undef, $ownership = 'warn
                 profile => ($annot{profile} // 'default'),
                 input   => $input_mode,
                 output  => $output_mode,
+                (defined $dispatchers ? (dispatchers => $dispatchers) : ()),
                 (defined $owner_why ? (ownership_warning => $owner_why) : ()),
             };
         }
@@ -524,6 +539,20 @@ sub output_mode_problem ($value) {
     return if $value =~ /\A(?:stored|confidential)\z/;
     my $shown = length $value > 40 ? substr($value, 0, 40) . '...' : $value;
     return "its output mode '$shown' is not one of stored, confidential";
+}
+
+# Why a 'dispatchers=' value in scripts.conf is not usable, or undef when it is:
+# one or more dispatcher ids, comma-separated, no spaces, each a valid
+# dispatcher id (AgentPairing::valid_dispatcher_id), the whole shorter than
+# VALLEN. The executor applies the same rule (dispatchers_ok in
+# src/ctrl-exec-executor.c; t/exec-conformance.t).
+sub dispatchers_problem ($value) {
+    my @ids = split /,/, $value, -1;
+    return if length $value < VALLEN && @ids
+           && !grep { !Exec::Agent::AgentPairing::valid_dispatcher_id($_) } @ids;
+    my $shown = length $value > 40 ? substr($value, 0, 40) . '...' : $value;
+    return "its dispatchers= value '$shown' is not a comma-separated list of dispatcher ids"
+         . ' (each: a letter or digit, then letters, digits, . _ -, at most 64 characters)';
 }
 
 # The reason text for a path outside script_dirs, shared by the load-time skip
@@ -703,6 +732,26 @@ sub log_skipped ($skipped) {
     }
 }
 
+# Log each dispatchers= id that is not in the trusted-dispatcher map (T-063),
+# once per load, like log_skipped. The entry is kept: pairing that dispatcher
+# later enables it. $trusted is the whole map as loaded
+# ({ '<ca-fpr> <serial>' => '<id>' }); only its ids matter.
+sub log_unknown_dispatchers ($allowlist, $trusted) {
+    my %known = map { $_ => 1 } values %{ $trusted // {} };
+    for my $name (sort keys %{ $allowlist // {} }) {
+        for my $id (@{ script_dispatchers($name, $allowlist) // [] }) {
+            next if $known{$id};
+            Exec::Log::log_action('WARNING', {
+                ACTION     => 'allowlist-unknown-dispatcher',
+                SCRIPT     => $name,
+                DISPATCHER => $id,
+                REASON     => "dispatchers= names '$id', which is not in the trusted-dispatcher "
+                            . 'map; it runs for that id once a dispatcher is paired with it',
+            });
+        }
+    }
+}
+
 # Log each allowlisted script that breaks the ownership rule but runs anyway
 # (script_ownership = warn, T-054). Called once per load, like log_skipped -
 # never per run.
@@ -766,6 +815,21 @@ sub script_output_mode ($name, $allowlist) {
     my $entry = $allowlist->{$name};
     return 'stored' unless ref $entry eq 'HASH';
     return $entry->{output} // 'stored';
+}
+
+# The dispatcher ids a script is limited to (dispatchers=, T-063), as an
+# arrayref, or undef when it has no limit (every trusted dispatcher).
+sub script_dispatchers ($name, $allowlist) {
+    my $entry = $allowlist->{$name};
+    return ref $entry eq 'HASH' ? $entry->{dispatchers} : undef;
+}
+
+# Whether $dispatcher - the id the agent resolved from its own trusted map for
+# this connection, never one the request names - may run and see $name.
+sub script_permits_dispatcher ($name, $allowlist, $dispatcher) {
+    my $ids = script_dispatchers($name, $allowlist) // return 1;
+    return 0 unless defined $dispatcher;
+    return (grep { $_ eq $dispatcher } @$ids) ? 1 : 0;
 }
 
 # Cross-check the allowlist against the defined profiles: every script's profile

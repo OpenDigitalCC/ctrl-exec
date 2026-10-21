@@ -442,6 +442,8 @@ MSG
     # trusts, by fingerprint: a reload that finds the bundle changed gives the
     # listener the new set (Server::set_listener_cas).
     my ($listener_ctx, $listener_cas);
+    # A dispatchers= id no paired dispatcher has (T-063): logged, entry kept.
+    Exec::Agent::Config::log_unknown_dispatchers($allowlist, $trusted);
 
     my %rate_state;
     my $rate_config  = $config->{rate_limit} // {};
@@ -520,6 +522,7 @@ MSG
                 path => $trusted_path, ca_path => $config->{ca})
         } // {};
         warn "Trusted-dispatcher map reload failed: $@\n" if $@;
+        Exec::Agent::Config::log_unknown_dispatchers($allowlist, $trusted);
         %rate_state = ();
     };
     $SIG{HUP} = sub { $reload->('signal') };
@@ -1113,6 +1116,12 @@ sub mode_self_check {
                 . " pair a dispatcher (request-pairing) to serve one\n";
         }
     }
+    # The ids paired dispatchers have, to point out a dispatchers= id that none
+    # has (T-063). Read without the CA bundle, so self-check never rewrites the
+    # map (serve upgrades it).
+    my %paired_ids = map { $_ => 1 } values %{ Exec::Agent::AgentPairing::load_trusted_dispatchers(
+        path => $config->{trusted_dispatchers_path} // '/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers',
+    ) };
 
     for my $name (sort keys %$allowlist) {
         my $path    = Exec::Agent::Config::validate_script($name, $allowlist);
@@ -1122,7 +1131,13 @@ sub mode_self_check {
         # rule runs; say why it would be refused under strict.
         my $owner   = Exec::Agent::Config::script_ownership_warning($name, $allowlist);
         my $warn    = defined $owner ? " [warning: $owner]" : '';
-        print "  Script '$name': $path  (profile: $profile) [$ok]$warn\n";
+        # dispatchers= (T-063): self-check is local and lists every script; the
+        # limit shows which dispatchers see and run it.
+        my $ids     = Exec::Agent::Config::script_dispatchers($name, $allowlist);
+        my $limit   = $ids ? ', dispatchers: ' . join(',', @$ids) : '';
+        $warn .= " [warning: dispatcher '$_' is not in the trusted map]"
+            for grep { !$paired_ids{$_} } @{ $ids // [] };
+        print "  Script '$name': $path  (profile: $profile$limit) [$ok]$warn\n";
     }
 
     # With executor_socket set every run goes through the executor; if it is

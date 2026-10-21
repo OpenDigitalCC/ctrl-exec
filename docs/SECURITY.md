@@ -581,6 +581,25 @@ Confidential output (secrets at rest)
   stored whole. What the caller does with the output it receives is outside
   ctrl-exec.
 
+Scripts limited per dispatcher (`dispatchers=`)
+: A `scripts.conf` entry with `dispatchers=<id>[,<id>...]` runs, and is listed
+  in `/capabilities`, only for those dispatchers (see REFERENCE.md). The id is
+  the one the agent resolved from its own trusted map for the connection's
+  certificate, keyed by issuing CA and serial, so one dispatcher's CA cannot
+  mint a certificate that passes as another dispatcher; nothing the request
+  says is used.
+
+  The executor checks the limit again from its own read of the root-owned
+  `scripts.conf`, as it does `input=`. It has no TLS view, so the dispatcher id
+  it checks is the agent front end's statement in the run frame: the executor
+  cannot verify which dispatcher connected. What its check does hold: a
+  front end that is out of step with `scripts.conf` (not yet reloaded, or a
+  bug in its check) cannot run a limited script for a dispatcher the file does
+  not list, and a request with no valid dispatcher id never runs a limited
+  script. A compromised front end can name any listed id, as it can choose any
+  allowlisted script; the limit is not a boundary against the agent user, the
+  allowlist and profiles are.
+
 
 ## Auth Hook
 
