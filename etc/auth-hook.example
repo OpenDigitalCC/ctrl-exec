@@ -18,6 +18,12 @@
 #                       caller on the unix socket (api_socket)
 #   ENVEXEC_PEER_UID    uid of an API caller on the unix socket, from the
 #                       kernel (empty for TCP callers and the CLI)
+#   ENVEXEC_OWNER_PEER_UID  on a 'status' request only: the socket uid that
+#                       started the run being read (JSON: owner_peer_uid).
+#                       Empty if the run came over TCP or was recorded before
+#                       this was stored. Allow "same uid as the starter" with
+#                       [ -n "$ENVEXEC_OWNER_PEER_UID" ] &&
+#                       [ "$ENVEXEC_OWNER_PEER_UID" = "$ENVEXEC_PEER_UID" ]
 #   ENVEXEC_TIMESTAMP   ISO8601 UTC timestamp
 #
 # ENVEXEC_ARGS (space-joined) is also set for backward compatibility

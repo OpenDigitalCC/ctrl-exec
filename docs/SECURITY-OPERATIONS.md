@@ -373,7 +373,9 @@ Request result access
 : `GET /status/{reqid}` is owner-gateable by the auth hook. The API records who
   submitted each run (username + source IP) and runs a `status` auth check that
   hands the hook the run id (`ENVEXEC_REQID`) and the recorded submitter
-  (`ENVEXEC_SUBMITTER`, `ENVEXEC_SUBMITTER_IP`); the caller authenticates with an
+  (`ENVEXEC_SUBMITTER`, `ENVEXEC_SUBMITTER_IP`, and for a run started over the API's
+  unix socket the starter's uid in `ENVEXEC_OWNER_PEER_UID`, to compare with the
+  reader's `ENVEXEC_PEER_UID`); the caller authenticates with an
   `Authorization: Bearer <token>` header. A hook can therefore return a run's
   output only to the submitter (or any caller it authorises), and an unauthorised
   request receives `404` - it cannot distinguish "not yours" from "no such run".

@@ -617,6 +617,7 @@ ENVEXEC_USERNAME    username from request (may be empty)
 ENVEXEC_TOKEN       token from request (may be empty)
 ENVEXEC_SOURCE_IP   originating IP address (the proxy's, not the client's, behind a reverse proxy - not client identity); unix:<path> on the API's unix socket
 ENVEXEC_PEER_UID    API unix-socket caller's uid (SO_PEERCRED); empty otherwise
+ENVEXEC_OWNER_PEER_UID  status only: the socket uid that started the run being read; empty if it came over TCP or predates this
 ENVEXEC_TIMESTAMP   ISO8601 UTC timestamp
 ```
 
@@ -734,7 +735,9 @@ exits. The parent reaps children with a SIGCHLD handler calling
 (`IO::Socket::SSL->start_SSL` with the context loaded at start-up), so a slow
 TLS client cannot hold up the accept loop. A socket caller is recorded as
 `unix:<path>` with its uid from `SO_PEERCRED`, passed to the auth hook as
-`peer_uid`.
+`peer_uid`. A run started over the socket stores that uid in its `submitter`
+record, and a later `GET /status` passes it to the hook as `owner_peer_uid`
+(`ENVEXEC_OWNER_PEER_UID`); it is never returned in a response.
 
 `SSL_no_shutdown => 1` is used on the child's TLS connection close, for the
 same reason as in the pairing server - see the note in `Exec::Pairing`.

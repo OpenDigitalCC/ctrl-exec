@@ -627,7 +627,12 @@ Key settings:
   `api_socket_group`. Requests on the socket are handled exactly as on TCP and
   pass the same auth hook, which sees `source_ip` as `unix:<path>` and the
   caller's uid (from the kernel, `SO_PEERCRED`) as `peer_uid` /
-  `ENVEXEC_PEER_UID`. The packaged systemd unit creates `/run/ctrl-exec-api`
+  `ENVEXEC_PEER_UID`. A run started over the socket stores that uid with its
+  submitter; on `GET /status/{reqid}` the hook also gets it as `owner_peer_uid` /
+  `ENVEXEC_OWNER_PEER_UID` (null / empty for a run started over TCP or recorded
+  before this), beside the current caller's `peer_uid`, so a hook can allow
+  "same uid as the starter". It is for hooks only and is not in the status
+  response. The packaged systemd unit creates `/run/ctrl-exec-api`
   for it. At start-up an existing socket nothing answers on (left by a crash)
   is replaced; a socket another process answers on, or a path that is not a
   socket (a file, directory or symlink), stops start-up and is left alone. The

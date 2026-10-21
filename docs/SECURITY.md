@@ -124,7 +124,10 @@ Port 7445 - API
   off` closes the TCP port). The socket is created mode 0660, so only its
   owner and members of `api_socket_group` can connect at all; the auth hook
   still decides every request, and sees the caller's uid as reported by the
-  kernel (`ENVEXEC_PEER_UID`), which, unlike a token, a caller cannot forge.
+  kernel (`ENVEXEC_PEER_UID`), which, unlike a token, a caller cannot forge. The uid of a run's starter is
+  stored with the run and handed to the hook on a later status request
+  (`ENVEXEC_OWNER_PEER_UID`), so a hook can return a run's output only to the
+  uid that started it.
   Loopback TCP, by contrast, is open to every local user up to the hook.
   For internet-facing deployments, place the API behind a reverse proxy that
   handles authentication and TLS termination rather than binding directly to

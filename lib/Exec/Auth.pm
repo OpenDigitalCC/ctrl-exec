@@ -45,6 +45,8 @@ my %CODE_REASON = (
 #                                   API caller on the unix socket)
 #   peer_uid  => $n                (the socket caller's uid from SO_PEERCRED;
 #                                   undef for TCP callers and the CLI)
+#   submitter => \%rec             ('status' only: the stored submitter; its
+#                                   peer_uid reaches the hook as owner_peer_uid)
 #   dispatcher        => $str      (calling dispatcher's stable identity, default '')
 #   dispatcher_serial => $str      (calling dispatcher's cert serial, default '')
 #   input_names => \@names         (names of the run's input fields, default [])
@@ -219,11 +221,19 @@ sub _build_context (%opts) {
         dispatcher_serial => $opts{dispatcher_serial} // '',
         reqid             => $opts{reqid}             // '',
         submitter         => $opts{submitter},
+        # The uid of the socket caller that started the run being read (from
+        # the stored submitter); null for a TCP-started or older run.
+        owner_peer_uid    => _owner_peer_uid($opts{submitter}),
         input_names       => $opts{input_names} // [],
         input_bytes       => 0 + ($opts{input_bytes} // 0),
         peer_uid          => (defined $opts{peer_uid} ? 0 + $opts{peer_uid} : undef),
         timestamp         => strftime('%Y-%m-%dT%H:%M:%SZ', gmtime),
     };
+}
+
+sub _owner_peer_uid ($submitter) {
+    my $u = ref $submitter eq 'HASH' ? $submitter->{peer_uid} : undef;
+    return (defined $u && $u =~ /^\d+$/) ? 0 + $u : undef;
 }
 
 # Run the hook, passing context as env vars and JSON on stdin.
@@ -258,6 +268,9 @@ sub _run_hook ($hook, $context, $timeout = undef) {
     $ENV{ENVEXEC_REQID}        = $context->{reqid} // '';
     $ENV{ENVEXEC_SUBMITTER}    = ($context->{submitter} && $context->{submitter}{username})  // '';
     $ENV{ENVEXEC_SUBMITTER_IP} = ($context->{submitter} && $context->{submitter}{source_ip}) // '';
+    # The socket uid that started the run (empty if it came over TCP, or was
+    # recorded before this was stored), to compare with ENVEXEC_PEER_UID.
+    $ENV{ENVEXEC_OWNER_PEER_UID} = $context->{owner_peer_uid} // '';
     # Confidential input (T-013): the field names and total size only.
     $ENV{ENVEXEC_INPUT_NAMES_JSON} = encode_json($context->{input_names});
     $ENV{ENVEXEC_INPUT_BYTES}      = $context->{input_bytes};

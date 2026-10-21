@@ -624,7 +624,7 @@ sub _handle_run ($conn, $peer, $body, $config) {
         # reqid -> host map; the caller polls GET /status/<reqid> for results.
         Exec::RunStore::record_async(
             reqid => $reqid, script => $script, dispatch_results => $results,
-            submitter => { username => $username, source_ip => $peer },
+            submitter => _submitter($username, $peer),
         );
         _send_json($conn, 202, {
             ok => JSON::true, reqid => $reqid, async => JSON::true, results => $results,
@@ -634,7 +634,7 @@ sub _handle_run ($conn, $peer, $body, $config) {
 
     Exec::RunStore::record_sync(
         reqid => $reqid, script => $script, hosts => $hosts, results => $results,
-        submitter => { username => $username, source_ip => $peer },
+        submitter => _submitter($username, $peer),
     );
 
     _send_json($conn, 200, { ok => JSON::true, reqid => $reqid, results => $results });
@@ -865,6 +865,17 @@ sub _build_live_spec ($spec, $hostnames, $results) {
     $spec->{'x-ctrl-exec-scripts'} = \%ext;
 
     return $spec;
+}
+
+# Who submitted a run, as stored with its record. peer_uid (the unix-socket
+# caller's uid) is stored only when the run came over the socket, so a TCP
+# record is unchanged. It is for the auth hook on a later /status, never echoed.
+sub _submitter ($username, $peer) {
+    return {
+        username  => $username,
+        source_ip => $peer,
+        (defined $PEER_UID ? (peer_uid => $PEER_UID + 0) : ()),
+    };
 }
 
 sub _handle_status ($conn, $reqid, $peer, $auth_token, $config) {
