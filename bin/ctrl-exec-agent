@@ -402,6 +402,7 @@ MSG
 
     Exec::Agent::Config::log_skipped($skipped);
     Exec::Agent::Config::log_ownership_warnings($allowlist);
+    Exec::Agent::Config::log_unknown_options($allowlist);
 
     # Profiles are enforced only by the executor. If scripts declare non-default
     # profiles but executor_socket is not set, those profiles are NOT applied -
@@ -478,6 +479,7 @@ MSG
             $skipped      = $plan->{skipped};
             Exec::Agent::Config::log_skipped($skipped);
             Exec::Agent::Config::log_ownership_warnings($allowlist);
+            Exec::Agent::Config::log_unknown_options($allowlist);
             $rate_config  = $config->{rate_limit} // {};
             $max_children = $config->{max_children} // 256;
             $revoked_path = $config->{revoked_serials}
@@ -1137,6 +1139,8 @@ sub mode_self_check {
         my $limit   = $ids ? ', dispatchers: ' . join(',', @$ids) : '';
         $warn .= " [warning: dispatcher '$_' is not in the trusted map]"
             for grep { !$paired_ids{$_} } @{ $ids // [] };
+        $warn .= " [warning: unknown option '$_']"
+            for @{ Exec::Agent::Config::script_unknown_options($name, $allowlist) };
         print "  Script '$name': $path  (profile: $profile$limit) [$ok]$warn\n";
     }
 

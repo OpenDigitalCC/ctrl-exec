@@ -52,6 +52,8 @@ dblcomma = $dir/s/open.sh dispatchers=d1,,d2
 badid   = $dir/s/open.sh dispatchers=-d1
 spaced  = $dir/s/open.sh dispatchers=d1, d2
 toolong = $dir/s/open.sh dispatchers=${\ ('a' x 65)}
+typo    = $dir/s/open.sh dispatcher=d1
+odd     = $dir/s/open.sh timeout=5 schema=x
 CONF
 
 my ($allowlist, $skipped);
@@ -146,9 +148,9 @@ subtest 'run: no option = every trusted dispatcher' => sub {
 };
 
 subtest 'discovery: a script limited to others is not listed' => sub {
-    is_deeply listed_for('aa01'), [qw(both d1only nbsp open unknown)], 'd1 sees its scripts and the open one';
-    is_deeply listed_for('bb02'), [qw(both open)], 'd2 does not see d1only or unknown';
-    is_deeply listed_for('cc03'), [qw(open)], 'd3 sees only the open one';
+    is_deeply listed_for('aa01'), [qw(both d1only nbsp odd open typo unknown)], 'd1 sees its scripts and the open one';
+    is_deeply listed_for('bb02'), [qw(both odd open)], 'd2 does not see d1only, typo or unknown';
+    is_deeply listed_for('cc03'), [qw(odd open)], 'd3 sees only the open ones';
 };
 
 subtest 'an id not in the trusted map is logged once per load, entry kept' => sub {
@@ -165,6 +167,24 @@ subtest 'an id not in the trusted map is logged once per load, entry kept' => su
     Exec::Agent::Config::log_unknown_dispatchers($allowlist, { %$full, 'd' x 64 . ' 99' => 'dispatcher-9' });
     is scalar(grep { $_->{ACTION} eq 'allowlist-unknown-dispatcher' } @logs), 0,
         'paired later: nothing logged';
+};
+
+subtest 'dispatcher= (singular) limits like dispatchers=' => sub {
+    is_deeply Exec::Agent::Config::script_dispatchers('typo', $allowlist), ['d1'], 'read as dispatchers=d1';
+    is run_as('aa01', 'typo')->{exit}, 0, 'd1 runs it';
+    like run_as('bb02', 'typo')->{error}, qr/dispatcher 'd2' is not in its dispatchers= list/, 'd2 refused';
+    is_deeply Exec::Agent::Config::script_unknown_options('typo', $allowlist), [], 'not an unknown option';
+};
+
+subtest 'an unknown option is logged once per load, entry kept and unchanged' => sub {
+    is_deeply Exec::Agent::Config::script_unknown_options('odd', $allowlist), [qw(schema timeout)], 'recorded';
+    is Exec::Agent::Config::script_dispatchers('odd', $allowlist), undef, 'no limit';
+    is run_as('cc03', 'odd')->{exit}, 0, 'runs as before';
+    @logs = ();
+    Exec::Agent::Config::log_unknown_options($allowlist);
+    my @w = grep { $_->{ACTION} eq 'allowlist-unknown-option' } @logs;
+    is_deeply [ map { "$_->{level} $_->{NAME} $_->{OPTION}" } @w ],
+              ['WARNING odd schema', 'WARNING odd timeout'], 'one WARNING line per unknown key';
 };
 
 subtest 'self-check (local) lists every script with its limit' => sub {
@@ -187,6 +207,9 @@ subtest 'self-check (local) lists every script with its limit' => sub {
     like $out, qr{Script 'unknown': .*\[warning: dispatcher 'dispatcher-9' is not in the trusted map\]},
         'an unknown id is pointed out';
     like $out, qr{Script 'empty': SKIPPED - its dispatchers= value}, 'a bad value is listed as skipped';
+    like $out, qr{Script 'typo': \S+  \(profile: default, dispatchers: d1\) \[ok\]\n}, 'dispatcher= shown as the limit';
+    like $out, qr{Script 'odd': \S+  \(profile: default\) \[ok\] \[warning: unknown option 'schema'\] \[warning: unknown option 'timeout'\]\n},
+        'unknown options pointed out';
 };
 
 done_testing;

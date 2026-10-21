@@ -1637,6 +1637,16 @@ The value is one or more dispatcher ids from the agent's trusted-dispatcher
 map (`/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers`, the id given at
 pairing), separated by commas with no spaces. Ids are compared exactly, case
 included. Certificate serials are not used, because they change on rotation.
+`dispatcher=` (singular) is read as `dispatchers=`, so that typo limits the
+script rather than leaving it open. If both spellings are on one line, the
+last one on the line wins, as with any repeated option. The agent and the
+executor apply the same rule.
+
+Any other `key=value` option the agent does not know (`timeout=5`, `schema=x`,
+`dispatch=d1`) is ignored, as before. The agent logs
+`allowlist-unknown-option` for it once per load, and `cea self-check` shows
+`[warning: unknown option '<key>']` next to the script. The entry is kept and
+runs as before.
 
 No `dispatchers=` (default)
 : Every trusted dispatcher can run and see the script, as before.

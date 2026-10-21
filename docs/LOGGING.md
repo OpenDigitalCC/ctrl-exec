@@ -1353,6 +1353,28 @@ Fields
 ACTION=allowlist-skip REASON="'/srv/scripts/agent-cert-deploy.sh' is not under script_dirs (/opt/ctrl-exec-scripts)" SCRIPT=agent-cert-deploy
 ```
 
+### allowlist-unknown-option
+
+Emitted at agent startup and on each reload, once per unknown `key=value`
+option on an allowlisted `scripts.conf` entry (any key other than `profile`,
+`input`, `output`, `dispatchers` and its alias `dispatcher`). The option is
+ignored and the entry runs as before; the line points at a likely misspelling.
+
+Priority
+: WARNING
+
+Fields
+
+| Field | Type | Description |
+| --- | --- | --- |
+| ACTION | string | `allowlist-unknown-option` |
+| NAME | string | Script name from `scripts.conf` |
+| OPTION | string | The unknown key |
+
+```
+ACTION=allowlist-unknown-option NAME=report OPTION=timeout
+```
+
 ### allowlist-unknown-dispatcher
 
 Emitted at agent startup and on each reload, once per id in a `scripts.conf`
@@ -1750,7 +1772,7 @@ ACTION=rotation-state-corrupt PATH=/var/lib/ctrl-exec/rotation.json ERROR="..." 
 | Priority | Syslog level | Used for |
 | --- | --- | --- |
 | INFO | `daemon.info` | Normal operations: `start`, `run`, `ping`, `dispatch`, `lock-acquire`, `lock-release`, `renew`, `renew-complete`, `auth` pass, `pair-complete`, `pair-approve`, `pair-deny`, `pair-request`, `pair-reject`, `pairing-mode-start`, `pairing-mode-stop`, `capabilities` success, `rate-evict`, `unpair`, `api-start`, `api-stop`, `api-request`, `status-read` (served, not-found), `cert-check`, `cert-renewal-start`, `cert-rotated`, `serial-broadcast`, `serial-retire`, `serial-confirmed`, `revoked-serials-absent`, `trusted-map-upgrade`, `ca-bundle-reload` |
-| WARNING | `daemon.warning` | Security and access events requiring attention: `deny`, `serial-reject`, `result-deny`, `status-read` (denied), `revoked-cert`, `tls-failure`, `ip-block`, `rate-block`, `capabilities-deny`, `capabilities-no-serial`, `pair-denied`, `pair-timeout`, `lock-conflict`, `config-warn`, `allowlist-skip`, `allowlist-unknown-dispatcher`, `stdin-timeout`, `auth` deny, `serial-broadcast-fail`, `serial-stale`, `pair-keep-unsupported` |
+| WARNING | `daemon.warning` | Security and access events requiring attention: `deny`, `serial-reject`, `result-deny`, `status-read` (denied), `revoked-cert`, `tls-failure`, `ip-block`, `rate-block`, `capabilities-deny`, `capabilities-no-serial`, `pair-denied`, `pair-timeout`, `lock-conflict`, `config-warn`, `allowlist-skip`, `allowlist-unknown-dispatcher`, `allowlist-unknown-option`, `stdin-timeout`, `auth` deny, `serial-broadcast-fail`, `serial-stale`, `pair-keep-unsupported` |
 | ERR | `daemon.err` | Failures requiring investigation: `accept-fatal`, `renew` failure, `capabilities` error, `ping` error, `run` error, `auth` error (hook not executable), `cert-rotation-fail`, `rotation-state-corrupt`, `run-store-fail`, `status-read` (error) |
 
 

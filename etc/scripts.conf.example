@@ -55,6 +55,9 @@
 # the agent identified from the connection's certificate, never one the request
 # names. An id not (yet) in the trusted map is logged at load and the entry is
 # kept; a malformed value skips the entry. `cea self-check` shows the limit.
+# dispatcher= (singular) is read as dispatchers=; with both on a line the last
+# one wins. Any other unknown key=value option is ignored, as before, but
+# logged at load (allowlist-unknown-option) and flagged by `cea self-check`.
 #
 # A line with more than one path, a relative path, a name outside [A-Za-z0-9_-],
 # or a path of 4096 characters or more is skipped. If a name appears twice, the

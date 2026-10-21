@@ -540,7 +540,10 @@ static int find_script(const char *path, const char *want,
                     if (strcmp(tok, "profile") == 0)    profv  = te + 1;
                     else if (strcmp(tok, "input") == 0) inputv = te + 1;
                     else if (strcmp(tok, "output") == 0) outputv = te + 1;
-                    else if (strcmp(tok, "dispatchers") == 0) dispv = te + 1;
+                    /* dispatcher= is read as dispatchers= (T-063); across the two
+                     * spellings the last on the line wins, as in the Perl parser. */
+                    else if (strcmp(tok, "dispatchers") == 0 ||
+                             strcmp(tok, "dispatcher") == 0) dispv = te + 1;
                     continue;
                 }
             }

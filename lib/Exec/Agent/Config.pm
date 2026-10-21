@@ -332,6 +332,11 @@ sub _validate_config ($config, $path) {
     }
 }
 
+# The scripts.conf key=value options the agent reads (dispatcher= is read as
+# dispatchers=). Any other key is an unknown option: logged once per load
+# (log_unknown_options) and shown by self-check; the entry is unaffected.
+use constant KNOWN_OPTIONS => { map { $_ => 1 } qw(profile input output dispatchers) };
+
 # Load and parse scripts.conf allowlist
 # Returns hashref: { script_name => { path, profile, input, output[, dispatchers] } }
 # Dies on parse errors; unknown/bad entries are skipped with a warning
@@ -379,10 +384,18 @@ sub load_allowlist_full ($path = undef, $script_dirs = undef, $ownership = 'warn
             # independent key=value annotations (profile=, future schema=/
             # timeout=). The lone bare token is the path; key=value tokens are
             # annotations - so 'profile=' may appear before or after the path.
-            my ($script_path, $extra_path, %annot);
+            # 'dispatcher=' (singular) is read as 'dispatchers=' (T-063), so the
+            # likeliest typo limits the script instead of leaving it open;
+            # across the two spellings the last on the line wins, as for any
+            # repeated annotation (the executor does the same). Any other key
+            # is kept as an unknown option: logged at load, behaviour unchanged.
+            my ($script_path, $extra_path, %annot, %unknown);
             for my $tok (split /\s+/, $rest) {
                 if ($tok =~ /^([a-z_]+)=(.*)$/) {
-                    $annot{$1} = $2;
+                    my ($k, $v) = ($1, $2);
+                    $k = 'dispatchers' if $k eq 'dispatcher';
+                    $unknown{$k} = 1 unless KNOWN_OPTIONS->{$k};
+                    $annot{$k} = $v;
                 }
                 elsif (defined $script_path) {
                     $extra_path = $tok;
@@ -477,6 +490,7 @@ sub load_allowlist_full ($path = undef, $script_dirs = undef, $ownership = 'warn
                 input   => $input_mode,
                 output  => $output_mode,
                 (defined $dispatchers ? (dispatchers => $dispatchers) : ()),
+                (%unknown ? (unknown_options => [ sort keys %unknown ]) : ()),
                 (defined $owner_why ? (ownership_warning => $owner_why) : ()),
             };
         }
@@ -766,6 +780,27 @@ sub log_ownership_warnings ($allowlist) {
             MODE   => 'warn',
         });
     }
+}
+
+# Log each unknown key=value option on an allowlisted scripts.conf entry, once
+# per load (T-063): a misspelt option would otherwise be ignored without a
+# word. The entry is kept and runs as before.
+sub log_unknown_options ($allowlist) {
+    for my $name (sort keys %{ $allowlist // {} }) {
+        for my $key (@{ script_unknown_options($name, $allowlist) }) {
+            Exec::Log::log_action('WARNING', {
+                ACTION => 'allowlist-unknown-option',
+                NAME   => $name,
+                OPTION => $key,
+            });
+        }
+    }
+}
+
+# The unknown option keys recorded for a script at load (sorted), or [].
+sub script_unknown_options ($name, $allowlist) {
+    my $e = $allowlist->{$name};
+    return ref $e eq 'HASH' ? ($e->{unknown_options} // []) : [];
 }
 
 # The ownership warning recorded for a script at load (script_ownership =

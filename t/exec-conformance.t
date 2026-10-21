@@ -376,6 +376,25 @@ push @fixtures, (
         names   => [qw(empty trail lead dbl dash dot long space sep upperkey utf8 star toolong)],
     },
     {
+        label   => 'scripts: dispatcher= (singular) is dispatchers=; last spelling wins',
+        expect  => {
+            sing  => 'OK path=/opt/s.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn|dispatchers=d1',
+            pl2sg => 'OK path=/opt/s.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn|dispatchers=d2',
+            sg2pl => 'OK path=/opt/s.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn|dispatchers=d1,d3',
+            badsg => 'DENY not-allowlisted',
+            fixed => 'OK path=/opt/s.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn|dispatchers=d1',
+            other => 'OK path=/opt/s.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn|dispatchers=*',
+        },
+        agent   => $REQUIRED . "[profile default]\nrun_as = nobody\n",
+        scripts => "sing = dispatcher=d1 /opt/s.sh\n"
+                 . "pl2sg = /opt/s.sh dispatchers=d1 dispatcher=d2\n"
+                 . "sg2pl = /opt/s.sh dispatcher=d2 dispatchers=d1,d3\n"
+                 . "badsg = /opt/s.sh dispatcher=d1,\n"
+                 . "fixed = /opt/s.sh dispatcher=d1, dispatchers=d1\n"
+                 . "other = /opt/s.sh dispatch=d1 dispatchrs=d1\n",
+        names   => [qw(sing pl2sg sg2pl badsg fixed other)],
+    },
+    {
         label   => 'scripts: dispatchers= with pasted NBSPs and a later skipped line',
         expect  => {
             nb  => 'OK path=/opt/nb.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn|dispatchers=d1,d2',
