@@ -16,6 +16,22 @@ Each entry states the question or symptom, the underlying cause, and what to do.
 The material is drawn from real deployment experience: the things that were not
 obvious until someone ran into them.
 
+Start with doctor
+: When something does not work and the symptom does not say why ("(no
+  scripts)", "Connection refused", a refusal to start), run doctor on the host
+  first. It lists every problem it finds, one line each with the command that
+  fixes it, and logs each (`ACTION=doctor-finding`):
+
+  ```bash
+  sudo ctrl-exec-agent doctor          # on an agent
+  sudo ctrl-exec-dispatcher doctor     # on a dispatcher
+  ```
+
+  `--fix` makes only the fixes that cannot lose data or widen access; `--json`
+  is for automation. Package upgrades and `install.sh` run `doctor --brief`
+  after an upgrade and print the result. See REFERENCE.md, *doctor*, for the
+  checks.
+
 
 ## Security profiles: the mental model
 
@@ -323,6 +339,8 @@ Cause
 Fix
 : Use the fixes in the table above (`chown root`, `chmod go-w`, or move the
   script under root-owned directories), reload, and check self-check again.
+  `sudo ctrl-exec-agent doctor` lists each reason once, with the scripts it
+  covers and the command for it; it never changes the permissions itself.
   When it shows no warnings, set `script_ownership = strict` in `agent.conf`
   and reload, so a later change to the layout is refused instead of warned
   about. To keep the current layout, leave `warn`, and accept that the group
@@ -406,6 +424,11 @@ ctrl-exec: restarted ctrl-exec-executor to apply the upgrade.
 ctrl-exec: restarted ctrl-exec-agent to apply the upgrade.
 ```
 
+After the restarts the upgrade runs `ctrl-exec-agent doctor --brief` (and
+`ctrl-exec-dispatcher doctor --brief` for the dispatcher package) and prints
+the result: one line when there is nothing to fix, otherwise each problem with
+its fix. It only reports; it never fails the upgrade.
+
 You should not need a manual `systemctl restart` after `apt install` of a newer
 package. If you do, check that the services were actually running before the
 upgrade - a service that was stopped is not started by the upgrade (see the next
@@ -443,6 +466,8 @@ directory whose CA your agents trust, merge it into
 `/etc/ctrl-exec-dispatcher`, remove `/etc/ctrl-exec`, and change the paths
 inside `ctrl-exec.conf` from `/etc/ctrl-exec/` to `/etc/ctrl-exec-dispatcher/`.
 The refusal is logged as `ACTION=config-dir RESULT=refused`.
+`ctrl-exec-dispatcher doctor` still runs on such a host and reports it, and
+reports a config used in place with the command that moves it.
 
 
 ### "Failed to stop ... Unit not loaded" during install
@@ -512,9 +537,10 @@ Profiles set but never applied | executor_socket unset, so the executor is not i
 Every run fails with "ctrl-exec-executor is not available" | executor_socket is set but the executor is not running, or was never built (a tarball install on a host without gcc or the libcap headers). | self-check shows "Executor: NOT AVAILABLE". systemctl start ctrl-exec-executor.service; if the unit or /usr/local/sbin/ctrl-exec-executor does not exist, install gcc and libcap-dev and re-run install.sh --agent. To run without profiles instead, comment out executor_socket.
 ```
 
-The two first-line tools both run on the agent host with no dispatcher access:
+The first-line tools all run on the agent host with no dispatcher access:
 
 ```bash
+sudo ctrl-exec-agent doctor        # every problem found, each with its fix
 sudo ctrl-exec-agent self-check    # parse and validate the configuration
 sudo ctrl-exec-agent self-ping     # confirm the listener, TLS and serial policy
 ```

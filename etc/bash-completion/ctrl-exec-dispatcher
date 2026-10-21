@@ -38,7 +38,7 @@ _ctrl_exec_dispatcher() {
 
     local modes="run status wait ping pairing-mode list-requests approve deny ca-fingerprint
         setup-ca setup-ctrl-exec list-agents edit-agent list-locks rotate-cert
-        serial-status unpair maintain"
+        serial-status unpair maintain doctor"
     local global_opts="--config --json --port --username --token --version"
 
     # "--opt=value": bash splits it into --opt, =, value.
@@ -98,6 +98,7 @@ _ctrl_exec_dispatcher() {
         approve)      mode_opts="--lookup-by --ip --agent-port" ;;
         edit-agent)   mode_opts="--rename --ip --agent-port --lookup-by" ;;
         list-agents)  mode_opts="--tags" ;;
+        doctor)       mode_opts="--fix --brief" ;;
     esac
 
     if [[ $cur == -* ]]; then

@@ -97,6 +97,37 @@ and exits 1.
 .TP
 .B serial-status
 Show the control-host serial and per-agent serial state.
+.TP
+.B doctor
+List every problem this control host's files show, one line each:
+.B PROBLEM
+or
+.BR note ,
+what was found, and the command that fixes it. Checks the config directory (a
+config still at
+.I /etc/ctrl-exec
+used in place, or one the other modes refuse; doctor itself runs either way),
+ctrl-exec.conf, the CA and control-host certificate, the auth hook (missing,
+not executable, or allowing everything as the shipped example does), the API
+listener settings and its unix socket's mode and group, and registered agents
+whose certificate another control host's CA issued and expires within 30 days,
+or that have expired. Each finding is logged
+.RB ( ACTION=doctor-finding ).
+Runs without root, reporting what it could not read as a note. Exit 0 when no
+problem was found, 1 when one was, 2 on bad usage.
+.B \-\-fix
+also restores the API socket's mode (0660) and group (api_socket_group), as
+ctrl-exec-api sets them at every start; nothing else.
+.B \-\-brief
+lists problems only.
+.B \-\-json
+prints one JSON object (see
+.BR ctrl-exec-agent (8)).
+Package upgrades and
+.B install.sh
+run
+.B "doctor \-\-brief"
+after an upgrade.
 .SH OPTIONS
 .TP
 .BI \-\-config " path"
@@ -117,6 +148,17 @@ Auth token in the request context (default:
 .TP
 .B \-\-json
 Output results as JSON.
+.TP
+.B \-\-fix
+With
+.BR doctor :
+also make the safe fixes (see
+.BR doctor ).
+.TP
+.B \-\-brief
+With
+.BR doctor :
+list problems only, notes as a count.
 .TP
 .B \-\-version
 Print the version and exit.

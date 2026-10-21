@@ -797,6 +797,53 @@ sub log_unknown_options ($allowlist) {
     }
 }
 
+# Where the trusted-dispatcher map and the revocation list are, as agent.conf
+# sets them or by default.
+sub trusted_dispatchers_path ($config) {
+    return $config->{trusted_dispatchers_path} // '/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers';
+}
+
+sub revoked_serials_path ($config) {
+    return $config->{revoked_serials} // '/etc/ctrl-exec-agent/revoked-serials';
+}
+
+# The ids of the paired dispatchers, as { id => 1 }: the trusted map read
+# without the CA bundle, so the caller never rewrites the map (serve upgrades
+# it). Used to point out a dispatchers= id that no paired dispatcher has.
+sub paired_dispatcher_ids ($config) {
+    return { map { $_ => 1 } values %{ Exec::Agent::AgentPairing::load_trusted_dispatchers(
+        path => trusted_dispatchers_path($config)) } };
+}
+
+# What is worth a warning about one allowlisted script, as a list of
+#   { kind => 'ownership' | 'unknown-dispatcher' | 'unknown-option',
+#     value => <reason | dispatcher id | option key>, text => <warning text> }
+# in that order. $paired is paired_dispatcher_ids. self-check prints each text
+# as "[warning: <text>]"; doctor turns each into a finding.
+sub script_warnings ($name, $allowlist, $paired) {
+    my @w;
+    if (defined(my $owner = script_ownership_warning($name, $allowlist))) {
+        push @w, { kind => 'ownership', value => $owner, text => $owner };
+    }
+    for my $id (grep { !$paired->{$_} } @{ script_dispatchers($name, $allowlist) // [] }) {
+        push @w, { kind => 'unknown-dispatcher', value => $id,
+                   text => "dispatcher '$id' is not in the trusted map" };
+    }
+    for my $key (@{ script_unknown_options($name, $allowlist) }) {
+        push @w, { kind => 'unknown-option', value => $key, text => "unknown option '$key'" };
+    }
+    return @w;
+}
+
+# The allowlisted scripts (sorted) that declare a profile other than 'default'
+# while executor_socket is unset: only the executor applies profiles, so these
+# run as the unprivileged agent user. serve warns about them; doctor reports them.
+sub profiled_without_executor ($config, $allowlist) {
+    return () if $config->{executor_socket};
+    my @names = sort grep { (script_profile($_, $allowlist) // 'default') ne 'default' } keys %$allowlist;
+    return @names;
+}
+
 # The unknown option keys recorded for a script at load (sorted), or [].
 sub script_unknown_options ($name, $allowlist) {
     my $e = $allowlist->{$name};

@@ -20,7 +20,7 @@ sub complete {
 }
 
 my @modes = qw(serve request-pairing pairing-status self-check self-ping
-    promote-cert cert-staged paired remove-dispatcher list-dispatchers);
+    promote-cert cert-staged paired remove-dispatcher list-dispatchers doctor);
 
 is_deeply(complete('cea', ''), [ sort @modes ], 'first word: all modes');
 is_deeply(complete('cea', 'self'), [qw(self-check self-ping)], 'mode prefix');
@@ -33,14 +33,16 @@ is_deeply(complete('cea', 'request-pairing', '--d'), [qw(--dispatcher --dispatch
     'request-pairing --dispatcher');
 is_deeply(complete('cea', 'request-pairing', '--dispatcher-f'), ['--dispatcher-fingerprint'],
     'request-pairing --dispatcher-fingerprint');
-is_deeply(complete('cea', 'request-pairing', '--dispatcher', 'h', '--b'), ['--background'],
+is_deeply(complete('cea', 'request-pairing', '--dispatcher', 'h', '--ba'), ['--background'],
     'request-pairing --background');
 is_deeply(complete('cea', 'request-pairing', '--lookup-by', ''), [qw(hostname ip)], '--lookup-by values');
 is_deeply(complete('cea', '--'),
-    [qw(--allowlist --background --config --dispatcher --dispatcher-fingerprint --lookup-by
-        --pidfile --port --rekey --timeout --version)],
+    [qw(--allowlist --background --brief --config --dispatcher --dispatcher-fingerprint --fix
+        --json --lookup-by --pidfile --port --rekey --timeout --version)],
     'all options');
 is_deeply(complete('cea', 'serve', '--al'), ['--allowlist'], 'serve --allowlist');
+is_deeply(complete('cea', 'do'), ['doctor'], 'doctor completes');
+is_deeply(complete('cea', 'doctor', '--f'), ['--fix'], 'doctor --fix');
 
 my $alias = `bash -c "source '$comp'; complete -p cea ctrl-exec-agent" 2>&1`;
 like($alias, qr/-F _ctrl_exec_agent cea/, 'cea registered');

@@ -92,6 +92,32 @@ Print each trusted control host as one line,
 sorted by id then CA (the fingerprint is
 .B \-
 for an old map line not yet tied to a CA). Root only.
+.TP
+.B doctor
+List every problem the agent's files show, one line each:
+.B PROBLEM
+(something does not work as configured, or is unsafe) or
+.B note
+(works; worth knowing, or could not be checked), what was found, and the
+command that fixes it. Checks agent.conf, every scripts.conf entry (skipped
+and why, missing or not executable, the ownership rule under
+.BR "script_ownership = warn" ,
+unknown options,
+.B dispatchers=
+ids no paired control host has), profiles without the executor, the executor
+socket, pairing and the certificate, and the trust state (map entries whose CA
+is not in the bundle, CAs no entry uses, an old-format map, a certificate whose
+issuing control host is no longer trusted, revocations under every CA). Each
+finding is also logged
+.RB ( ACTION=doctor-finding ).
+Runs without root, reporting what it could not read as a note. Exit 0 when no
+problem was found (notes may remain), 1 when one was, 2 on bad usage. Package
+upgrades and
+.B install.sh
+run
+.B "doctor \-\-brief"
+after an upgrade and print the result; never
+.BR \-\-fix .
 .SH OPTIONS
 .TP
 .BI \-\-config " path"
@@ -133,6 +159,7 @@ With
 generate a new key and have the control host sign it even when already
 paired. The control hosts the agent is paired with then refuse the new
 certificate until each is re-paired.
+.TP
 .BI \-\-pidfile " path"
 For
 .BR remove-dispatcher :
@@ -145,6 +172,33 @@ background. For orchestrated installations.
 .TP
 .BI \-\-timeout " n"
 Seconds to wait for approval in background mode (default 30, max 600).
+.TP
+.B \-\-fix
+With
+.BR doctor :
+also make the fixes that cannot lose data or widen access, and list them as
+.BR fixed :
+an old-format trusted-dispatcher map is upgraded in place (as the agent does
+when it starts), and a CA in the bundle that no trusted control host uses and
+that did not issue the agent's certificate is removed (never the last one).
+Nothing else is changed: permissions and ownership of script directories, for
+example, are reported only. A second run changes nothing.
+.TP
+.B \-\-json
+With
+.BR doctor :
+print one JSON object on stdout:
+.IR program ", " ok ", " problems ", " notes ", " fixed
+and
+.I findings
+(each
+.IR severity ", " check ", " what ", " fix ", " fixed ).
+.TP
+.B \-\-brief
+With
+.BR doctor :
+list problems (and fixes) only, notes as a count; nothing to fix prints one
+line.
 .TP
 .B \-\-version
 Print the version and exit.

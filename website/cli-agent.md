@@ -90,6 +90,14 @@ ctrl-exec-agent self-check && \
     sudo systemctl kill --signal=HUP ctrl-exec-agent
 ```
 
+# doctor
+
+```
+sudo ctrl-exec-agent doctor [--fix] [--json] [--brief]
+```
+
+Lists every problem the agent's files show, one line each with the command that fixes it: scripts skipped and why, missing or not executable, the ownership rule (a note naming the scripts and what `script_ownership = strict` would do - the scripts run), unknown `scripts.conf` options and `dispatchers=` ids, profiles without the executor, the executor, pairing, and the trust state (dispatchers whose CA is missing from `ca.crt`, unused CAs, a certificate whose issuing dispatcher was removed). Exit 0 when there is nothing to fix, 1 when there is. `--fix` makes only the fixes that cannot lose data or widen access (an old trusted-map format upgraded, an unused CA removed); it never changes script permissions. `--json` prints one JSON object. Package upgrades and `install.sh` run it after an upgrade.
+
 # pairing-status
 
 ```

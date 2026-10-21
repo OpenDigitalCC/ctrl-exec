@@ -223,6 +223,14 @@ ced serial-status
 
 Shows the current certificate rotation state and per-agent serial confirmation status. Use after `rotate-cert` to confirm all agents have received the new serial.
 
+# doctor
+
+```
+sudo ced doctor [--fix] [--json] [--brief]
+```
+
+Lists every problem this dispatcher's files show, one line each with the command that fixes it: the config directory (an old `/etc/ctrl-exec` used in place, or one the other modes refuse), `ctrl-exec.conf`, the CA and dispatcher certificate, an auth hook that is missing or allows everything, the API listener settings and socket permissions, and agents whose certificate another dispatcher's CA issued and that expire within 30 days. Exit 0 when there is nothing to fix, 1 when there is. `--fix` makes only the fixes that cannot lose data or widen access (the API socket's mode and group); `--json` prints one JSON object. Package upgrades and `install.sh` run it after an upgrade.
+
 # Exit Codes
 
 | Code | Meaning |

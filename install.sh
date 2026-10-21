@@ -1063,6 +1063,17 @@ uninstall() {
     info "Uninstall complete."
 }
 
+# --- after an upgrade ---
+
+# After an upgrade, print what doctor finds (T-055): report only, never --fix,
+# and its exit status never fails the install. --brief lists the problems and
+# counts the notes, so a host with nothing to fix gets one line.
+run_doctor() {
+    local prog="$1"
+    info "Checking the upgraded install: $prog doctor --brief"
+    "$BIN_DIR/$prog" doctor --brief || true
+}
+
 # --- next steps ---
 
 print_next_steps_agent() {
@@ -1257,13 +1268,27 @@ main() {
     check_perl_modules "$ROLE"
     install_lib
 
+    # An existing config means this run upgrades the role (doctor runs after it).
+    local upgrade=false
     case "$ROLE" in
         agent)
+            if [[ -f "$AGENT_CONF_DIR/agent.conf" ]]; then
+                upgrade=true
+            fi
             install_agent
+            if [[ "$upgrade" == true ]]; then
+                run_doctor ctrl-exec-agent
+            fi
             print_next_steps_agent
             ;;
         ctrl-exec-dispatcher)
+            if [[ -f "$EXEC_CONF_DIR/ctrl-exec.conf" || -f "$LEGACY_EXEC_CONF_DIR/ctrl-exec.conf" ]]; then
+                upgrade=true
+            fi
             install_ctrl_exec_dispatcher
+            if [[ "$upgrade" == true ]]; then
+                run_doctor ctrl-exec-dispatcher
+            fi
             print_next_steps_ctrl_exec_dispatcher
             ;;
         api)

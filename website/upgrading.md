@@ -42,6 +42,7 @@ The general upgrade procedure for all versions:
    ced --version
    ced ping <hostname>
    ```
+   The installer and the packages also run `doctor --brief` after an upgrade and print anything that needs fixing, with the command for it. Run it again at any time: `sudo ced doctor` on the dispatcher, `sudo ctrl-exec-agent doctor` on an agent.
 
 # Version Notes
 

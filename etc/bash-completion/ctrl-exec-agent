@@ -11,9 +11,9 @@ _ctrl_exec_agent() {
     COMPREPLY=()
 
     local modes="serve request-pairing pairing-status self-check self-ping
-        promote-cert cert-staged paired remove-dispatcher list-dispatchers"
+        promote-cert cert-staged paired remove-dispatcher list-dispatchers doctor"
     local opts="--config --allowlist --dispatcher --dispatcher-fingerprint --port
-        --background --timeout --lookup-by --rekey --pidfile --version"
+        --background --timeout --lookup-by --rekey --pidfile --json --fix --brief --version"
 
     # "--opt=value": bash splits it into --opt, =, value.
     if [[ $prev == = && $COMP_CWORD -ge 2 ]]; then

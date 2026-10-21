@@ -636,6 +636,67 @@ Status values:
 
 ---
 
+### doctor
+
+List every problem this dispatcher's files show, each with the command that
+fixes it. Use it after an upgrade, or when something does not work and the
+symptom does not say why.
+
+```bash
+ced doctor [--fix] [--json] [--brief]
+```
+
+One line per finding, problems first, then a summary line:
+
+```
+PROBLEM  The auth hook /etc/ctrl-exec-dispatcher/auth-hook allows every request (it is the shipped example, or does nothing but exit 0): every API and CLI request is authorised. Fix: add real rules (examples: /usr/share/ctrl-exec/examples/auth-hook.example): sudoedit /etc/ctrl-exec-dispatcher/auth-hook; or comment out auth_hook in /etc/ctrl-exec-dispatcher/ctrl-exec.conf (then api_auth_default applies)
+note     The dispatcher config is still at /etc/ctrl-exec and is used there; it works as it is, but has not been moved to /etc/ctrl-exec-dispatcher. Fix: sudo dpkg-reconfigure ctrl-exec-dispatcher (moves it and leaves a symlink at /etc/ctrl-exec)
+ctrl-exec-dispatcher doctor: 1 problem, 1 note.
+```
+
+`PROBLEM` is something that does not work as configured, or is unsafe; `note`
+is something that works but is worth knowing, or that could not be checked.
+Checks (the `check` id in `--json` in brackets):
+
+| Check | Finding |
+|---|---|
+| Config directory | `ced` and `ctrl-exec-api` refuse to start: `/etc/ctrl-exec` beside `/etc/ctrl-exec-dispatcher` (problem, `config-dir`); a config still at `/etc/ctrl-exec`, or a mount there, used in place (note, `config-dir-in-place`, with the command that moves it). `doctor` runs in both cases; the other modes refuse the first |
+| `ctrl-exec.conf` | cannot be loaded (problem, `config`) |
+| CA and certificate | a fresh install with neither (note, `not-set-up`); `ca.crt` or the dispatcher certificate missing (problem, `ca-cert`, `dispatcher-cert`); the certificate expired or due and not rotated, within 30 days or `cert_renewal_days` (problem, `dispatcher-cert-expiry`) |
+| Auth hook | `auth_hook` names a missing or non-executable file, so every request is denied (problem, `auth-hook-missing`, `auth-hook-not-executable`); the hook allows everything - after comments, nothing but `exit 0`, as the shipped example (problem, `auth-hook-allow-all`) |
+| API listener | settings `ctrl-exec-api` refuses (problem, `api-config`, with its reason); `api_socket` absent (note, `api-socket-absent`: the API is not running); the socket wider than 0660, or not in `api_socket_group` (problem, `api-socket-mode`, `api-socket-group`) |
+| Registry | an agent paired keeping a certificate another dispatcher's CA issued (`approve` pinned the CA), expiring within 30 days: this dispatcher never renews it (problem, `agent-cert-pinned-expiry`); any other agent whose certificate has expired (problem, `agent-cert-expired`) |
+
+`--fix` also makes the changes that cannot lose data or widen access, and
+lists each as `fixed`: the API socket's mode back to 0660 and its group back to
+`api_socket_group`, which is what `ctrl-exec-api` sets at every start. Nothing
+else is changed (moving the config directory is the installers' job). A second
+`--fix` changes nothing.
+
+`--json` prints one object on stdout and nothing else:
+
+```json
+{"findings":[{"check":"auth-hook-allow-all","fix":"...","fixed":false,"severity":"problem","what":"..."}],"fixed":0,"notes":0,"ok":false,"problems":1,"program":"ctrl-exec-dispatcher"}
+```
+
+`--brief` lists problems and fixes only, and counts the notes; with nothing to
+fix it prints one line. The package upgrade and `install.sh` run
+`doctor --brief` after an upgrade and print the result; they never use
+`--fix`, and its result never fails the install.
+
+Each finding is also logged: `ACTION=doctor-finding PROGRAM=ctrl-exec-dispatcher
+SEVERITY=<problem|note> CHECK=<id> WHAT=<text> FIX=<command>` (`FIXED=1` when
+`--fix` made it), at WARNING for a problem, INFO otherwise.
+
+Without root it checks what it can read (members of the `ctrl-exec` group read
+the config and the registry) and reports the rest as a note: `Could not read
+<path> (permission denied)`.
+
+Exit code: 0 when no problem was found (notes may remain), 1 when one was, 2 on
+bad usage.
+
+---
+
 ## ctrl-exec.conf
 
 Configuration file for the dispatcher and ctrl-exec-api processes.
@@ -1892,6 +1953,79 @@ line.
 Use `self-ping` after installation to confirm the agent is reachable and
 policy enforcement is active before the dispatcher attempts its first
 connection.
+
+---
+
+### doctor
+
+List every problem the agent's files show, each with the command that fixes it.
+`self-check` says what the agent loads; `doctor` says what is wrong with it and
+how to fix it, including what the agent only logs.
+
+```bash
+sudo ctrl-exec-agent doctor [--fix] [--json] [--brief]
+```
+
+One line per finding, problems first, then a summary line:
+
+```
+PROBLEM  Script 'backup': /srv/scripts/backup.sh is not executable, so a run of it fails. Fix: sudo chmod +x /srv/scripts/backup.sh
+note     '/srv/scripts' is group-writable: 3 scripts run (cert-deploy, cert-check, svc-restart) with a warning (script_ownership = warn); script_ownership = strict would refuse them. Fix: sudo chmod g-w /srv/scripts, once nobody needs to write there (or leave it: the scripts run as they are)
+ctrl-exec-agent doctor: 1 problem, 1 note.
+```
+
+`PROBLEM` is something that does not work as configured, or is unsafe; `note`
+is something that works but is worth knowing, or that could not be checked.
+Checks (the `check` id in `--json` in brackets):
+
+| Check | Finding |
+|---|---|
+| `agent.conf` | cannot be loaded, so the agent does not start (problem, `agent-conf`) |
+| `scripts.conf` | cannot be read (problem, `scripts-conf`); an entry skipped, with the reason and its fix (problem, `script-skipped`); a script missing or not executable (problem, `script-missing`, `script-not-executable`); the ownership rule broken under `script_ownership = warn` - the script runs, `strict` would refuse it - one note per reason naming the scripts (note, `script-ownership`); an unknown option (note, `script-unknown-option`); a `dispatchers=` id no paired dispatcher has (note, `script-unknown-dispatcher`) |
+| Profiles and executor | a script declares a profile while `executor_socket` is unset, so it is not applied (problem, `profiles-not-applied`); `executor_socket` set but the executor not answering, so every run fails (problem, `executor`) |
+| Pairing | not paired (note, `not-paired`); the agent certificate expired (problem, `agent-cert-expired`); the agent not running (note, `agent-not-running`) |
+| Trust | a trusted-map entry whose CA is not in `ca.crt` - the listener refuses that dispatcher (problem, `trust-ca-missing`); a CA in `ca.crt` no entry uses and that did not issue the agent's certificate (note, `trust-ca-unused`); pre-0.14 map lines not yet upgraded (note, `trust-map-old-format`); no dispatcher trusted (note, `trust-none`); the agent's certificate issued by a dispatcher no longer trusted (`remove-dispatcher`), which nobody can renew - a problem when it expires within 30 days, a note otherwise (`agent-cert-issuer-untrusted`); the certificate issued by no CA in `ca.crt` (problem, `agent-cert-issuer`); `ca.crt` with no readable CA (problem, `ca-bundle`) |
+| Revocations | with several CAs in `ca.crt`, lines of `revoked-serials` that name a serial alone (the pre-0.14 form) and so revoke it under every CA (note, `revoked-any-ca`) |
+
+`--fix` also makes the changes that cannot lose data or widen access, and lists
+each as `fixed`:
+
+- pre-0.14 trusted-map lines are upgraded in place, exactly as the agent does
+  when it starts: each keeps the CA(s) it was accepted under, so no dispatcher
+  gains or loses access;
+- a CA in `ca.crt` that no trusted-map entry is under and that did not issue
+  the agent's certificate is removed. No dispatcher can be served under it, so
+  trust only narrows (a stranger's certificate from it no longer completes the
+  handshake); pairing that dispatcher again brings it back. The last CA is
+  never removed.
+
+Nothing else is changed. In particular the ownership and permissions of script
+directories are reported, never changed: tightening `/srv/scripts` can stop the
+people who write there. A second `--fix` changes nothing.
+
+`--json` prints one object on stdout and nothing else:
+
+```json
+{"findings":[{"check":"script-not-executable","fix":"sudo chmod +x /srv/scripts/backup.sh","fixed":false,"severity":"problem","what":"..."}],"fixed":0,"notes":0,"ok":false,"problems":1,"program":"ctrl-exec-agent"}
+```
+
+`ok` is true when no problem remains; `fixed` counts the changes `--fix` made.
+`--brief` lists problems and fixes only, and counts the notes; with nothing to
+fix it prints one line. The package upgrade and `install.sh` run
+`doctor --brief` after an upgrade and print the result; they never use
+`--fix`, and its result never fails the install.
+
+Each finding is also logged: `ACTION=doctor-finding PROGRAM=ctrl-exec-agent
+SEVERITY=<problem|note> CHECK=<id> WHAT=<text> FIX=<command>` (`FIXED=1` when
+`--fix` made it), at WARNING for a problem, INFO otherwise.
+
+Without root it reports what it could not read as a note (`Could not read
+/etc/ctrl-exec-agent/agent.conf (permission denied), so nothing else was
+checked`) and exits 0; members of the `ctrl-exec-agent` group can read
+everything it checks.
+
+Exit code: 0 when no problem was found (notes may remain), 1 when one was, 2 on
+bad usage.
 
 ---
 

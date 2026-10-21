@@ -130,4 +130,16 @@ case "$1" in
         ;;
 esac
 
+# After an upgrade ($2 holds the version upgraded from), print what doctor finds
+# (T-055) once the services above have been restarted: report only, never
+# --fix, and never a reason to fail the configure. --brief lists the problems
+# and counts the notes, so a host with nothing to fix gets one line.
+case "$1" in
+    configure)
+        if [ -n "$2" ]; then
+            ctrl-exec-agent doctor --brief || true
+        fi
+        ;;
+esac
+
 exit 0

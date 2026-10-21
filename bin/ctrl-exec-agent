@@ -48,6 +48,9 @@ sub main {
         'dispatcher-fingerprint=s' => \$opts{dispatcher_fingerprint},
         'rekey'         => \$opts{rekey},
         'pidfile=s'     => \$opts{pidfile},
+        'json'          => \$opts{json},
+        'fix'           => \$opts{fix},
+        'brief'         => \$opts{brief},
         'version'       => sub { print "ctrl-exec-agent $VERSION\n"; exit 0; },
     ) or die usage();
 
@@ -79,6 +82,7 @@ sub main {
         'paired'          => \&mode_paired,
         'remove-dispatcher' => \&mode_remove_dispatcher,
         'list-dispatchers'  => \&mode_list_dispatchers,
+        'doctor'            => \&mode_doctor,
     );
 
     my $handler = $dispatch{$mode}
@@ -196,7 +200,7 @@ sub mode_paired ($opts) {
 # The trusted-dispatcher map and CA bundle paths, as the agent resolves them.
 sub _trust_paths ($config) {
     return (
-        $config->{trusted_dispatchers_path} // '/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers',
+        Exec::Agent::Config::trusted_dispatchers_path($config),
         $config->{ca},
         $config->{cert},
     );
@@ -327,6 +331,29 @@ sub mode_list_dispatchers ($opts) {
     }
 }
 
+# ctrl-exec-agent doctor [--fix] [--json] [--brief] (T-055): every problem the
+# agent's files show, one line each with the command that fixes it, logged as
+# ACTION=doctor-finding. Never refuses to run: what it cannot read (not root)
+# is a note. Exit 0 when no problem remains, 1 when one does, 2 on bad usage.
+# --fix makes only the changes listed in Exec::Agent::Doctor.
+sub mode_doctor ($opts) {
+    require Exec::Doctor;
+    require Exec::Agent::Doctor;
+    if (@ARGV) {
+        print STDERR "Usage: ctrl-exec-agent doctor [--fix] [--json] [--brief]\n";
+        exit Exec::Doctor::EXIT_USAGE();
+    }
+    my $findings = Exec::Agent::Doctor::checks(
+        config        => $CONFIG_PATH,
+        allowlist     => $ALLOWLIST_PATH,
+        listening     => \&_agent_listening,
+        start_command => _start_command(),
+    );
+    Exec::Doctor::apply_fixes($findings) if $opts->{fix};
+    exit Exec::Doctor::report('ctrl-exec-agent', $findings,
+                              json => $opts->{json}, brief => $opts->{brief});
+}
+
 sub mode_serve ($opts) {
     # Load and validate all configuration up front. A config error (a parse
     # error, an invalid capability, an undefined profile, ...) cannot be fixed by
@@ -395,10 +422,8 @@ MSG
     # Profiles are enforced only by the executor. If scripts declare non-default
     # profiles but executor_socket is not set, those profiles are NOT applied -
     # the scripts run as the unprivileged agent user. Warn so this is not silent.
-    unless ($config->{executor_socket}) {
-        my @profiled = grep {
-            (Exec::Agent::Config::script_profile($_, $allowlist) // 'default') ne 'default'
-        } keys %$allowlist;
+    {
+        my @profiled = Exec::Agent::Config::profiled_without_executor($config, $allowlist);
         if (@profiled) {
             warn "ctrl-exec-agent: " . scalar(@profiled) . " script(s) declare a "
                . "profile but executor_socket is not set - profiles are NOT "
@@ -1109,26 +1134,21 @@ sub mode_self_check {
     # The ids paired dispatchers have, to point out a dispatchers= id that none
     # has (T-063). Read without the CA bundle, so self-check never rewrites the
     # map (serve upgrades it).
-    my %paired_ids = map { $_ => 1 } values %{ Exec::Agent::AgentPairing::load_trusted_dispatchers(
-        path => $config->{trusted_dispatchers_path} // '/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers',
-    ) };
+    my $paired_ids = Exec::Agent::Config::paired_dispatcher_ids($config);
 
     for my $name (sort keys %$allowlist) {
         my $path    = Exec::Agent::Config::validate_script($name, $allowlist);
         my $profile = Exec::Agent::Config::script_profile($name, $allowlist);
         my $ok      = (defined $path && -x $path) ? 'ok' : 'NOT EXECUTABLE';
-        # script_ownership = warn (T-054): a script that breaks the ownership
-        # rule runs; say why it would be refused under strict.
-        my $owner   = Exec::Agent::Config::script_ownership_warning($name, $allowlist);
-        my $warn    = defined $owner ? " [warning: $owner]" : '';
         # dispatchers= (T-063): self-check is local and lists every script; the
         # limit shows which dispatchers see and run it.
         my $ids     = Exec::Agent::Config::script_dispatchers($name, $allowlist);
         my $limit   = $ids ? ', dispatchers: ' . join(',', @$ids) : '';
-        $warn .= " [warning: dispatcher '$_' is not in the trusted map]"
-            for grep { !$paired_ids{$_} } @{ $ids // [] };
-        $warn .= " [warning: unknown option '$_']"
-            for @{ Exec::Agent::Config::script_unknown_options($name, $allowlist) };
+        # The ownership rule under script_ownership = warn (T-054: the script
+        # runs; the text says why strict would refuse it), a dispatchers= id
+        # no paired dispatcher has and unknown options (T-063).
+        my $warn    = join '', map { " [warning: $_->{text}]" }
+            Exec::Agent::Config::script_warnings($name, $allowlist, $paired_ids);
         print "  Script '$name': $path  (profile: $profile$limit) [$ok]$warn\n";
     }
 
@@ -1325,6 +1345,10 @@ Modes:
   remove-dispatcher <id>         Stop trusting one dispatcher (root): its map entries
                                  and, when no other dispatcher uses it, its CA
   list-dispatchers               List trusted dispatchers: <id> <ca-fingerprint> <serials>
+  doctor [--fix] [--json] [--brief]
+                                 List every problem found, each with the command
+                                 that fixes it; exit 1 if any. --fix makes the
+                                 safe fixes only
 
 Options:
   --config <path>                Path to agent.conf
@@ -1347,6 +1371,10 @@ Options:
                                  for approval (for orchestrated installations)
   --timeout <n>                  Seconds to wait for approval in background
                                  mode (default 30, max 600)
+  --json                         doctor: one JSON object on stdout
+  --fix                          doctor: apply the fixes that cannot lose data or
+                                 widen access
+  --brief                        doctor: list problems only, notes as a count
   --version                      Print version and exit
 END
 }

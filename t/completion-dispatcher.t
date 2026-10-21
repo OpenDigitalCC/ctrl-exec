@@ -36,7 +36,7 @@ sub complete {
 
 my @modes = qw(run status wait ping pairing-mode list-requests approve deny ca-fingerprint
     setup-ca setup-ctrl-exec list-agents edit-agent list-locks rotate-cert
-    serial-status unpair maintain);
+    serial-status unpair maintain doctor);
 
 is_deeply(complete(words => ['ced', '']), [ sort @modes ], 'first word: all modes');
 is_deeply(complete(words => ['ced', 'se']), [qw(serial-status setup-ca setup-ctrl-exec)], 'mode prefix');
@@ -53,6 +53,8 @@ is_deeply(complete(words => ['ced', 'approve', '--']),
 is_deeply(complete(words => ['ced', 'edit-agent', 'alpha', '--r']), ['--rename'], 'edit-agent --rename');
 is_deeply(complete(words => ['ced', 'run', '--as']), ['--async'], 'run --async');
 is_deeply(complete(words => ['ced', 'list-agents', '--ta']), ['--tags'], 'list-agents --tags');
+is_deeply(complete(words => ['ced', 'doctor', '--f']), ['--fix'], 'doctor --fix');
+is_deeply(complete(words => ['ced', 'doctor', '--b']), ['--brief'], 'doctor --brief');
 is_deeply(complete(words => ['ced', 'wait', 'r1', '--ti']), ['--timeout'], 'wait --timeout');
 is_deeply(complete(words => ['ced', 'approve', 'r1', '--lookup-by', '']), [qw(hostname ip)],
     '--lookup-by values');

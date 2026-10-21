@@ -49,12 +49,18 @@ sub main {
         'tags=s'      => \$opts{tags},
         'async'       => \$opts{async},
         'timeout=i'   => \$opts{timeout},
+        'fix'         => \$opts{fix},
+        'brief'       => \$opts{brief},
         'version'     => sub { print "ctrl-exec-dispatcher $VERSION\n"; exit 0; },
     ) or die usage();
 
     my $mode = shift @ARGV // die usage();
 
     Exec::Log::init('ctrl-exec-dispatcher');
+
+    # doctor reports a config directory the other modes refuse (below), so it
+    # runs before that check.
+    return mode_doctor(\%opts, @ARGV) if $mode eq 'doctor';
 
     # T-047/T-065: an ambiguous config directory is refused up front, whatever
     # the mode, so it is logged and exits 78 (EX_CONFIG) rather than failing part
@@ -81,6 +87,7 @@ sub main {
         'serial-status'     => \&mode_serial_status,
         'unpair'            => \&mode_unpair,
         'maintain'          => \&mode_maintain,
+        'doctor'            => \&mode_doctor,
     );
 
     my $handler = $dispatch{$mode}
@@ -380,6 +387,25 @@ sub mode_maintain ($opts) {
         print "Maintenance FAILED in phase(s): " . join(', ', @failed) . "\n" if @failed;
     }
     exit 1 if @failed;
+}
+
+# ctrl-exec-dispatcher doctor [--fix] [--json] [--brief] (T-055): every problem
+# this dispatcher's files show, one line each with the command that fixes it,
+# logged as ACTION=doctor-finding. Never refuses to run (an ambiguous config
+# directory is one of its findings); what it cannot read is a note. Exit 0
+# when no problem remains, 1 when one does, 2 on bad usage. --fix makes only
+# the changes listed in Exec::Doctor::Dispatcher.
+sub mode_doctor ($opts, @args) {
+    require Exec::Doctor;
+    require Exec::Doctor::Dispatcher;
+    if (@args) {
+        print STDERR "Usage: ctrl-exec-dispatcher doctor [--fix] [--json] [--brief]\n";
+        exit Exec::Doctor::EXIT_USAGE();
+    }
+    my $findings = Exec::Doctor::Dispatcher::checks(config => $CONFIG_PATH);
+    Exec::Doctor::apply_fixes($findings) if $opts->{fix};
+    exit Exec::Doctor::report('ctrl-exec-dispatcher', $findings,
+                              json => $opts->{json}, brief => $opts->{brief});
 }
 
 sub mode_list_agents ($opts) {
@@ -1156,10 +1182,17 @@ Modes:
                              exit 1 if any phase failed
   serial-status              Show dispatcher serial and per-agent serial state
   unpair <hostname>          Remove a paired agent from the registry
+  doctor [--fix] [--json] [--brief]
+                             List every problem found, each with the command
+                             that fixes it; exit 1 if any. --fix makes the
+                             safe fixes only; --brief lists problems only
 
 Options:
   --config <path>            Path to ctrl-exec.conf (default /etc/ctrl-exec-dispatcher/ctrl-exec.conf)
   --json                     Output results as JSON
+  --fix                      doctor: apply the fixes that cannot lose data or
+                             widen access
+  --brief                    doctor: list problems only, notes as a count
   --port <n>                 Override default port (7443)
   --username <name>          Username for auth hook (default: $USER)
   --token <token>            Auth token (default: $ENVEXEC_TOKEN env var)

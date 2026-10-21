@@ -1767,12 +1767,40 @@ ACTION=rotation-state-corrupt PATH=/var/lib/ctrl-exec/rotation.json ERROR="..." 
 | USER | string | Username from the request, or `(none)` |
 
 
+## Doctor (both programs)
+
+### doctor-finding
+
+Emitted by `ctrl-exec-agent doctor` and `ctrl-exec-dispatcher doctor`, once per
+finding, whether the report goes to the terminal or out as `--json` (and when
+the package upgrade or `install.sh` runs it). A problem that remains is logged
+at WARNING; a note, or a problem `--fix` fixed, at INFO.
+
+Priority
+: WARNING (a problem), INFO (a note, or fixed)
+
+Fields
+
+| Field | Type | Description |
+| --- | --- | --- |
+| ACTION | string | `doctor-finding` |
+| PROGRAM | string | `ctrl-exec-agent` or `ctrl-exec-dispatcher` |
+| SEVERITY | string | `problem` or `note` |
+| CHECK | string | The check id, e.g. `script-skipped`, `trust-ca-missing`, `config-dir-in-place` (REFERENCE.md, *doctor*) |
+| WHAT | string | What was found |
+| FIX | string | The command that fixes it, or `-` |
+| FIXED | int | `1` when `--fix` made the change (absent otherwise) |
+
+```
+ACTION=doctor-finding CHECK=script-not-executable FIX="sudo chmod +x /srv/scripts/backup.sh" PROGRAM=ctrl-exec-agent SEVERITY=problem WHAT="Script 'backup': /srv/scripts/backup.sh is not executable, so a run of it fails."
+```
+
 ## Priority Levels
 
 | Priority | Syslog level | Used for |
 | --- | --- | --- |
-| INFO | `daemon.info` | Normal operations: `start`, `run`, `ping`, `dispatch`, `lock-acquire`, `lock-release`, `renew`, `renew-complete`, `auth` pass, `pair-complete`, `pair-approve`, `pair-deny`, `pair-request`, `pair-reject`, `pairing-mode-start`, `pairing-mode-stop`, `capabilities` success, `rate-evict`, `unpair`, `api-start`, `api-stop`, `api-request`, `status-read` (served, not-found), `cert-check`, `cert-renewal-start`, `cert-rotated`, `serial-broadcast`, `serial-retire`, `serial-confirmed`, `revoked-serials-absent`, `trusted-map-upgrade`, `ca-bundle-reload` |
-| WARNING | `daemon.warning` | Security and access events requiring attention: `deny`, `serial-reject`, `result-deny`, `status-read` (denied), `revoked-cert`, `tls-failure`, `ip-block`, `rate-block`, `capabilities-deny`, `capabilities-no-serial`, `pair-denied`, `pair-timeout`, `lock-conflict`, `config-warn`, `allowlist-skip`, `allowlist-unknown-dispatcher`, `allowlist-unknown-option`, `stdin-timeout`, `auth` deny, `serial-broadcast-fail`, `serial-stale`, `pair-keep-unsupported` |
+| INFO | `daemon.info` | Normal operations: `start`, `run`, `ping`, `dispatch`, `lock-acquire`, `lock-release`, `renew`, `renew-complete`, `auth` pass, `pair-complete`, `pair-approve`, `pair-deny`, `pair-request`, `pair-reject`, `pairing-mode-start`, `pairing-mode-stop`, `capabilities` success, `rate-evict`, `unpair`, `api-start`, `api-stop`, `api-request`, `status-read` (served, not-found), `cert-check`, `cert-renewal-start`, `cert-rotated`, `serial-broadcast`, `serial-retire`, `serial-confirmed`, `revoked-serials-absent`, `trusted-map-upgrade`, `ca-bundle-reload`, `doctor-finding` (a note, or fixed) |
+| WARNING | `daemon.warning` | Security and access events requiring attention: `deny`, `serial-reject`, `result-deny`, `status-read` (denied), `revoked-cert`, `tls-failure`, `ip-block`, `rate-block`, `capabilities-deny`, `capabilities-no-serial`, `pair-denied`, `pair-timeout`, `lock-conflict`, `config-warn`, `allowlist-skip`, `allowlist-unknown-dispatcher`, `allowlist-unknown-option`, `stdin-timeout`, `auth` deny, `serial-broadcast-fail`, `serial-stale`, `pair-keep-unsupported`, `doctor-finding` (a problem) |
 | ERR | `daemon.err` | Failures requiring investigation: `accept-fatal`, `renew` failure, `capabilities` error, `ping` error, `run` error, `auth` error (hook not executable), `cert-rotation-fail`, `rotation-state-corrupt`, `run-store-fail`, `status-read` (error) |
 
 
