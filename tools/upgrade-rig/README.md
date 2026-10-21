@@ -46,7 +46,7 @@ Options:
 : leave the last scenario's containers up to inspect. The next run (or
   `--cleanup`) removes them.
 
-Scenarios: `s1 s1b s2 s3 s4 s5`, default all. Exit 0 only when every scenario
+Scenarios: `s1 s1b s2 s3 s4 s5 s6`, default all. Exit 0 only when every scenario
 passed.
 
 Needs docker (with compose), git and `dpkg-buildpackage` on the host; no root.
@@ -65,6 +65,7 @@ with apt each run (network needed) and removes them afterwards.
 | s3 | Cloudient-style dispatcher container: the 0.12-era compose layout (`estates/cloudient-dispatcher/`), data volume at `/etc/ctrl-exec`, the estate's entrypoint, run-jobs calling `http://dispatcher:7445` with a job that parses `ctrl-exec-cli ... 2>&1` as JSON; stock agent host on FROM | A: rebuild the dispatcher image with the TO debs, nothing else. B: the operator's documented compose change (`compose-0.13.yml`, `entrypoint-0.13.sh`) | `PASS` if A works; `OPERATOR-STEP` if only B works (A's failures are listed: what an operator meets without the change); `FAIL` otherwise |
 | s4 | Dispatcher and agent hosts, FROM then TO; after the upgrade the agent adopts an `input=fields` script. A job pipes `--input-fields -` to `ctrl-exec-cli`, plain HTTP to `http://dispatcher:7445` (not loopback), captures `2>&1` and parses it with jq (the shape of `deploy-cert.sh`) | both hosts | the CLI exits 0, the captured output parses, result exit 0, the field reached the script, the value is not in the output. A control run of the same job on loopback must pass, so a failure is the plain-HTTP handling only |
 | s5 | Agent and dispatcher installed on TO only (no upgrade), the s1 layout with `/srv/scripts` root-owned and `agent-cert-deploy` declared `input=fields` (T-059) | none | with no reload of the agent: A the field sequence (deploy `--test` without input, deploy with three fields, then the context scripts, twice) all run; B the deploy line pasted with NBSPs, tabs or CRLF runs as the plain line does, with one `config-nonascii-space` notice; C `input=fields` edited onto the context lines, a script added and one removed are in effect at the next run, with no mismatch refusal; D a line naming an undefined profile skips only that script; E SIGHUP still reloads |
+| s6 | Dispatcher A and an agent on FROM, paired; a second dispatcher B installed on TO with its own CA (T-062) | A, then the agent: `dpkg -i` of the TO debs; then the agent is paired with B the usual way (`request-pairing --dispatcher dispatcher2`, `approve` on B) | A runs after the upgrade; after pairing with B the agent's key and certificate are unchanged, its bundle holds both CAs and its map both dispatchers, B's registry pins the agent's CA, both A and B run the script, the agent was not restarted (same MainPID, `ca-bundle-reload` logged), and no file of B holds a line of A's CA key |
 
 s5 checks the release under test rather than an upgrade: run it as
 `run.sh --from <last release> --to <ref> s5` (FROM is not installed).
