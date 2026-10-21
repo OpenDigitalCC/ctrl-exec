@@ -8,6 +8,11 @@
 # certificate after its own so the check can be made; the pairing-mode banner
 # and 'ctrl-exec-dispatcher ca-fingerprint' give the fingerprint. Without the
 # flag pairing runs as before.
+#
+# T-066: the presented certificate must also not be marked as an agent
+# certificate - the pinned CA issues those too. An agent certificate from that
+# CA is refused before the CSR is sent; a dispatcher certificate issued before
+# 0.14 (unmarked) is still accepted.
 
 use strict;
 use warnings;
@@ -63,6 +68,27 @@ quiet(sub {
         '-subj', '/CN=agent-01') == 0 or die "csr failed";
 });
 my $csr       = slurp_file("$dir/agent.csr");
+
+# T-066: a paired agent's certificate from the dispatcher's own CA (marked
+# agent), and a dispatcher certificate as a CA issued it before 0.14 (no role).
+my $agent_crt = "$dir/agent-01.crt";
+my $old_crt   = "$dir/old-dispatcher.crt";
+my $old_key   = "$dir/old-dispatcher.key";
+quiet(sub {
+    open my $fh, '>', $agent_crt or die;
+    print $fh Exec::CA::sign_csr(csr_pem => $csr, ca_dir => $ca_dir);
+    close $fh;
+    open $fh, '>', "$dir/old.ext" or die;
+    print $fh "basicConstraints=CA:FALSE\nsubjectKeyIdentifier=hash\n"
+            . "authorityKeyIdentifier=keyid,issuer\n";
+    close $fh;
+    system('openssl', 'req', '-new', '-newkey', 'rsa:2048', '-nodes',
+        '-keyout', $old_key, '-out', "$dir/old.csr",
+        '-subj', '/CN=ctrl-exec-dispatcher') == 0 or die "old csr failed";
+    system('openssl', 'x509', '-req', '-in', "$dir/old.csr", '-CA', "$ca_dir/ca.crt",
+        '-CAkey', "$ca_dir/ca.key", '-set_serial', '0x4f01', '-days', 2,
+        '-out', $old_crt, '-extfile', "$dir/old.ext") == 0 or die "old cert failed";
+});
 my $disp_crt  = "$ca_dir/dispatcher.crt";
 my $disp_key  = "$ca_dir/dispatcher.key";
 my $ca_fpr    = Exec::CertInfo::fingerprint_from_path("$ca_dir/ca.crt");
@@ -78,6 +104,11 @@ my $leaf_fpr  = Exec::CertInfo::fingerprint_from_path($disp_crt);
     close $fh;
     open $fh, '>', "$dir/impostor-chain.crt" or die;
     print $fh slurp_file("$rogue_dir/dispatcher.crt"), slurp_file("$ca_dir/ca.crt");
+    close $fh;
+    # A host holding a paired agent's certificate and key, presenting it with
+    # the real CA after it: the chain verifies, the role does not (T-066).
+    open $fh, '>', "$dir/agent-chain.crt" or die;
+    print $fh slurp_file($agent_crt), slurp_file("$ca_dir/ca.crt");
     close $fh;
 }
 
@@ -157,7 +188,7 @@ require IO::Socket::SSL;
 require IO::Select;
 
 # Fork a pairing listener on a free port. Returns (pid, port).
-sub start_dispatcher ($pdir, $cadir = $ca_dir) {
+sub start_dispatcher ($pdir, $cadir = $ca_dir, $crt = $disp_crt, $key = $disp_key) {
     pipe my $r, my $w or die "pipe: $!";
     my $pid = guarded_fork() // die "fork: $!";
     if ($pid == 0) {
@@ -167,7 +198,7 @@ sub start_dispatcher ($pdir, $cadir = $ca_dir) {
         open STDOUT, '>', "$pdir.out";
         eval {
             Exec::Pairing::run_pairing_mode(
-                port => 0, cert => $disp_crt, key => $disp_key,
+                port => 0, cert => $crt, key => $key,
                 ca_dir => $cadir, pairing_dir => $pdir, timeout => $STEP,
                 log_fn => sub ($e) {
                     print $w "$e->{PORT}\n" if $e->{ACTION} eq 'pairing-mode-start';
@@ -368,6 +399,44 @@ subtest 'man in the middle presenting the real CA certificate: refused, nothing 
     like $sub->{error}, qr/not issued by the expected CA/,
         'the CA certificate alone does not pass';
     is $bytes, 0, 'the man in the middle received nothing (no CSR)';
+};
+
+# --- certificate roles (T-066) ----------------------------------------------
+
+subtest 'roles: the dispatcher certificate is marked dispatcher, the agent one agent' => sub {
+    is Exec::CertInfo::cert_role(slurp_file($disp_crt)), 'dispatcher', 'dispatcher.crt';
+    is Exec::CertInfo::cert_role(slurp_file($agent_crt)), 'agent', 'agent certificate';
+    is Exec::CertInfo::cert_role(slurp_file($old_crt)), undef, 'pre-0.14 certificate: unmarked';
+};
+
+subtest 'an agent certificate from the pinned CA: refused, nothing sent' => sub {
+    my ($mpid, $mport, $count) = start_mitm("$dir/agent-chain.crt", "$dir/agent.key");
+    my $sub;
+    my $err = bounded(sub { $sub = submit($mport, $ca_fpr) });
+    my $bytes = mitm_bytes($mpid, $count);
+    ok !$err, 'exchange completed' or diag $err;
+    ok $sub && !$sub->{ok} && $sub->{verify_failed}, 'refused as a verification failure';
+    like $sub->{error}, qr/issued by the expected CA but marked as an agent certificate/,
+        'says why: the certificate is an agent\'s';
+    like $sub->{error}, qr/expected CA: SHA256:$ca_fpr/, 'names the expected CA';
+    like $sub->{error}, qr/role agent/, 'and the role seen';
+    like $sub->{error}, qr/CSR was not sent/, 'says the CSR was not sent';
+    is $bytes, 0, 'the agent-key holder received nothing (no CSR)';
+};
+
+subtest 'an unmarked (pre-0.14) dispatcher certificate from the pinned CA: accepted' => sub {
+    my $pdir = "$dir/pair-unmarked";
+    my ($dpid, $port) = start_dispatcher($pdir, $ca_dir, $old_crt, $old_key);
+    my ($sub, $q);
+    my $err = !$port ? 'the pairing listener did not start' : bounded(sub {
+        $sub = submit($port, $ca_fpr);
+        $q = queued($pdir) if $sub->{ok};
+    });
+    close $sub->{sock} if $sub && $sub->{sock};
+    stop_helper($dpid);
+    ok !$err, 'exchange completed' or diag $err;
+    ok $sub && $sub->{ok}, 'verified and sent' or diag $sub ? $sub->{error} : 'no response';
+    is $sub->{code}, $q->{code}, 'codes match';
 };
 
 subtest 'no fingerprint: pairs as before, even through the same man in the middle' => sub {

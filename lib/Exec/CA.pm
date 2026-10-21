@@ -10,6 +10,7 @@ use Carp        qw(croak);
 use Exec::FileUtil qw(slurp);
 use Exec::Cmd      qw();
 use Exec::Random   qw(hex_bytes);
+use Exec::CertInfo qw();
 use Exec::DispatcherConfig qw();
 
 
@@ -81,11 +82,21 @@ sub default_ca_cn ($id = undef) {
 # same subject (dispatcher CAs made before 0.14 are all "ctrl-exec CA") picks
 # the right one. OpenSSL 3 adds the identifiers by default; 1.1 adds none and
 # issues a v1 certificate without -extfile.
-sub _leaf_extfile () {
+#
+# From 0.14 the certificate is also marked with its role (T-066): 'dispatcher'
+# from generate_dispatcher_cert, 'agent' from sign_csr - the CA decides from
+# which of the two is signing, and nothing a CSR asks for is used
+# (`openssl x509 -req` copies no CSR extension: OpenSSL 1.1 never does, 3.x
+# only with -copy_extensions, which is not passed). The mark is a non-critical
+# private extension (Exec::CertInfo::$ROLE_OID), which TLS ignores; verified
+# pairing refuses a pairing listener presenting an agent-marked certificate.
+sub _leaf_extfile ($role) {
+    croak "unknown certificate role '$role'" unless $role =~ /\A(?:dispatcher|agent)\z/;
     my $tmp = File::Temp->new(SUFFIX => '.ext', TMPDIR => 1, UNLINK => 1);
     print $tmp "basicConstraints=CA:FALSE\n"
              . "subjectKeyIdentifier=hash\n"
-             . "authorityKeyIdentifier=keyid,issuer\n";
+             . "authorityKeyIdentifier=keyid,issuer\n"
+             . "$Exec::CertInfo::ROLE_OID=ASN1:UTF8String:$role\n";
     close $tmp;
     return $tmp;
 }
@@ -144,7 +155,7 @@ sub generate_dispatcher_cert (%opts) {
         '-subj', '/CN=ctrl-exec-dispatcher',
     );
 
-    my $ext = _leaf_extfile();
+    my $ext = _leaf_extfile('dispatcher');
     _run_or_die(
         'openssl', 'x509', '-req',
         '-in',           $disp_csr,
@@ -213,7 +224,9 @@ sub sign_csr (%opts) {
     my $cert_path = $cert_tmp->filename;
     close $cert_tmp;
 
-    my $ext = _leaf_extfile();
+    # Every certificate signed from a CSR is an agent certificate (pairing
+    # approval, renewal): the role is fixed here, whatever the CSR asks for.
+    my $ext = _leaf_extfile('agent');
     _run_or_die(
         'openssl', 'x509', '-req',
         '-in',        $csr_path,

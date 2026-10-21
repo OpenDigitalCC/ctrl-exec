@@ -381,6 +381,8 @@ sub submit_pairing_request (%opts) {
 # constraints). Holding the CA certificate alone is not enough - it is public -
 # the presented certificate must be one that CA issued, and the TLS handshake
 # has already proved the peer holds that certificate's key.
+# The certificate must also not be marked with a role other than dispatcher
+# (T-066): an agent certificate from the same CA is refused.
 # Returns undef when verified, or the reason it is not.
 sub verify_dispatcher_ca ($sock, $want_fpr) {
     require Net::SSLeay;
@@ -423,7 +425,24 @@ sub verify_dispatcher_ca ($sock, $want_fpr) {
     Net::SSLeay::X509_STORE_CTX_free($ctx);
     Net::SSLeay::sk_X509_free($sk);
     Net::SSLeay::X509_STORE_free($store);
-    return if $ok;
+    if ($ok) {
+        # The pinned CA also issues the agents' certificates. From 0.14 it marks
+        # each certificate with its role (T-066), so one marked agent - a host
+        # holding a paired agent's certificate and key - is refused. Unmarked
+        # certificates (issued before 0.14, until renewal or rotation marks
+        # them) are accepted, as before.
+        my $role = Exec::CertInfo::x509_role($leaf);
+        return if !defined $role || $role eq 'dispatcher';
+        return "the certificate on the pairing port is issued by the expected CA "
+             . "but marked as " . ($role eq 'agent' ? 'an agent' : 'an unknown role')
+             . " certificate, not a dispatcher's: whatever answered holds a "
+             . "certificate and key that CA issued for another purpose, and is "
+             . "not the dispatcher.\n"
+             . "  expected CA: $want_disp\n"
+             . "  seen:        " . Exec::CertInfo::format_sha256_fingerprint($seen[0])
+             . " (presented certificate, role $role)\n"
+             . "The CSR was not sent.";
+    }
     return "the dispatcher's certificate is not issued by the expected CA "
          . "(" . ($err // 'verification could not run') . ").\n"
          . "  expected CA: $want_disp\n"

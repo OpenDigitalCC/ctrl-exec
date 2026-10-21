@@ -211,11 +211,34 @@ Verified pairing
   A dispatcher older than 0.14 does not send its CA certificate, so an agent
   given the flag refuses it; upgrade the dispatcher first.
 
-  Limit. The dispatcher's CA also issues the agents' certificates, and those
-  certificates are not marked for a particular role. A host holding a paired
-  agent's certificate and key therefore also passes the check; in the path, it
-  is back to the grinding window the code alone leaves (above). Protect agent
-  keys as the credentials they are, and revoke a compromised agent promptly.
+  Certificate roles. The dispatcher's CA also issues the agents'
+  certificates. From 0.14 it marks every certificate it issues with its role
+  (see *Certificate Roles* below), and verified pairing refuses a presented
+  certificate marked `agent` - `Pairing refused:` saying it is an agent
+  certificate, `ACTION=pair-verify-failed`, and the CSR is not sent. It
+  accepts one marked `dispatcher`, and one with no mark.
+
+  What verified pairing accepts. Before the role marks: any certificate the
+  pinned CA issued (and that verifies), the dispatcher's or an agent's. From
+  0.14, of the certificates the pinned CA issued:
+
+  - marked `dispatcher`: accepted;
+  - unmarked (issued before 0.14), the dispatcher's or an agent's: accepted,
+    as before - the check cannot tell them apart;
+  - marked `agent`: refused;
+  - carrying the role extension with any other value: refused.
+
+  A certificate the pinned CA did not issue is refused, as before.
+
+  Limit. Certificates issued before 0.14 carry no mark, and nothing is
+  reissued on upgrade: an agent's certificate is marked at its next automatic
+  renewal (past half its life), the dispatcher's own at its next rotation
+  (`rotate-cert`, or automatically before expiry). Until then a host holding
+  a paired agent's unmarked certificate and key still passes the check; in
+  the path, it is back to the grinding window the code alone leaves (above).
+  `ctrl-exec-dispatcher rotate-cert` and the agents' renewal close the gap
+  sooner. Protect agent keys as the credentials they are, and revoke a
+  compromised agent promptly.
 
 Pairing with another dispatcher
 : An agent already paired (its certificate verifies against a CA in its
@@ -318,6 +341,30 @@ generating or protecting new key material.
 
 The dispatcher only renews certs for hosts in its registry. An agent that has
 been unpaired cannot receive a renewal.
+
+
+## Certificate Roles
+
+From 0.14 the dispatcher CA marks every certificate it issues with its role:
+`dispatcher` for the dispatcher's own certificate (`setup-ctrl-exec`,
+`rotate-cert`, automatic rotation) and `agent` for every certificate signed
+from a CSR (pairing approval, renewal). The CA sets the role from which of the
+two it is doing; a role or any other extension a CSR asks for is never copied.
+Verified pairing refuses a pairing listener presenting an agent certificate
+(see *Verified pairing*).
+
+The mark is a non-critical private X.509 extension, OID
+`2.25.266442206991433179228746487034237142618` (self-assigned under the UUID
+arc 2.25 from a random UUID; the project holds no private enterprise number),
+whose value is the UTF8String `dispatcher` or `agent`. TLS implementations
+ignore an unknown non-critical extension, so marked certificates work with
+every peer that took unmarked ones. Extended key usage cannot carry the role:
+agents are TLS servers on 7443 and dispatchers clients there, the reverse on
+the pairing port. `openssl x509 -noout -text -in <cert>` shows the mark as
+that OID followed by the role.
+
+Certificates issued before 0.14 have no mark and keep working; agents gain it
+at their next renewal, the dispatcher at its next rotation.
 
 
 ## Allowlist and Execution Security
@@ -1189,7 +1236,7 @@ limitations, Docker-specific notes), see SECURITY-OPERATIONS.md.
 | Rogue dispatcher connecting to agent | Agent verifies dispatcher cert against CA |
 | Pairing replay or misrouting | Nonce verified before cert storage |
 | Pairing CSR injection / social engineering | 6-digit pairing code verified by operator on both sides |
-| Pairing relay (man in the middle on the pairing port) | Verified pairing (`--dispatcher-fingerprint`): the agent refuses a listener whose certificate does not chain to the dispatcher's CA before sending its CSR. Without it, the v2 pairing code bound to the dispatcher certificate the agent saw; a relay shows mismatching codes (limits under *Pairing code verification*) |
+| Pairing relay (man in the middle on the pairing port) | Verified pairing (`--dispatcher-fingerprint`): the agent refuses a listener whose certificate does not chain to the dispatcher's CA, or (0.14) is marked by that CA as an agent certificate, before sending its CSR. Without it, the v2 pairing code bound to the dispatcher certificate the agent saw; a relay shows mismatching codes (limits under *Pairing code verification*) |
 | Lateral reconnaissance via capabilities | `/capabilities` restricted to the trusted-dispatcher map (per-dispatcher serial); hard deny on unknown serial; re-pair to activate |
 | Script execution by non-current dispatcher cert | `/run`, `/ping`, and `/result` restricted to the trusted-dispatcher map (per-dispatcher serial); hard deny on unknown serial |
 | Cross-dispatcher result disclosure | Runs partitioned per owner; `GET /result/<reqid>` owner-gated, `404 unknown` to other dispatchers (`result-deny`, REASON=not-owner) |

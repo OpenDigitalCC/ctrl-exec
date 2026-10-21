@@ -114,6 +114,57 @@ sub verify_issued_by ($leaf_pem, $ca_pem) {
     return $err // 'verification could not run';
 }
 
+# Certificate roles (T-066). From 0.14 the dispatcher CA marks every certificate
+# it issues with what it is - 'dispatcher' (setup-ctrl-exec, rotation) or
+# 'agent' (pairing approval, renewal) - in a non-critical private extension:
+# OID $ROLE_OID, value a DER UTF8String. The CA sets it from the code path that
+# signs, never from a CSR. Agents are TLS servers on 7443 and dispatchers
+# clients there, the reverse on the pairing port, so serverAuth/clientAuth
+# extended key usage cannot tell the two apart; the role extension can.
+#
+# The OID is self-assigned under the UUID arc 2.25 (ITU-T X.667: 2.25 then the
+# UUID as one integer), from the random UUID c872e709-8aa2-4a48-afee-39735113c65a,
+# because the project holds no private enterprise number. It means "ctrl-exec
+# certificate role" and nothing else; never reuse it for another purpose.
+our $ROLE_OID = '2.25.266442206991433179228746487034237142618';
+
+# The role a certificate held in a PEM string is marked with: 'dispatcher',
+# 'agent', 'unknown' (the role extension is there but its value is neither,
+# or unreadable), or undef when it carries no role extension - every
+# certificate issued before 0.14, until its next renewal or rotation - or is
+# not a readable certificate.
+sub cert_role ($pem) {
+    require IO::Socket::SSL;   # loads and initialises Net::SSLeay
+    my $x509 = _x509($pem) or return;
+    my $role = x509_role($x509);
+    Net::SSLeay::X509_free($x509);
+    return $role;
+}
+
+# As cert_role, for a Net::SSLeay X509 handle (e.g. IO::Socket::SSL's
+# peer_certificate), which is not freed. When more than one role extension is
+# present (the CA never writes two) an 'agent' mark wins, then 'unknown'.
+sub x509_role ($x509) {
+    my %seen;
+    my $n = Net::SSLeay::X509_get_ext_count($x509) // 0;
+    for my $i (0 .. $n - 1) {
+        my $ext = Net::SSLeay::X509_get_ext($x509, $i) or next;
+        my $oid = Net::SSLeay::OBJ_obj2txt(Net::SSLeay::X509_EXTENSION_get_object($ext), 1);
+        next unless defined $oid && $oid eq $ROLE_OID;
+        my $der = Net::SSLeay::P_ASN1_STRING_get(Net::SSLeay::X509_EXTENSION_get_data($ext)) // '';
+        # UTF8String: tag 0x0c, a short-form length, the value.
+        my ($tag, $len) = unpack 'C C', $der;
+        my $val = defined $len && $tag == 0x0c && $len < 0x80 && length($der) == $len + 2
+                ? substr($der, 2) : '';
+        $seen{ $val eq 'agent' || $val eq 'dispatcher' ? $val : 'unknown' } = 1;
+    }
+    Net::SSLeay::ERR_clear_error();
+    for my $role (qw(agent unknown dispatcher)) {
+        return $role if $seen{$role};
+    }
+    return;
+}
+
 sub _x509 ($pem) {
     my $bio = Net::SSLeay::BIO_new(Net::SSLeay::BIO_s_mem()) or return;
     Net::SSLeay::BIO_write($bio, $pem // '');

@@ -525,6 +525,15 @@ certificate the CA issues carries Subject and Authority Key Identifiers, so a
 verifier holding several CAs finds the issuer by key. An existing CA is not
 regenerated.
 
+From 0.14 every certificate the CA issues is also marked with its role:
+`dispatcher` for the dispatcher's own (`setup-ctrl-exec`, `rotate-cert`,
+automatic rotation), `agent` for every certificate signed from a CSR (pairing
+approval, renewal), whatever the CSR asks for. Verified pairing refuses an
+agent-marked certificate on the pairing port. Certificates issued earlier stay
+unmarked, and valid, until the agent's next renewal or the dispatcher's next
+rotation; nothing is reissued on upgrade. See SECURITY.md, *Certificate
+Roles*.
+
 ---
 
 ### setup-ctrl-exec
@@ -555,6 +564,9 @@ in parallel, and reports per-agent results.
 ```bash
 ced rotate-cert
 ```
+
+The new certificate is marked with the dispatcher role (0.14; see `setup-ca`),
+so rotating a certificate issued before 0.14 is what marks it.
 
 Agents that were unreachable during the broadcast are retried automatically
 by the internal check loop. Agents that remain unreachable after
@@ -1228,7 +1240,11 @@ keeps its key and certificate; see *Pairing with another dispatcher* below.
   dispatcher's certificate chains to the CA with this fingerprint. If it does
   not, the agent stops with `Pairing refused:` and the expected and seen
   fingerprints, logs `ACTION=pair-verify-failed`, and exits non-zero without
-  sending its CSR (with `--background`, before printing a request ID). On
+  sending its CSR (with `--background`, before printing a request ID). It
+  also stops, the same way, when the certificate was issued by that CA but is
+  marked as an agent certificate (0.14): whatever answered holds an agent's
+  key, not the dispatcher's. A dispatcher certificate issued before 0.14
+  (unmarked) is accepted. On
   success it prints `Dispatcher verified: ...` above the pairing code. Use it on
   any network you do not control; see SECURITY.md, *Verified pairing*. Needs a
   0.14 or later dispatcher, which sends its CA certificate. The CA certificate
