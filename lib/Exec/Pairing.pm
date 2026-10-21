@@ -168,7 +168,10 @@ sub run_pairing_mode (%opts) {
     # command; the loop exits on it and a single cleanup path logs and returns
     # (so the caller can reap its renewal-check child on every exit).
     my $stopped = '';
-    $SIG{INT} = $SIG{TERM} = sub { $stopped ||= 'signal'; };
+    # local: the handlers end with this sub, so after it returns a signal
+    # reaches the caller's own handling (it reaps the renewal-check child).
+    my $stop = sub { $stopped ||= 'signal'; };
+    local @SIG{qw(INT TERM)} = ($stop, $stop);
 
     my $sel = IO::Select->new($server);
     $sel->add(\*STDIN) if $interactive;

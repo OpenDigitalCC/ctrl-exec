@@ -499,9 +499,10 @@ sub _pairing_serve ($opts, $config, $timeout) {
         exit 0;
     }
 
-    # run_pairing_mode installs its own INT/TERM handling and RETURNS a reason
-    # string when it stops (timeout/quit/signal) instead of exiting, so control
-    # always reaches the reap below.
+    # run_pairing_mode installs its own INT/TERM handling for as long as it runs
+    # and RETURNS a reason string when it stops (timeout/quit/signal) instead of
+    # exiting, so control always reaches the reap below; a second Ctrl-C during
+    # the reap stops the dispatcher as usual.
     Exec::Pairing::run_pairing_mode(
         port          => $opts->{port} // $PAIR_PORT,
         ca_dir        => Exec::DispatcherConfig::conf_dir(),

@@ -53,6 +53,11 @@ subtest 'run_pairing_mode: auto-stops at the deadline' => sub {
             '-subj', '/CN=test-dispatcher', qw(-quiet)) == 0;
 
     my ($reason, $elapsed);
+    # The caller's own INT/TERM handlers, to check they are back afterwards.
+    my $int  = sub { };
+    my $term = sub { };
+    local $SIG{INT}  = $int;
+    local $SIG{TERM} = $term;
     {
         # run_pairing_mode prints status lines; keep TAP output clean.
         local *STDOUT;
@@ -60,7 +65,7 @@ subtest 'run_pairing_mode: auto-stops at the deadline' => sub {
         my $t0 = time;
         $reason = eval {
             Exec::Pairing::run_pairing_mode(
-                port        => 39444,
+                port        => 0,     # any free port (T-050)
                 cert        => $cert,
                 key         => $key,
                 pairing_dir => "$dir/pairing",
@@ -79,6 +84,10 @@ subtest 'run_pairing_mode: auto-stops at the deadline' => sub {
 
     is   $reason,  'timeout', 'returned the timeout reason instead of exiting';
     cmp_ok $elapsed, '<', 10,  'stopped promptly at the ~1s deadline';
+    # Its handlers last only while it runs: a second Ctrl-C while the caller
+    # reaps its children must reach the caller's own handling.
+    ok $SIG{INT}  == $int,  "the caller's INT handler is back";
+    ok $SIG{TERM} == $term, "the caller's TERM handler is back";
 };
 
 done_testing;
