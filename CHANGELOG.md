@@ -8,11 +8,12 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 ## 0.13.1 — existing script layouts run again
 
 Upgrading from 0.13.0: nothing to do. Scripts that 0.13.0 refused for their
-ownership run again; `sudo ctrl-exec-agent self-check` shows why each was
-refused, and `script_ownership = strict` in `agent.conf` restores the 0.13.0
-behaviour once the layout is fixed.
+ownership run again; `sudo ctrl-exec-agent self-check` shows a warning with
+the reason next to each, and `script_ownership = strict` in `agent.conf`
+restores the 0.13.0 behaviour once the layout is fixed.
 
 - **Changed** the script ownership rule (T-045) no longer refuses scripts by default, because on upgrade it removed every script on hosts whose script directory or a parent is group-writable or user-owned (e.g. `/srv/scripts` `2775 root:dev`, a group-writable `/srv`), leaving the agent with no scripts. New `agent.conf` key `script_ownership = warn | strict` (default `warn`; any other value is a configuration error in both the agent and the executor). With `warn` a script that breaks the rule stays allowlisted and runs; the agent logs the reason once per `scripts.conf` load (`ACTION=script-ownership`, WARNING), `self-check` shows it next to the script (`[warning: '/srv/scripts' is group-writable]`) together with the mode, and nothing is added to the run's output. The executor still checks the rule before every run but in `warn` mode runs the script, binding the exec to the file the path names at that moment. `strict` keeps the 0.13.0 refusal in the agent and the executor. The agent and executor parse the key identically (t/exec-conformance.t); docs/SECURITY.md states the trade-off (`warn` lets anyone who can write the script or a directory on its path change what a profile runs) and recommends `strict` once self-check is clean. New t/exec-ownership-warn.t; t/agent-script-ownership.t and t/exec-ownership-root.t cover both modes. (T-054)
+- **Added** `tools/upgrade-rig/`: installs the previous release on real-world layouts (scripts in a group-writable `/srv/scripts` owned by a user, the dispatcher's old config directory, a containerised dispatcher with a job parsing the CLI's output), upgrades to a given commit's debs and checks everything still lists and runs with no manual step. A required check before each release (docs/DEVELOPER.md). (T-057)
 
 ## 0.13.0 — confidential run input and output; executor hardening; API socket
 
