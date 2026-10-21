@@ -20,7 +20,9 @@ use Test::More;
 use File::Temp  qw(tempdir);
 use JSON        qw(encode_json decode_json);
 use FindBin     qw($Bin);
-use lib         "$Bin/../lib";
+use POSIX       qw();
+use lib         "$Bin/../lib", "$Bin/lib";
+use ChildGuard  qw(guarded_fork);
 
 use Exec::Digest  qw();
 use Exec::CertInfo qw();
@@ -30,7 +32,10 @@ use Exec::Agent::AgentPairing qw();
 plan skip_all => 'openssl not available'
     unless system('openssl version >/dev/null 2>&1') == 0;
 
-my $dir = tempdir(CLEANUP => 1);
+my $dir = ChildGuard::dir(tempdir(CLEANUP => 1));
+
+# A backstop: the file takes about 25 s; past this it is ended, not left hanging.
+ChildGuard::deadline(180);
 
 # A real CSR, as the agent generates it (openssl output, canonical PEM).
 sub gen_csr ($name) {
@@ -218,68 +223,87 @@ subtest 'code_label says which version a code is' => sub {
         qr/\(v1\b/, 'a record with no version (queued before upgrade) is v1';
 };
 
+
 # --- end to end over a real pairing listener, direct and through a relay ----
+#
+# Every listener here binds port 0 and the test uses the port it got. A port
+# derived from the PID could already belong to another process: the listener
+# then failed to bind, the readiness probe connected to that other process, and
+# the agent waited 660 s for a TLS handshake that never came (T-050). Each step
+# is also bounded - a short client timeout and an alarm per subtest - and the
+# whole file has a deadline (ChildGuard, above).
 
-my $port = 39000 + $$ % 500;
+require IO::Socket::SSL;
+require IO::Select;
 
+my $STEP = 30;   # seconds any one end-to-end subtest may take
+
+# Fork a pairing listener on a free port. Returns (pid, port); port is undef
+# when the listener did not report in within a few seconds (it died, or hung).
 sub start_dispatcher ($pdir) {
-    my $pid = fork() // die "fork: $!";
+    pipe my $r, my $w or die "pipe: $!";
+    my $pid = guarded_fork() // die "fork: $!";
     if ($pid == 0) {
+        close $r;
+        $w->autoflush(1);
         open STDIN,  '<', '/dev/null';
         open STDOUT, '>', "$pdir.out";
-        Exec::Pairing::run_pairing_mode(
-            port => $port, cert => $disp_crt, key => $disp_key,
-            pairing_dir => $pdir, timeout => 30, log_fn => sub { },
-        );
-        exit 0;
+        eval {
+            Exec::Pairing::run_pairing_mode(
+                port => 0, cert => $disp_crt, key => $disp_key,
+                pairing_dir => $pdir, timeout => $STEP,
+                log_fn => sub ($e) {
+                    print $w "$e->{PORT}\n" if $e->{ACTION} eq 'pairing-mode-start';
+                },
+            );
+        };
+        print STDERR "pairing listener: $@" if $@;
+        POSIX::_exit($@ ? 1 : 0);
     }
-    for (1 .. 50) {
-        last if IO::Socket::INET->new(PeerAddr => "127.0.0.1:$port");
-        select undef, undef, undef, 0.1;
-    }
-    return $pid;
+    close $w;
+    my $port;
+    $port = <$r> if IO::Select->new($r)->can_read(10);
+    close $r;
+    chomp $port if defined $port;
+    return ($pid, (defined $port && $port =~ /\A\d+\z/ ? $port : undef));
 }
 
 # A relay: terminates the agent's TLS with its own cert and forwards the
-# plaintext to the real dispatcher, unchanged in both directions.
-sub start_relay ($rport) {
-    my $pid = fork() // die "fork: $!";
-    return $pid if $pid;
-    require IO::Socket::SSL;
-    require IO::Select;
-    my $l = IO::Socket::SSL->new(LocalAddr => '127.0.0.1', LocalPort => $rport,
-        Listen => 1, ReuseAddr => 1, SSL_cert_file => $relay_crt,
-        SSL_key_file => $relay_key) or exit 1;
-    # Skip the plain-TCP readiness probe: take the first TLS client.
-    my $a;
-    for (1 .. 5) { last if $a = $l->accept; }
-    exit 1 unless $a;
-    my $d = IO::Socket::SSL->new(PeerHost => '127.0.0.1', PeerPort => $port,
-        SSL_verify_mode => IO::Socket::SSL::SSL_VERIFY_NONE()) or exit 1;
+# plaintext to the real dispatcher, unchanged in both directions. Its listener
+# is bound before the fork, so it is ready when this returns. Returns
+# (pid, port).
+sub start_relay ($dport) {
+    my $l = IO::Socket::SSL->new(LocalAddr => '127.0.0.1', LocalPort => 0,
+        Listen => 1, SSL_cert_file => $relay_crt, SSL_key_file => $relay_key)
+        or die "relay listener: $IO::Socket::SSL::SSL_ERROR\n";
+    my $rport = $l->sockport;
+    my $pid = guarded_fork() // die "fork: $!";
+    if ($pid) {
+        close $l;
+        return ($pid, $rport);
+    }
+    alarm $STEP;    # the default SIGALRM ends a relay that is stuck
+    my $a = $l->accept or POSIX::_exit(1);
+    my $d = IO::Socket::SSL->new(PeerHost => '127.0.0.1', PeerPort => $dport,
+        Timeout => 5, SSL_verify_mode => IO::Socket::SSL::SSL_VERIFY_NONE())
+        or POSIX::_exit(1);
     my $sel = IO::Select->new($a, $d);
-    while (my @r = $sel->can_read(20)) {
+    while (my @r = $sel->can_read($STEP)) {
         for my $s (@r) {
             my $n = sysread $s, my $buf, 16384;
-            exit 0 unless $n;
+            POSIX::_exit(0) unless $n;
             syswrite(($s == $a ? $d : $a), $buf);
         }
     }
-    exit 0;
+    POSIX::_exit(0);
 }
 
-# Deny every queued request, then wait for the listener's handler children to
-# pick the denial up (they unlink it once sent) so none outlives the test.
-sub deny_all ($pdir) {
-    for my $f (glob "$pdir/*.json") {
-        (my $b = $f) =~ s/\.json$//;
-        open my $fh, '>', "$b.denied" or next;
-        print $fh encode_json({ status => 'denied', reason => 'test' });
-        close $fh;
-    }
-    for (1 .. 60) {
-        last unless () = glob "$pdir/*.denied";
-        select undef, undef, undef, 0.1;
-    }
+# Stop a helper and everything it started (the listener's per-connection
+# children wait for an approval that never comes).
+sub stop_helper ($pid) {
+    return unless $pid;
+    kill 'KILL', -$pid, $pid;
+    waitpid $pid, 0;
 }
 
 sub queued ($pdir) {
@@ -291,23 +315,38 @@ sub queued ($pdir) {
     return undef;
 }
 
-require IO::Socket::INET;
+sub submit ($port) {
+    return Exec::Agent::AgentPairing::submit_pairing_request(
+        'ctrl-exec' => '127.0.0.1', port => $port, timeout => 10,
+        csr_pem => $csr, hostname => 'agent-one');
+}
+
+# Run $code under an alarm. Returns undef, or the error that ended it.
+sub bounded ($code) {
+    local $SIG{ALRM} = sub { die "timed out after ${STEP}s\n" };
+    alarm $STEP;
+    my $ok  = eval { $code->(); 1 };
+    my $err = $@;
+    alarm 0;
+    return $ok ? undef : ($err || 'failed');
+}
 
 subtest 'end to end: agent and dispatcher show the same v2 code' => sub {
     my $pdir = "$dir/pair-direct";
-    my $dpid = start_dispatcher($pdir);
-    my $sub = Exec::Agent::AgentPairing::submit_pairing_request(
-        'ctrl-exec' => '127.0.0.1', port => $port,
-        csr_pem => $csr, hostname => 'agent-one');
-    unless ($sub->{ok}) {
-        kill 'TERM', $dpid; waitpid $dpid, 0;
-        plan skip_all => "pairing listener unavailable: $sub->{error}";
-    }
-    my $q = queued($pdir);
-    deny_all($pdir);
-    close $sub->{sock};
-    kill 'TERM', $dpid; waitpid $dpid, 0;
+    my ($dpid, $port) = start_dispatcher($pdir);
+    my ($sub, $q);
+    my $err = !$port ? 'the pairing listener did not start'
+            : bounded(sub {
+                  $sub = submit($port);
+                  $q = queued($pdir) if $sub->{ok};
+              });
+    close $sub->{sock} if $sub && $sub->{sock};
+    stop_helper($dpid);
 
+    ok !$err, 'the exchange completed' or diag $err;
+    ok $sub && $sub->{ok}, 'the dispatcher acknowledged the request'
+        or diag $sub ? $sub->{error} : 'no response';
+    return unless $sub && $sub->{ok};
     is $sub->{code_version}, 2, 'agent computes v2';
     ok $sub->{dispatcher_confirms_v2}, 'dispatcher acknowledged v2';
     is $sub->{dispatcher_fpr}, $disp_fpr,
@@ -317,24 +356,23 @@ subtest 'end to end: agent and dispatcher show the same v2 code' => sub {
 };
 
 subtest 'end to end: through a relay the codes differ' => sub {
-    my $pdir  = "$dir/pair-relay";
-    my $rport = $port + 1;
-    my $dpid  = start_dispatcher($pdir);
-    my $rpid  = start_relay($rport);
-    for (1 .. 50) {
-        last if IO::Socket::INET->new(PeerAddr => "127.0.0.1:$rport");
-        select undef, undef, undef, 0.1;
-    }
-    my $sub = Exec::Agent::AgentPairing::submit_pairing_request(
-        'ctrl-exec' => '127.0.0.1', port => $rport,
-        csr_pem => $csr, hostname => 'agent-one');
-    my $q = $sub->{ok} ? queued($pdir) : undef;
-    deny_all($pdir);
-    close $sub->{sock} if $sub->{sock};
-    kill 'TERM', $rpid; waitpid $rpid, 0;
-    kill 'TERM', $dpid; waitpid $dpid, 0;
-    plan skip_all => "relay unavailable: " . ($sub->{error} // '?') unless $sub->{ok};
+    my $pdir = "$dir/pair-relay";
+    my ($dpid, $port) = start_dispatcher($pdir);
+    my ($rpid, $rport) = $port ? start_relay($port) : ();
+    my ($sub, $q);
+    my $err = !$port ? 'the pairing listener did not start'
+            : bounded(sub {
+                  $sub = submit($rport);
+                  $q = queued($pdir) if $sub->{ok};
+              });
+    close $sub->{sock} if $sub && $sub->{sock};
+    stop_helper($rpid);
+    stop_helper($dpid);
 
+    ok !$err, 'the exchange completed' or diag $err;
+    ok $sub && $sub->{ok}, 'the relayed request was acknowledged'
+        or diag $sub ? $sub->{error} : 'no response';
+    return unless $sub && $sub->{ok};
     is $sub->{dispatcher_fpr}, $relay_fpr, 'agent saw the relay certificate';
     ok $q, 'the relayed CSR reached the dispatcher';
     is $q->{code_version}, 2, 'queued as v2';

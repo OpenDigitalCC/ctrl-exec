@@ -167,6 +167,9 @@ sub submit_pairing_request (%opts) {
     my $ca_cert         = $opts{ca_cert};
     my $lookup_by       = $opts{lookup_by};    # optional dispatch-resolution hint
     my $agent_port      = $opts{agent_port};   # agent's operational serve port
+    # Seconds allowed for the TCP connect and the TLS handshake. The default is
+    # generous for a slow dispatcher host; tests pass a few seconds.
+    my $timeout         = $opts{timeout}    // 660;
 
     require IO::Socket::SSL;
     require JSON;
@@ -176,7 +179,7 @@ sub submit_pairing_request (%opts) {
     my %ssl_opts = (
         PeerHost        => $dispatcher_host,
         PeerPort        => $port,
-        Timeout         => 660,
+        Timeout         => $timeout,
         SSL_verify_mode => $ca_cert
             ? IO::Socket::SSL::SSL_VERIFY_PEER()
             : IO::Socket::SSL::SSL_VERIFY_NONE(),

@@ -138,6 +138,9 @@ sub run_pairing_mode (%opts) {
         SSL_verify_mode => IO::Socket::SSL::SSL_VERIFY_NONE(),
         Exec::TLS::hardening(),
     ) or die "Cannot start pairing server: $IO::Socket::SSL::SSL_ERROR\n";
+    # The port actually bound: the same as asked for, except for port 0 (any
+    # free port, which the tests use), where the log and banner show the real one.
+    $port = $server->sockport;
 
     # Fingerprint of the certificate this listener presents, read from the same
     # file it was just loaded from (and once, so a rotation that rewrites the

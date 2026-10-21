@@ -1023,7 +1023,8 @@ so the caller can do other work between the two calls.
   Returns `{ ok => 1, reqid, sock, nonce }` or `{ ok => 0, error }`.
   Options: `ctrl-exec` (required - the dispatcher host), `csr_pem` (required),
   `hostname` (required), `port` (default 7444), `ca_cert`, `lookup_by`,
-  `agent_port`.
+  `agent_port`, `timeout` (seconds for the connect and the TLS handshake,
+  default 660).
 
 `await_pairing_result(%opts)`
 : Reads the final approval/denial response on the socket returned by
