@@ -87,20 +87,21 @@ sub _same_file ($fh, $path) {
 }
 
 # Try, without blocking, to take an exclusive flock on the lock file at $path.
-# Returns ($fh, 1) when taken, ($fh, 0) when another process holds it, and
-# (undef) when the file cannot be opened ($! set). Stale lock files are removed
-# by sweep_lock_files, so after a successful flock the path is re-checked: if the
-# file was unlinked between our open and our flock we hold a dead inode and must
-# retry on the fresh one, or two processes could each "hold" the same lock.
+# Returns ($fh, 1) when taken, ($fh, 0) when another process holds it, and the
+# empty list (never (undef), which is a true one-element list) when the file
+# cannot be opened ($! set). Stale lock files are removed by sweep_lock_files,
+# so after a successful flock the path is re-checked: if the file was unlinked
+# between our open and our flock we hold a dead inode and must retry on the
+# fresh one, or two processes could each "hold" the same lock.
 sub flock_path_nb ($path) {
     for (1 .. 5) {
-        my $fh = open_lock($path) or return undef;
+        my $fh = open_lock($path) or return;
         my $got = flock($fh, LOCK_EX | LOCK_NB) ? 1 : 0;
         return ($fh, $got) if _same_file($fh, $path) || ($got == 0 && -e $path);
         close $fh;   # swept under us - retry on the current file
     }
     $! = 0;
-    return undef;
+    return;
 }
 
 # Remove lock files in $dir whose name matches $re and which nobody holds. Safe

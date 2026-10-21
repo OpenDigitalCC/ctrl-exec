@@ -65,4 +65,23 @@ subtest 'slurp vs slurp_maybe on a missing file' => sub {
         'slurp_maybe returns undef on a missing file';
 };
 
+# flock_path_nb returns a list. Its failure must be the empty list, never
+# (undef): a one-element list is true, so `if (my @r = flock_path_nb(...))`
+# would treat a refused lock as taken.
+subtest 'flock_path_nb: taken is ($fh, 1); refused is the empty list' => sub {
+    my $dir = tempdir(CLEANUP => 1);
+    my @r = Exec::FileUtil::flock_path_nb("$dir/ok.lock");
+    is scalar @r, 2,  'taken: two elements';
+    is $r[1],     1,  'taken: got flag is 1';
+    close $r[0];
+
+    symlink "$dir/target", "$dir/evil.lock" or die "symlink: $!";
+    my @refused = Exec::FileUtil::flock_path_nb("$dir/evil.lock");
+    is scalar @refused, 0, 'symlink refused: empty list';
+    ok !(my @again = Exec::FileUtil::flock_path_nb("$dir/evil.lock")),
+        'symlink refused: false in list assignment';
+    ok $!{ELOOP}, 'symlink refused: $! is ELOOP';
+    ok !-e "$dir/target", 'symlink target never created';
+};
+
 done_testing;
