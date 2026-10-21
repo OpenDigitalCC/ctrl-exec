@@ -34,7 +34,7 @@ Endpoints: `GET /`, `GET /health`, `POST /ping`, `POST /run`,
 The server listens on `api_bind`:`api_port` (default 127.0.0.1:7445), on a
 unix socket (`api_socket`, mode 0660, group `api_socket_group`), or on both;
 `api_port = off` leaves only the socket. TLS is enabled on the TCP port if
-`api_cert` and `api_key` are set in `ctrl-exec.conf`; plain HTTP is used when
+`api_tls_cert` and `api_tls_key` are set in `ctrl-exec.conf`; plain HTTP is used when
 neither is. Requests on either listener are handled alike and pass the same
 auth hook; a socket caller's `source_ip` is `unix:<path>` and the hook also
 gets its uid (`peer_uid`, `ENVEXEC_PEER_UID`). See REFERENCE.md for the keys

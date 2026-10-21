@@ -19,8 +19,8 @@ current_page: /config
 | `api_socket` | — | Unix socket for same-host API callers, mode 0660 (e.g. `/run/ctrl-exec-api/api.sock`) |
 | `api_socket_group` | API's group | Group of the `api_socket` file |
 | `api_port` | `7445` | TCP port for `ctrl-exec-api`; `off` for the socket only |
-| `api_cert` | — | TLS certificate for the API's TCP listener. With `api_key`, enables TLS; one without the other refuses start-up. |
-| `api_key` | — | TLS private key for the API's TCP listener |
+| `api_tls_cert` | — | TLS certificate for the API's TCP listener. With `api_tls_key`, enables TLS; one without the other refuses start-up. |
+| `api_tls_key` | — | TLS private key for the API's TCP listener |
 | `api_bind` | `127.0.0.1` | Address the API server binds to |
 | `api_auth_default` | `deny` | API behaviour when no hook is configured: `deny` or `allow` |
 | `auth_deny_generic` | `0` | When `1`/`yes`, API denials return a generic `403` (`forbidden`) without the specific reason or code |

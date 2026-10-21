@@ -1179,7 +1179,7 @@ print_next_steps_api() {
     echo ""
     echo "  Note: For same-host callers, set api_socket = /run/ctrl-exec-api/api.sock"
     echo "        in ctrl-exec.conf (a 0660 unix socket; see api_socket_group). To"
-    echo "        enable TLS on the TCP port, set api_cert and api_key. Send"
+    echo "        enable TLS on the TCP port, set api_tls_cert and api_tls_key. Send"
     echo "        confidential run input only over the socket or TLS. Restart the"
     echo "        service after either change."
     echo ""

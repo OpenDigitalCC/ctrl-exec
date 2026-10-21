@@ -52,14 +52,23 @@ my $VERSION = do {
 #                              group); file permissions decide who may call.
 #   api_bind / api_port        the TCP listener (default 127.0.0.1:7445).
 #                              api_port = off turns it off.
-#   api_cert / api_key         switch the TCP listener to TLS (both or neither).
+#   api_tls_cert / api_tls_key switch the TCP listener to TLS (both or neither).
 # Both listeners may run at once; they share one request handler and auth path.
 # A configuration that names no listener, half a TLS pair, an unreadable TLS
 # file or pair, or an unknown group is refused rather than guessed at.
 sub listen_plan ($config) {
     my %c = map { my $v = $config->{$_}; ($_ => (defined $v && length $v ? $v : undef)) }
-            qw(api_socket api_socket_group api_port api_bind api_cert api_key);
+            qw(api_socket api_socket_group api_port api_bind api_tls_cert api_tls_key);
     my $fail = sub ($msg) { return { ok => 0, error => $msg } };
+
+    # api_cert / api_key were renamed api_tls_cert / api_tls_key. The old names
+    # are refused, not aliased: a silent alias would keep two spellings alive.
+    for my $old (qw(api_cert api_key)) {
+        my $v = $config->{$old};
+        next unless defined $v && length $v;
+        (my $new = $old) =~ s/^api_/api_tls_/;
+        return $fail->("$old is no longer a setting: it is now $new (rename it in the API configuration)");
+    }
 
     my $tcp_on = 1;
     my $port   = $c{api_port} // 7445;
@@ -90,16 +99,16 @@ sub listen_plan ($config) {
     }
 
     my $tls;
-    if (defined $c{api_cert} || defined $c{api_key}) {
-        return $fail->("api_cert and api_key must be set together (TLS needs both)")
-            unless defined $c{api_cert} && defined $c{api_key};
-        return $fail->("api_cert/api_key configure TLS for the TCP listener, but api_port = off")
+    if (defined $c{api_tls_cert} || defined $c{api_tls_key}) {
+        return $fail->("api_tls_cert and api_tls_key must be set together (TLS needs both)")
+            unless defined $c{api_tls_cert} && defined $c{api_tls_key};
+        return $fail->("api_tls_cert/api_tls_key configure TLS for the TCP listener, but api_port = off")
             unless $tcp_on;
-        for my $k (qw(api_cert api_key)) {
+        for my $k (qw(api_tls_cert api_tls_key)) {
             return $fail->("$k '$c{$k}' is not a readable file")
                 unless -f $c{$k} && -r _;
         }
-        $tls = { cert => $c{api_cert}, key => $c{api_key} };
+        $tls = { cert => $c{api_tls_cert}, key => $c{api_tls_key} };
         # Load the pair now: a certificate and key that do not match, or a file
         # that is not PEM, is a configuration error like a missing file.
         eval { _make_tls_context($tls); 1 } or do {

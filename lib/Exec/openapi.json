@@ -14,7 +14,7 @@
   "servers": [
     {
       "url": "http://{host}:{port}",
-      "description": "Plain HTTP (no api_cert/api_key configured). Do not send confidential run input over it across a network.",
+      "description": "Plain HTTP (no api_tls_cert/api_tls_key configured). Do not send confidential run input over it across a network.",
       "variables": {
         "host": { "default": "localhost" },
         "port": { "default": "7445" }
@@ -22,7 +22,7 @@
     },
     {
       "url": "https://{host}:{port}",
-      "description": "TLS (api_cert and api_key configured, operator-provided certificate)",
+      "description": "TLS (api_tls_cert and api_tls_key configured, operator-provided certificate)",
       "variables": {
         "host": { "default": "localhost" },
         "port": { "default": "7445" }

@@ -352,7 +352,7 @@ it and let the entrypoint regenerate it from updated env vars on the next start.
   only, not reachable from outside the container). Set to `0.0.0.0` to
   accept connections on all interfaces - required when accessing the API
   from the host, from other containers, or from external clients. The API is
-  plain HTTP unless `api_cert` and `api_key` are set in `ctrl-exec.conf`, so
+  plain HTTP unless `api_tls_cert` and `api_tls_key` are set in `ctrl-exec.conf`, so
   publish its port only on a network you trust, and never send confidential
   run input to it in plain HTTP across a network (see `API_SOCKET`).
 

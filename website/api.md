@@ -6,7 +6,7 @@ github_url: https://github.com/OpenDigitalCC/ctrl-exec/blob/main/docs/API.md
 current_page: /api
 ---
 
-`ctrl-exec-api` listens on port 7445 (configurable via `api_port`). All request and response bodies are JSON with `Content-Type: application/json`. TLS is enabled when `api_cert` and `api_key` are set in `ctrl-exec.conf`.
+`ctrl-exec-api` listens on port 7445 (configurable via `api_port`). All request and response bodies are JSON with `Content-Type: application/json`. TLS is enabled when `api_tls_cert` and `api_tls_key` are set in `ctrl-exec.conf`.
 
 The auth hook applies to all endpoints. With no hook configured, behaviour is governed by `api_auth_default` (default: `deny`). See [Auth Hooks](/auth).
 

@@ -76,8 +76,8 @@ Relevant keys:
   api_socket_group  Group of the unix socket (default: the server's group)
   api_bind          TCP address (default 127.0.0.1)
   api_port          TCP port (default 7445; off = no TCP listener)
-  api_cert          TLS certificate for the TCP listener (optional, with api_key)
-  api_key           TLS private key for the TCP listener (optional, with api_cert)
+  api_tls_cert      TLS certificate for the TCP listener (optional, with api_tls_key)
+  api_tls_key       TLS private key for the TCP listener (optional, with api_tls_cert)
   auth_hook         Auth hook executable (optional)
 
 Confidential run input should only travel over the unix socket or TLS.

@@ -70,8 +70,8 @@ ca   = /etc/ctrl-exec-dispatcher/ca.crt
 # TLS for the TCP listener (optional - plain HTTP if neither is set). Both must
 # be set and readable by the API's user, or the API refuses to start. Clients
 # verify the certificate (ctrl-exec-cli --ca FILE).
-# api_cert = /etc/ctrl-exec-dispatcher/api.crt
-# api_key  = /etc/ctrl-exec-dispatcher/api.key
+# api_tls_cert = /etc/ctrl-exec-dispatcher/api.crt
+# api_tls_key  = /etc/ctrl-exec-dispatcher/api.key
 
 # ctrl-exec certificate rotation
 #

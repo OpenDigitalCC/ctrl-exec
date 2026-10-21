@@ -663,8 +663,8 @@ certificates with the ctrl-exec CA, which agents trust for dispatcher
 identities. Add to `/etc/ctrl-exec-dispatcher/ctrl-exec.conf`:
 
 ```ini
-api_cert = /etc/ctrl-exec-dispatcher/api.crt
-api_key  = /etc/ctrl-exec-dispatcher/api.key
+api_tls_cert = /etc/ctrl-exec-dispatcher/api.crt
+api_tls_key  = /etc/ctrl-exec-dispatcher/api.key
 ```
 
 The key must be readable by the `ctrl-exec` user (`chown ctrl-exec api.key;
@@ -779,8 +779,8 @@ api_port  = 7445
 # Optional unix socket, mode 0660
 api_socket = /run/ctrl-exec-api/api.sock
 # Optional pair, enables TLS on the API
-api_cert  = /etc/ctrl-exec-dispatcher/api.crt
-api_key   = /etc/ctrl-exec-dispatcher/api.key
+api_tls_cert = /etc/ctrl-exec-dispatcher/api.crt
+api_tls_key  = /etc/ctrl-exec-dispatcher/api.key
 # Lifetime for new/renewed agent certs
 cert_days = 365
 ```

@@ -648,7 +648,7 @@ Key settings:
   TCP listener off, leaving only `api_socket` (which must then be set). The
   socket and TCP listeners can run together.
 
-`api_cert`, `api_key`
+`api_tls_cert`, `api_tls_key`
 : TLS certificate and key, provided by the operator, for the TCP listener.
   Optional: with neither set the TCP listener is plain HTTP. With both set it
   is HTTPS only. Setting one without the other, naming a file the API's user
@@ -657,6 +657,8 @@ Key settings:
   back to plain HTTP. Use a certificate whose subject alternative name matches
   the host name clients connect to, from a CA the clients trust; clients
   verify it (`ctrl-exec-cli --ca FILE`, `curl --cacert FILE`).
+  The names `api_cert` and `api_key` are refused at start-up (exit 78) with a
+  message naming the new key.
 
 `api_bind`
 : Network address the API server binds to. Default: `127.0.0.1` (localhost
@@ -1478,11 +1480,11 @@ ctrl-exec-api --config /etc/ctrl-exec-dispatcher/ctrl-exec.conf
 
 It can also listen on a unix socket (`api_socket`) for same-host callers,
 alone (`api_port = off`) or beside the TCP port. TLS is enabled on the TCP
-port when `api_cert` and `api_key` are set in `ctrl-exec.conf`; plain HTTP is
+port when `api_tls_cert` and `api_tls_key` are set in `ctrl-exec.conf`; plain HTTP is
 used when neither is. A listener configuration that is incomplete or
 contradictory (no listener, half a TLS pair, an unreadable TLS file, an
 unknown socket group) is refused at start-up with exit 78. See
-`api_socket`, `api_port` and `api_cert` above.
+`api_socket`, `api_port` and `api_tls_cert` above.
 
 Over the socket:
 

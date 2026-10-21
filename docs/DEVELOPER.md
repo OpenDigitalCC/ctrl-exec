@@ -96,7 +96,7 @@ function-based design
 
 7445
 : API port. The `ctrl-exec-api` HTTP server listens here. Plain HTTP by
-  default; TLS enabled if `api_cert` and `api_key` are set in
+  default; TLS enabled if `api_tls_cert` and `api_tls_key` are set in
   `ctrl-exec.conf`. No mTLS - auth is delegated to the auth hook. The API can
   also (or instead, `api_port = off`) listen on a unix socket, `api_socket`.
 
@@ -725,7 +725,7 @@ HTTP API server. `listen_plan($config)` turns the listener keys into a plan or
 a refusal (bin/ctrl-exec-api exits 78 on a refusal): a unix socket
 (`api_socket`, mode 0660, group `api_socket_group`) and/or the TCP listener
 (`api_bind`:`api_port`, default 127.0.0.1:7445, `api_port = off` for none),
-TLS on it when `api_cert` and `api_key` are both set (and load).
+TLS on it when `api_tls_cert` and `api_tls_key` are both set (and load).
 
 Fork-per-request model: the parent waits on every listener with `IO::Select`,
 accepts, and forks a child per request. The child handles the request and

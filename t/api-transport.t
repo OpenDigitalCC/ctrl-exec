@@ -139,7 +139,7 @@ subtest 'listen_plan' => sub {
     $p = Exec::API::listen_plan({ api_socket => '/run/x/api.sock' });
     ok($p->{ok} && $p->{tcp} && $p->{socket}, 'socket and TCP together');
 
-    $p = Exec::API::listen_plan({ api_cert => $cert_dummy, api_key => $key_dummy });
+    $p = Exec::API::listen_plan({ api_tls_cert => $cert_dummy, api_tls_key => $key_dummy });
     ok(!$p->{ok}, 'TLS files that are not a certificate and key: refused');
     like($p->{error} // '', qr/Cannot load API TLS certificate\/key/, '  with a clear reason');
 
@@ -154,12 +154,19 @@ subtest 'listen_plan' => sub {
         [ { api_socket_group => 'users' },                qr/api_socket_group is set but api_socket is not/ ],
         [ { api_socket => '/run/x.sock', api_socket_group => 'no-such-group-t013' },
                                                           qr/not a known group/ ],
-        [ { api_cert => $cert_dummy },                    qr/must be set together/ ],
-        [ { api_key  => $key_dummy },                     qr/must be set together/ ],
-        [ { api_cert => "$tmp/missing.crt", api_key => $key_dummy }, qr/api_cert .* not a readable file/ ],
-        [ { api_cert => $cert_dummy, api_key => "$tmp/missing.key" }, qr/api_key .* not a readable file/ ],
+        [ { api_tls_cert => $cert_dummy },                    qr/must be set together/ ],
+        [ { api_tls_key  => $key_dummy },                     qr/must be set together/ ],
+        [ { api_tls_cert => "$tmp/missing.crt", api_tls_key => $key_dummy }, qr/api_tls_cert .* not a readable file/ ],
+        [ { api_tls_cert => $cert_dummy, api_tls_key => "$tmp/missing.key" }, qr/api_tls_key .* not a readable file/ ],
         [ { api_socket => '/run/x.sock', api_port => 'off',
-            api_cert => $cert_dummy, api_key => $key_dummy }, qr/api_port = off/ ],
+            api_tls_cert => $cert_dummy, api_tls_key => $key_dummy }, qr/api_port = off/ ],
+        # The old names are refused, not aliased, each naming the new key.
+        [ { api_cert => $cert_dummy },                    qr/api_cert .*now api_tls_cert/ ],
+        [ { api_key  => $key_dummy },                     qr/api_key .*now api_tls_key/ ],
+        [ { api_cert => $cert_dummy, api_tls_cert => $cert_dummy, api_tls_key => $key_dummy },
+                                                          qr/api_cert .*now api_tls_cert/ ],
+        [ { api_key => $key_dummy, api_tls_cert => $cert_dummy, api_tls_key => $key_dummy },
+                                                          qr/api_key .*now api_tls_key/ ],
     );
     for my $b (@bad) {
         my ($conf, $re) = @$b;
@@ -326,10 +333,10 @@ SKIP: {
     subtest 'TLS round trip, verified against the test CA' => sub {
         my $port = free_port();
         my $p = Exec::API::listen_plan({ api_port => $port,
-            api_cert => "$d/api.crt", api_key => "$d/api.key" });
+            api_tls_cert => "$d/api.crt", api_tls_key => "$d/api.key" });
         is_deeply($p->{tcp}{tls}, { cert => "$d/api.crt", key => "$d/api.key" },
             'listen_plan: TLS pair accepted');
-        my $api  = start_api(api_port => $port, api_cert => "$d/api.crt", api_key => "$d/api.key");
+        my $api  = start_api(api_port => $port, api_tls_cert => "$d/api.crt", api_tls_key => "$d/api.key");
         ok(wait_ready($api), 'TLS API started') or diag slurp($api->{err});
         like(slurp($api->{out}), qr/127\.0\.0\.1:$port \(TLS\)/, 'reports TLS');
 
@@ -355,7 +362,7 @@ SKIP: {
         my $port = free_port();
         my $sock = "$tmp/both.sock";
         my $api  = start_api(api_socket => $sock, api_port => $port,
-                             api_cert => "$d/api.crt", api_key => "$d/api.key");
+                             api_tls_cert => "$d/api.crt", api_tls_key => "$d/api.key");
         ok(wait_ready($api, 2), 'both listeners up') or diag slurp($api->{err});
         is((unix_get($sock))[0], 200, 'socket answers');
         is(($tls_get->($port, "$d/ca.crt"))[0], 200, 'TLS answers');
@@ -366,12 +373,12 @@ SKIP: {
     subtest 'a certificate that does not load stops start-up' => sub {
         my $port = free_port();
         my ($rc, $err) = wait_exit(start_api(api_port => $port,
-            api_cert => "$d/api.crt", api_key => "$d/rogue.key"));
+            api_tls_cert => "$d/api.crt", api_tls_key => "$d/rogue.key"));
         isnt($rc, 0, 'mismatched key: refused');
         like($err, qr/Cannot load API TLS certificate\/key/, '  clear error');
 
         my $conf = spew("$tmp/badtls.conf", "cert = x\nkey = x\nca = x\n"
-            . "api_port = $port\napi_cert = $d/api.crt\napi_key = $d/rogue.key\n");
+            . "api_port = $port\napi_tls_cert = $d/api.crt\napi_tls_key = $d/rogue.key\n");
         my $out = `'$^X' -I'$Bin/../lib' -I'$Bin/lib' -MNoSyslog '$Bin/../bin/ctrl-exec-api' --config '$conf' 2>&1`;
         is($? >> 8, 78, 'bin/ctrl-exec-api: exit 78');
         like($out, qr/Cannot load API TLS certificate\/key/, '  names the problem');
@@ -391,10 +398,18 @@ subtest 'bin/ctrl-exec-api: bad combination exits 78 (EX_CONFIG)' => sub {
         'names the problem');
 
     $conf = spew("$tmp/bad2.conf",
-        "cert = x\nkey = x\nca = x\napi_cert = $cert_dummy\n");
+        "cert = x\nkey = x\nca = x\napi_tls_cert = $cert_dummy\n");
     $out = `'$^X' -I'$Bin/../lib' -I'$Bin/lib' -MNoSyslog '$Bin/../bin/ctrl-exec-api' --config '$conf' 2>&1`;
     is($? >> 8, 78, 'half a TLS pair: exit 78');
-    like($out, qr/api_cert and api_key must be set together/, 'names the problem');
+    like($out, qr/api_tls_cert and api_tls_key must be set together/, 'names the problem');
+
+    for my $old ([ api_cert => 'api_tls_cert' ], [ api_key => 'api_tls_key' ]) {
+        my ($o, $n) = @$old;
+        $conf = spew("$tmp/bad-$o.conf", "cert = x\nkey = x\nca = x\n$o = $cert_dummy\n");
+        $out = `'$^X' -I'$Bin/../lib' -I'$Bin/lib' -MNoSyslog '$Bin/../bin/ctrl-exec-api' --config '$conf' 2>&1`;
+        is($? >> 8, 78, "old name $o: exit 78");
+        like($out, qr/$o is no longer a setting: it is now $n/, "  names the new key $n");
+    }
 };
 
 done_testing;

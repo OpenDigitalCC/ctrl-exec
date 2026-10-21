@@ -403,7 +403,7 @@ Confidential input
   stdout or stderr returns it in the result - that is the script's choice.
 
   On the way in, input should travel only over the API's unix socket
-  (`api_socket`) or TLS (`api_cert`/`api_key`), never plain HTTP across a
+  (`api_socket`) or TLS (`api_tls_cert`/`api_tls_key`), never plain HTTP across a
   network: the API body carries the values. The dispatcher-to-agent hop is
   always mTLS. `ctrl-exec-cli` warns on stderr when `--input` or
   `--input-fields` would be sent over plain HTTP to a non-loopback address.
@@ -991,7 +991,7 @@ where the API is reachable from outside the dispatcher host:
 - Place the API behind a reverse proxy (nginx, caddy) that handles TLS
   termination and request rate limiting. The API has no built-in rate limiting
   and no host count cap - a reverse proxy is the appropriate layer for both.
-- Enable TLS on the API by setting `api_cert` and `api_key` in
+- Enable TLS on the API by setting `api_tls_cert` and `api_tls_key` in
   `ctrl-exec.conf`, with a certificate from a CA the clients trust whose
   subject alternative name matches the API's host name, and have clients
   verify it (`ctrl-exec-cli --ca FILE`). The API refuses to start rather than
@@ -1042,7 +1042,7 @@ limitations, Docker-specific notes), see SECURITY-OPERATIONS.md.
 | Unauthorised API access (no hook) | `api_auth_default = deny` blocks all requests by default |
 | Unauthorised API access (network) | API binds to `127.0.0.1` by default; external bind is opt-in |
 | Unauthorised API access (local users) | Optional unix socket (`api_socket`), mode 0660 in `api_socket_group`; hook sees the caller's kernel-reported uid |
-| Confidential input read on the wire to the API | Unix socket or TLS (`api_cert`/`api_key`); incomplete TLS settings refuse start-up instead of falling back to plain HTTP; CLI warns on plain HTTP to a non-loopback address |
+| Confidential input read on the wire to the API | Unix socket or TLS (`api_tls_cert`/`api_tls_key`); incomplete TLS settings refuse start-up instead of falling back to plain HTTP; CLI warns on plain HTTP to a non-loopback address |
 | API script inventory exposure | All endpoints including `/openapi-live.json` pass through auth |
 | CA key theft | 0600 root-only, offline backup, host access controls |
 | Cert remaining valid after unpair | Revocation list on agent; add serial and reload |
