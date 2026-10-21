@@ -51,6 +51,8 @@ subtest 'the error text: only for a certificate without an AKI, only for a refus
         'older LWP wording of the same close (Debian 11): as before, first';
     like xlate($status, $cfg{without}), $HINT, 'older LWP wording: the hint';
     is xlate($status, $cfg{with}), $status, 'older LWP wording, certificate with an AKI: unchanged';
+    like xlate('500 read failed: ', $cfg{without}), $HINT,
+        'older LWP wording after a request body (Ubuntu 20.04 run): the hint';
     is xlate($tls), "TLS handshake with 'agent-01' failed - certificate or trust mismatch",
         'no config: unchanged';
     is xlate($tls, { cert => "$without->{dir}/missing.crt" }),

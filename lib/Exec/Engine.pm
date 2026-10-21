@@ -830,10 +830,11 @@ sub _transport_error ($raw, $host, $port, $config = undef) {
     # Under TLS 1.3 the client's side of the handshake is over before the agent
     # checks the client certificate, so an agent refusing it reaches LWP as a
     # connection closed with no reply (T-068). Older LWP (Debian 11, Ubuntu
-    # 20.04) words the same close "Status read failed".
+    # 20.04) words the same close "Status read failed", or "read failed" when
+    # the request body was written first.
     return $raw . _old_cert_hint($config)
         if $raw =~ /closed \s connection \s without \s sending \s any \s data |
-                    status \s read \s failed/xi;
+                    \bread \s failed/xi;
 
     return "agent rate-limited this dispatcher (HTTP 429) - its certificate serial "
          . "is not in the agent's trusted-dispatcher map (pair it), or raise "

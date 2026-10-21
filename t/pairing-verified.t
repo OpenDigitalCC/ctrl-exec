@@ -231,9 +231,12 @@ sub start_mitm ($chain_file, $key_file) {
         return ($pid, $port, $count);
     }
     alarm $STEP;
-    my $a = $l->accept or POSIX::_exit(1);
+    my $a = $l->accept;
     my $n = 0;
-    while (IO::Select->new($a)->can_read(5)) {
+    # A client that refuses this listener can close before the server side of
+    # the handshake completes (seen on OpenSSL 1.1): accept then fails and no
+    # application data can have arrived - 0 bytes, not an unknown count.
+    while ($a && IO::Select->new($a)->can_read(5)) {
         my $got = sysread $a, my $buf, 16384;
         last unless $got;
         $n += $got;
