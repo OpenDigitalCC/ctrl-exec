@@ -805,7 +805,7 @@ Fields
 | SCRIPT | string | Script name from the request |
 | PEER | string | IP address of the connecting dispatcher |
 | REQID | hex | Request ID |
-| REASON | string | Present only when denied by auth hook; contains the hook denial reason |
+| REASON | string | The auth hook's denial reason, or one of the agent's own: `invalid input`, `input does not fit mode`, `async run of an output=confidential script` (T-053). Absent for an allowlist denial |
 
 Allowlist denial (no REASON field; the reason is in the `allowlist-skip` line
 logged when the allowlist loaded, and in the error returned to the caller):
@@ -821,7 +821,8 @@ ACTION=deny REASON=denied SCRIPT=backup PEER=10.0.0.1 REQID=a1b2c3d4e5f60001
 ```
 
 To distinguish between the two in log processing: allowlist denials have
-no REASON field; hook denials always have one.
+no REASON field; hook denials always have one, and so do the agent's own
+refusals listed in the table.
 
 ### serial-reject
 

@@ -1,7 +1,8 @@
 # ctrl-exec-agent script allowlist
 # /etc/ctrl-exec-agent/scripts.conf
 #
-# One entry per line: <name> = <absolute-path> [profile=<name>] [input=<mode>]
+# One entry per line:
+#   <name> = <absolute-path> [profile=<name>] [input=<mode>] [output=<mode>]
 # The name is what the ctrl-exec passes as the script argument.
 # The path must be executable and owned by root. This is enforced: the script
 # and every directory from / down to it must be owned by root and not writable
@@ -32,6 +33,16 @@
 # itself, and for input=fields it creates the directory as root under
 # /run/ctrl-exec-agent/input and gives it to the profile's run_as user.
 #
+# The optional 'output=<mode>' says whether the run's stdout and stderr may be
+# stored; order-independent like profile=:
+#   output=stored        stored in the dispatcher's run store (default)
+#   output=confidential  returned to the caller in the synchronous response,
+#                        marked output_confidential, and never stored: the
+#                        dispatcher keeps the exit status only. Async runs of
+#                        the script are refused.
+# Any other value skips the entry. The dispatcher relies on the mark, so an
+# agent older than 0.13 (no mark) has its output stored as before.
+#
 # A line with more than one path, a relative path, a name outside [A-Za-z0-9_-],
 # or a path of 4096 characters or more is skipped. If a name appears twice, the
 # last valid line wins; a skipped line never replaces an earlier valid one.
@@ -42,6 +53,7 @@
 #   deploy-cert  = /opt/ctrl-exec-scripts/deploy-cert.sh   profile=cert-deploy
 #   restart-web  = /opt/ctrl-exec-scripts/restart-web.sh   profile=svc-restart
 #   install-key  = /opt/ctrl-exec-scripts/install-key.sh   input=fields
+#   issue-cert   = /opt/ctrl-exec-scripts/issue-cert.sh    output=confidential
 
 # --- Demonstrator (evaluation and examples) ---
 #

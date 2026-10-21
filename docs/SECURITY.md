@@ -456,6 +456,27 @@ Confidential input at the executor
     `CTRL_EXEC_INPUT` (the path) for `fields`. Executor messages name fields
     and request ids, never values.
 
+Confidential output (secrets at rest)
+: By default the dispatcher stores every run's result, `stdout` and `stderr`
+  included, in `/var/lib/ctrl-exec/runs/<reqid>.json` (0640, group
+  `ctrl-exec`) for 24 hours, and an async result also waits on the agent in
+  `/var/lib/ctrl-exec-agent/runs/` until fetched. A script that prints a
+  secret (a new private key) is declared `output=confidential` in the agent's
+  `scripts.conf` (see REFERENCE.md). Its output then reaches the caller in the
+  synchronous response and is stored nowhere: the agent marks the result
+  `output_confidential`, the dispatcher's run store writes such a result with
+  the exit status and metadata only (sync records, and any async result
+  fetched with the mark), and the agent refuses async runs of the script, so
+  nothing is held agent-side. No log line on the agent, executor or dispatcher
+  carries a run's output, for any script. The executor holds the output in
+  memory only, to hand it back to the agent.
+
+  The protection rests on the agent's declaration. The dispatcher cannot tell
+  that output is secret unless the result is marked, so an unmarked result -
+  any script not declared, or any result from an agent older than 0.13.0 - is
+  stored whole. What the caller does with the output it receives is outside
+  ctrl-exec.
+
 
 ## Auth Hook
 
@@ -1053,6 +1074,7 @@ limitations, Docker-specific notes), see SECURITY-OPERATIONS.md.
 | CA key theft | 0600 root-only, offline backup, host access controls |
 | Cert remaining valid after unpair | Revocation list on agent; add serial and reload |
 | Compromised dispatcher cert | Add serial to revoked-serials on all agents; reload |
+| Secret script output at rest on the dispatcher | `output=confidential` in the agent's `scripts.conf`: output returned to the caller only, run store keeps exit status; async refused (depends on the agent's declaration; older agents send no mark) |
 | Token leaking via logs | Tokens never logged by dispatcher or agent |
 | Token leaking via ps | Use `ENVEXEC_TOKEN` env var not `--token` flag |
 

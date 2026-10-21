@@ -297,7 +297,7 @@ sub _validate_config ($config, $path) {
 }
 
 # Load and parse scripts.conf allowlist
-# Returns hashref: { script_name => { path, profile, input } }
+# Returns hashref: { script_name => { path, profile, input, output } }
 # Dies on parse errors; unknown/bad entries are skipped with a warning
 #
 # Optional opts:
@@ -382,6 +382,19 @@ sub load_allowlist_full ($path = undef, $script_dirs = undef) {
                 }
                 $input_mode = $annot{input};
             }
+            # output= (T-053): confidential output is returned to the caller
+            # but never stored (the result is marked output_confidential).
+            # Absent means stored; any other value skips the script, so a typo
+            # cannot silently leave a secret to be stored.
+            my $output_mode = 'stored';
+            if (exists $annot{output}) {
+                if (defined(my $why = output_mode_problem($annot{output}))) {
+                    $skipped{$name} = $why;
+                    warn "Allowlist: skipping '$name' - $why\n";
+                    next;
+                }
+                $output_mode = $annot{output};
+            }
             unless ($script_path =~ m{^/}) {
                 $skipped{$name} = "'$script_path' is not an absolute path";
                 warn "Allowlist: skipping '$name' - path must be absolute: $script_path\n";
@@ -401,6 +414,7 @@ sub load_allowlist_full ($path = undef, $script_dirs = undef) {
                 path    => $script_path,
                 profile => ($annot{profile} // 'default'),
                 input   => $input_mode,
+                output  => $output_mode,
             };
         }
         else {
@@ -423,6 +437,14 @@ sub input_mode_problem ($value) {
     }
     my $shown = length $value > 40 ? substr($value, 0, 40) . '...' : $value;
     return "its input mode '$shown' is not one of context, raw, raw:<name>, fields";
+}
+
+# Why an 'output=' value in scripts.conf is not usable, or undef when it is:
+# stored (the default) or confidential (T-053).
+sub output_mode_problem ($value) {
+    return undef if $value =~ /\A(?:stored|confidential)\z/;
+    my $shown = length $value > 40 ? substr($value, 0, 40) . '...' : $value;
+    return "its output mode '$shown' is not one of stored, confidential";
 }
 
 # The reason text for a path outside script_dirs, shared by the load-time skip
@@ -629,6 +651,14 @@ sub script_input_mode ($name, $allowlist) {
     my $entry = $allowlist->{$name};
     return 'context' unless ref $entry eq 'HASH';
     return $entry->{input} // 'context';
+}
+
+# The output mode of a script ('stored' when unset): stored or confidential
+# (T-053). A confidential script's output goes to the caller and nowhere else.
+sub script_output_mode ($name, $allowlist) {
+    my $entry = $allowlist->{$name};
+    return 'stored' unless ref $entry eq 'HASH';
+    return $entry->{output} // 'stored';
 }
 
 # Cross-check the allowlist against the defined profiles: every script's profile

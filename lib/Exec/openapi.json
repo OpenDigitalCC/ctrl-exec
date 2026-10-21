@@ -399,7 +399,8 @@
           "rtt":    { "type": "string", "description": "Round-trip time including script execution.", "example": "4210ms" },
           "reqid":  { "type": "string", "description": "Request ID. Matches the REQID field in syslog on both ctrl-exec and agent. Use to correlate results with log entries.", "example": "a1b2c3d4" },
           "error":  { "type": "string", "description": "ctrl-exec error message. Present when exit is -1.", "example": "read timeout after 60s" },
-          "script": { "type": "string", "description": "Script name as dispatched." }
+          "script": { "type": "string", "description": "Script name as dispatched." },
+          "output_confidential": { "type": "boolean", "enum": [true], "description": "Present when the agent's scripts.conf declares the script output=confidential. stdout and stderr are in the POST /run response only: the stored record (GET /status) keeps exit status and metadata without them. Agents older than 0.13 never send it, and their results are stored whole." }
         }
       },
       "RunResponse": {
@@ -449,6 +450,7 @@
           "stdout":      { "type": "string" },
           "stderr":      { "type": "string" },
           "error":       { "type": "string", "description": "Present for busy/error." },
+          "output_confidential": { "type": "boolean", "enum": [true], "description": "The script is output=confidential on its agent: stdout and stderr are never stored, so a stored record has exit only. Agents refuse async runs of such scripts." },
           "fetch_error": { "type": "string", "description": "Transient fetch failure on the last poll; the host stays pending and is retried." }
         }
       },

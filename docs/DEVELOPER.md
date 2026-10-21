@@ -858,7 +858,10 @@ limits.
 
 The dispatcher's run store. Records sync (`record_sync`) and async
 (`record_async`) runs keyed by reqid under `/var/lib/ctrl-exec/runs`, and
-`load`/`aggregate`/`purge` for status retrieval and TTL expiry.
+`load`/`aggregate`/`purge` for status retrieval and TTL expiry. Every write
+goes through `_write`, which leaves `stdout` and `stderr` out of any per-host
+result marked `output_confidential` (T-053); `aggregate` returns a freshly
+fetched confidential result to its caller but stores it without the output.
 
 
 ### `Exec::Agent::Config`
@@ -889,6 +892,11 @@ Functions:
   `reload_plan` carries it as `skipped`; `not_permitted_reason` turns it (or an
   execution-time `script_dirs` rejection, or an unknown name) into the text
   after `script not permitted: `; `log_skipped` logs it once per load.
+
+`script_output_mode($name, $allowlist)`
+: The script's `output=` mode, `stored` (default) or `confidential` (T-053).
+  `output_mode_problem($value)` gives the skip reason for any other value; the
+  executor's `find_script` applies the same rule (t/exec-conformance.t).
 
 `validate_script($name, $allowlist, $script_dirs)`
 : Returns the script path if `$name` matches `/^[\w-]+$/` and exists in the

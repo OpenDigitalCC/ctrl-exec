@@ -131,12 +131,18 @@ Allowlist information in hook responses
 ## Sensitive Script Output
 
 Scripts that return credentials, key material, or other sensitive data will
-have that data included in the API response and stored in the result file at
+have that data included in the API response and, unless the script is
+declared confidential, stored in the result file at
 `/var/lib/ctrl-exec/runs/<reqid>.json` for 24 hours. The result directory
 is 0770 root:ctrl-exec - readable by all members of the `ctrl-exec` group.
 
 Options for handling sensitive output:
 
+- Declare the script `output=confidential` in the agent's `scripts.conf`
+  (0.13.0 and later on the agent): the output is returned in the synchronous
+  response only and the stored record keeps the exit status; async runs of the
+  script are refused. An agent older than 0.13.0 does not mark its results, so
+  their output is stored as before. See REFERENCE.md, "Confidential output".
 - Write sensitive data to a local file on the agent rather than stdout; return
   only a status code and path from the script
 - Have the script encrypt the output before writing to stdout; the caller

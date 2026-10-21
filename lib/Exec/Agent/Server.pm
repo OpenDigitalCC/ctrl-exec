@@ -357,7 +357,28 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
     # agent's run store keyed by reqid, and return 202 immediately. The caller
     # fetches the result later via GET /result/<reqid>. A valid reqid is
     # required because it is the store key.
+    # Confidential output (T-053): a script declared output=confidential in
+    # scripts.conf has its stdout and stderr returned to the caller and marked
+    # so the dispatcher does not store them. Nothing on the agent logs them.
+    my $confidential = Exec::Agent::Config::script_output_mode($name, $allowlist) eq 'confidential';
+
     if ($data->{async}) {
+        # An async result exists to be stored (here until fetched, then in the
+        # dispatcher's run store until polled), so a script whose output must
+        # never be stored cannot run async. Refused before anything is started
+        # or recorded.
+        if ($confidential) {
+            Exec::Log::log_action('WARNING', {
+                ACTION => 'deny', REASON => 'async run of an output=confidential script',
+                SCRIPT => $name, PEER => $peer, REQID => $reqid,
+            });
+            _send_json($conn, {
+                script => $name, exit => -1, reqid => $reqid,
+                error  => "script '$name' is output=confidential: its output is never "
+                        . 'stored, so it cannot run async; run it synchronously',
+            });
+            return;
+        }
         # Async runs still go through the in-process AsyncRunner, which would not
         # apply the script's security profile. Rather than silently run an async
         # job with the wrong (front-end) privilege, refuse it while the executor
@@ -504,6 +525,7 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
         stdout => $result->{stdout},
         stderr => $result->{stderr},
         reqid  => $reqid,
+        ($confidential ? (output_confidential => JSON::true) : ()),
     });
 }
 
@@ -696,6 +718,7 @@ sub handle_capabilities ($conn, $peer, $allowlist, $config, $trusted, $peer_seri
             executable => ((defined $path && -x $path) ? JSON::true : JSON::false),
             profile    => Exec::Agent::Config::script_profile($name, $allowlist),
             input      => Exec::Agent::Config::script_input_mode($name, $allowlist),
+            output     => Exec::Agent::Config::script_output_mode($name, $allowlist),
         };
         # Advertise the script's schema sidecar when present (the agent only
         # transports it; the consumer interprets it). See docs/SCHEMA-SIDECAR.md.

@@ -206,6 +206,15 @@ Response (success):
   pipe failure). A result with exit -1 always carries the reason in `error`.
   126 = killed by signal or exec failed.
 
+`output_confidential`
+: Present, and `true`, when the agent's `scripts.conf` declares the script
+  `output=confidential` (an agent older than 0.13 never sends it). `stdout`
+  and `stderr` are in this response as usual, but the run store keeps the
+  result without them: a later `GET /status/{reqid}` shows the exit status,
+  this marker and the other metadata only. Read the output from this
+  response; it is not kept anywhere else. See REFERENCE.md, "Confidential
+  output".
+
 Response (lock conflict):
 
 ```json
@@ -275,6 +284,9 @@ returns a per-host `hosts` map plus a `complete` flag and `pending` list:
 }
 ```
 
+A result marked `output_confidential` is stored without `stdout` and
+`stderr`, so its record shows `exit` and the marker only.
+
 Per-host `status` values: `accepted`/`running` (still in progress), `done`
 (finished, with `exit`/`stdout`/`stderr`), `expired` (the agent purged its
 result before it was fetched), `busy`/`error` (the job never ran on that
@@ -297,6 +309,9 @@ Submit with `"async": true`, record the top-level `reqid`, then poll
 `GET /status/{reqid}` until `complete` is `true`. The agent runs each job
 detached, so it survives the connection close and an agent restart
 (`KillMode=process`); results are held agent-side and fetched on demand.
+An agent refuses an async run of an `output=confidential` script (its output
+would have to be stored to be fetched later); that host is reported with
+`status` `error` and the reason in `error`. Run such scripts synchronously.
 The calling programme controls the polling cadence; there is no push or
 callback. The CLI `ced wait <reqid>` implements this poll loop.
 

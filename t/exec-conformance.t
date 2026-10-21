@@ -66,7 +66,8 @@ sub perl_resolve {
     my $caps  = join(',', @{ $p->{caps}     // [] });
     my $writ  = join(':', @{ $p->{writable} // [] });
     my $input = Exec::Agent::Config::script_input_mode($name, $al);
-    return "OK path=$path|profile=$prof|run_as=$runas|nnp=$nnp|caps=$caps|writable=$writ|input=$input";
+    my $output = Exec::Agent::Config::script_output_mode($name, $al);
+    return "OK path=$path|profile=$prof|run_as=$runas|nnp=$nnp|caps=$caps|writable=$writ|input=$input|output=$output";
 }
 
 # --- fixtures: each names the scripts to resolve against one config pair -------
@@ -232,6 +233,38 @@ push @fixtures, (
                  . "lastgood = /opt/lg.sh profile=a input=nope input=fields\n",
         names   => [qw(bogus empty upper rawempty rawslash rawdot rawdotdot rawdots3 raw65 raw64
                        rawchars rawsp ctxcolon fieldsx rawutf8 lastbad lastgood)],
+    },
+    {
+        # output= (T-053): both parsers accept stored and confidential, in any
+        # position on the line and beside input=; absent means stored.
+        label   => 'scripts: output= valid values leave the decision unchanged',
+        expect  => { plain => 'OK path=/opt/p.sh|profile=a|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored',
+                     st    => 'OK path=/opt/st.sh|profile=a|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored',
+                     conf  => 'OK path=/opt/c.sh|profile=a|run_as=nobody|nnp=1|caps=|writable=|input=context|output=confidential',
+                     first => 'OK path=/opt/f.sh|profile=a|run_as=nobody|nnp=1|caps=|writable=|input=fields|output=confidential',
+                     last  => 'OK path=/opt/l.sh|profile=a|run_as=nobody|nnp=1|caps=|writable=|input=context|output=confidential' },
+        agent   => $REQUIRED . "[profile a]\nrun_as = nobody\n",
+        scripts => "plain = /opt/p.sh profile=a\nst = /opt/st.sh profile=a output=stored\n"
+                 . "conf = /opt/c.sh profile=a output=confidential\n"
+                 . "first = output=confidential input=fields profile=a /opt/f.sh\n"
+                 . "last = /opt/l.sh profile=a output=stored output=confidential\n",
+        names   => [qw(plain st conf first last)],
+    },
+    {
+        # A bad output= value skips the script in BOTH parsers: the executor must
+        # never run a script whose output the front end could not classify.
+        label   => 'scripts: output= bad values skip the script in both parsers',
+        expect  => { map({ $_ => 'DENY not-allowlisted' } qw(bogus empty upper colon spaced lastbad)),
+                     lastgood => 'OK path=/opt/lg.sh|profile=a' },
+        agent   => $REQUIRED . "[profile a]\nrun_as = nobody\n",
+        scripts => "bogus = /opt/b.sh profile=a output=secret\n"
+                 . "empty = /opt/e.sh profile=a output=\n"
+                 . "upper = /opt/u.sh profile=a output=Confidential\n"
+                 . "colon = /opt/c.sh profile=a output=confidential:\n"
+                 . "spaced = /opt/s.sh profile=a output=confidential\x0bx\n"
+                 . "lastbad = /opt/lb.sh profile=a output=confidential output=nope\n"
+                 . "lastgood = /opt/lg.sh profile=a output=nope output=confidential\n",
+        names   => [qw(bogus empty upper colon spaced lastbad lastgood)],
     },
     {
         # The last profile= on a line wins in both parsers, including when an

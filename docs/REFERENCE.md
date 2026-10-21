@@ -1274,6 +1274,53 @@ scripts, still go through it unchanged.
 
 ---
 
+### Confidential output (scripts.conf `output=`)
+
+A script whose output is secret (an issuing script that prints a new private
+key, for example) is declared in the agent's `scripts.conf` with
+`output=confidential`, beside the path and any `profile=` or `input=`, in any
+order:
+
+```
+issue-cert = /opt/ctrl-exec-scripts/issue-cert.sh output=confidential
+```
+
+`output=stored` (default)
+: The result is stored as before: the dispatcher's run store
+  (`/var/lib/ctrl-exec/runs/<reqid>.json`, 24 hours) keeps `stdout` and
+  `stderr` with the exit status.
+
+`output=confidential`
+: The caller gets `stdout` and `stderr` in the synchronous response as usual,
+  and the agent marks the result `output_confidential: true`. The dispatcher
+  stores such a result without `stdout` and `stderr` (exit status, the marker
+  and the other metadata only), so `GET /status/<reqid>` and
+  `ced status <reqid>` show no output for it. No log line on the agent, the
+  executor or the dispatcher carries a run's output, for any script. `ced run`
+  prints the output to the operator and stores nothing for a synchronous run.
+
+  An async run of the script is refused before anything starts
+  (`script '<name>' is output=confidential: its output is never stored, so it
+  cannot run async; run it synchronously`): an async result has to be stored,
+  on the agent until it is fetched and then in the dispatcher's run store, to
+  be collected later.
+
+A `scripts.conf` entry with any other `output=` value (`output=secret`, an
+empty value, `output=Confidential`) is skipped, and a run of it reports
+`script not permitted: its output mode '<value>' is not one of stored,
+confidential`. The executor reads the same value from its own `scripts.conf`
+and skips such an entry too. `/capabilities` lists each script's `output`
+mode.
+
+The protection depends on the agent's declaration: the dispatcher cannot tell
+that output is secret unless the agent marks the result. A result without the
+marker is stored whole, which includes every result from an agent older than
+0.13.0. Declare the script on an upgraded agent before relying on it. The
+caller (a `ctrl-exec-cli` script, a job's own log) is responsible for what it
+does with the output it receives.
+
+---
+
 ### Auth hook (agent-side)
 
 When `auth_hook` is configured in `agent.conf`, the hook is executed after

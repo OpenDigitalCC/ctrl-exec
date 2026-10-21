@@ -259,6 +259,7 @@ Cause
   | `'<path>' is not an absolute path` | Write the full path from `/` in `scripts.conf`. |
   | `its scripts.conf entry has more than one path` | One path per line; annotations such as `profile=` are `key=value`. |
   | `its input mode '<value>' is not one of context, raw, raw:<name>, fields` | `input=` takes `context`, `raw`, `raw:<field>` or `fields`. |
+  | `its output mode '<value>' is not one of stored, confidential` | `output=` takes `stored` (the default) or `confidential`. |
   | `its scripts.conf entry has no script path` | The line has only `key=value` annotations; add the path. |
   | `its path is too long` / `its profile name is too long` | Shorten the path (under 4096 characters) or profile name (under 128). |
   | `'<path>' is group-writable` / `'<path>' is world-writable` | The script, or a directory on its path (the one named), can be written by others. `sudo chmod go-w '<path>'`. A script under `/tmp`, `/var/tmp` or another world-writable directory must be moved. |

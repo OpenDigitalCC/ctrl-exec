@@ -388,18 +388,32 @@ static int input_mode_ok(const char *v) {
     return 0;
 }
 
+/* ---- confidential output (T-053) ---------------------------------------- */
+/* A scripts.conf output= value: stored (the default) or confidential. Mirrors
+ * Exec::Agent::Config::output_mode_problem; anything else skips the script.
+ * The executor neither stores nor logs a run's output, so it uses the mode for
+ * nothing else: the front end marks a confidential result for the dispatcher.
+ * It is parsed here so that a script the front end skipped for a bad value is
+ * skipped here too, and so `resolve` shows the same decision as the front end. */
+#define OUTPUT_MODE_LEN  16
+
+static int output_mode_ok(const char *v) {
+    return strcmp(v, "stored") == 0 || strcmp(v, "confidential") == 0;
+}
+
 /* ---- scripts.conf lookup ---------------------------------------------- */
 /* Find one script by name. Returns 1 found (out_path/out_profile/out_input
- * set), 0 not present / skipped (matches a Perl-skipped entry: not
- * allowlisted). Mirrors load_allowlist: a skipped line never replaces an
- * earlier valid one and a later valid line replaces an earlier one (last valid
- * entry wins). Within a line the last profile= and the last input= win, as
- * in the Perl annotation hash. */
+ * set, and out_output when it is not NULL), 0 not present / skipped (matches a
+ * Perl-skipped entry: not allowlisted). Mirrors load_allowlist: a skipped line
+ * never replaces an earlier valid one and a later valid line replaces an
+ * earlier one (last valid entry wins). Within a line the last profile=, the
+ * last input= and the last output= win, as in the Perl annotation hash. */
 
 static int find_script(const char *path, const char *want,
                        char *out_path, size_t plen,
                        char *out_profile, size_t prlen,
-                       char *out_input, size_t inlen) {
+                       char *out_input, size_t inlen,
+                       char *out_output, size_t outlen) {
     FILE *f = fopen(path, "re");
     if (!f) return 0;
     char *line = NULL; size_t cap = 0; ssize_t len; int found = 0;
@@ -424,7 +438,7 @@ static int find_script(const char *path, const char *want,
          * order-independent. Mirrors load_allowlist. */
         char *rest = trim(eq + 1);
         char scriptpath[VALLEN] = "", profile[NAMELEN] = "default";
-        const char *profv = NULL, *inputv = NULL;    /* last of each wins */
+        const char *profv = NULL, *inputv = NULL, *outputv = NULL;  /* last of each wins */
         int havepath = 0, twopaths = 0, toolong = 0;
         char *save = NULL, *tok = strtok_r(rest, " \t\r\n\v\f", &save);
         for (; tok; tok = strtok_r(NULL, " \t\r\n\v\f", &save)) {
@@ -437,6 +451,7 @@ static int find_script(const char *path, const char *want,
                     *te = '\0';
                     if (strcmp(tok, "profile") == 0)    profv  = te + 1;
                     else if (strcmp(tok, "input") == 0) inputv = te + 1;
+                    else if (strcmp(tok, "output") == 0) outputv = te + 1;
                     continue;
                 }
             }
@@ -452,10 +467,14 @@ static int find_script(const char *path, const char *want,
         /* A bad input= value skips the script, as in the Perl parser: never
          * deliver input in a form the operator did not write. */
         if (inputv && !input_mode_ok(inputv)) continue;
+        /* Likewise a bad output= value (T-053): never run a script whose
+         * confidentiality the front end could not establish. */
+        if (outputv && !output_mode_ok(outputv)) continue;
         if (scriptpath[0] != '/') continue;               /* relative -> skipped */
         snprintf(out_path, plen, "%s", scriptpath);
         snprintf(out_profile, prlen, "%s", profile);
         snprintf(out_input, inlen, "%s", inputv ? inputv : "context");
+        if (out_output) snprintf(out_output, outlen, "%s", outputv ? outputv : "stored");
         found = 1;                                        /* a later one may replace it */
     }
     free(line);
@@ -695,9 +714,9 @@ static int cmd_resolve(const char *agent_conf, const char *scripts_conf,
     if (!c) { fprintf(stderr, "out of memory\n"); return 2; }
     if (parse_agent_conf(agent_conf, c) != 0) { free(c); return 2; }
 
-    char spath[VALLEN], pname[NAMELEN], imode[INPUT_MODE_LEN];
+    char spath[VALLEN], pname[NAMELEN], imode[INPUT_MODE_LEN], omode[OUTPUT_MODE_LEN];
     if (!find_script(scripts_conf, name, spath, sizeof(spath), pname, sizeof(pname),
-                     imode, sizeof(imode))) {
+                     imode, sizeof(imode), omode, sizeof(omode))) {
         printf("DENY not-allowlisted\n");
         free(c); return 0;
     }
@@ -726,8 +745,8 @@ static int cmd_resolve(const char *agent_conf, const char *scripts_conf,
         strncat(writ, p->writable[i], sizeof(writ) - strlen(writ) - 1);
     }
 
-    printf("OK path=%s|profile=%s|run_as=%s|nnp=%d|caps=%s|writable=%s|input=%s\n",
-           spath, pname, p->run_as, p->nnp, caps, writ, imode);
+    printf("OK path=%s|profile=%s|run_as=%s|nnp=%d|caps=%s|writable=%s|input=%s|output=%s\n",
+           spath, pname, p->run_as, p->nnp, caps, writ, imode, omode);
     free(c);
     return 0;
 }
@@ -1695,8 +1714,9 @@ static void handle_conn(int cfd, config_t *cfg, const char *scripts_conf,
          * writable (T-045), and that the path still names the file it checked. */
         char spath[VALLEN], pname[NAMELEN], imode[INPUT_MODE_LEN];
         profile_t *p = NULL;
+        /* The output mode is not needed here (see output_mode_ok): NULL. */
         if (!find_script(scripts_conf, script, spath, sizeof(spath), pname, sizeof(pname),
-                         imode, sizeof(imode))) {
+                         imode, sizeof(imode), NULL, 0)) {
             buf_add(&err, "executor: script not permitted\n", 31);
         } else if (!path_in_dirs(spath, cfg)) {
             buf_add(&err, "executor: script not in script_dirs\n", 36);
