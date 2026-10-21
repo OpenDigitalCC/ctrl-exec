@@ -300,8 +300,25 @@ check-disk    = /opt/ctrl-exec-scripts/check-disk.sh
 Place scripts in the managed directory, owned by root:
 
 ```bash
-sudo install -o root -g ctrl-exec-agent -m 750 your-script.sh /opt/ctrl-exec-scripts/
+sudo install -o root -g root -m 755 your-script.sh /opt/ctrl-exec-scripts/
 ```
+
+The executor runs the script as its profile's `run_as` user, so that user must
+be able to reach, read and execute it. A script with no `profile=` uses
+`[profile default]`, which the packaged `agent.conf` sets to `run_as = nobody`.
+`nobody` cannot read a mode 750 `root:ctrl-exec-agent` file, and cannot enter
+the packaged scripts directory (mode 750 `root:ctrl-exec-agent`), so for
+scripts that run as `nobody` open the directory once:
+
+```bash
+sudo chmod 755 /opt/ctrl-exec-scripts
+```
+
+Otherwise give the script a profile whose `run_as` user can reach it, for
+example a group that user is in (a script `root:prosody` mode 750 works with
+`run_as = prosody`; see the run_as note in `agent.conf`). A run_as user that
+cannot execute the script gets `'<path>' is not executable by the profile's
+run_as user`.
 
 Scripts must be owned by root and not writable by group or other, and so must
 every directory above them (`/opt` and `/opt/ctrl-exec-scripts` are, as
@@ -828,8 +845,10 @@ check-disk    = /opt/ctrl-exec-scripts/check-disk.sh
 ## Adding Scripts to an Agent
 
 ```bash
-# root-owned, not group- or other-writable (enforced)
-sudo install -o root -g ctrl-exec-agent -m 750 check-disk.sh /opt/ctrl-exec-scripts/
+# root-owned, not group- or other-writable (enforced), readable and
+# executable by the profile's run_as user (default profile: nobody, so the
+# directory must be 755 too - see "Agent host - configure before pairing" above)
+sudo install -o root -g root -m 755 check-disk.sh /opt/ctrl-exec-scripts/
 
 echo "check-disk = /opt/ctrl-exec-scripts/check-disk.sh" \
     | sudo tee -a /etc/ctrl-exec-agent/scripts.conf

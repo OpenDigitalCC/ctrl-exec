@@ -588,10 +588,15 @@ Agent-side hook
 /var/lib/ctrl-exec-agent/ctrl-exec-dispatchers 0644 ctrl-exec-agent  trusted-dispatcher map (public serials + ids; agent-writable for rotation)
 
 /opt/ctrl-exec-scripts/            0750  root:ctrl-exec-agent
-/opt/ctrl-exec-scripts/*.sh        0750  root:ctrl-exec-agent
+/opt/ctrl-exec-scripts/*.sh        0750  root:ctrl-exec-agent  (demonstrator, as installed; your scripts: see below)
 /opt/ctrl-exec-scripts/*.schema.json 0640 root:ctrl-exec-agent  schema sidecar (data, not executed)
                                    scripts and every directory above them: owned by root,
                                    not group- or other-writable (enforced; see above)
+                                   The run_as user must also reach and execute the script.
+                                   The default profile runs as nobody, so scripts it runs
+                                   are 0755 root:root in a 0755 directory (INSTALL.md,
+                                   step 3); 0750 root:ctrl-exec-agent suits a profile whose
+                                   run_as user is in that group.
 
 /var/lib/ctrl-exec/                0770  root:ctrl-exec
 /var/lib/ctrl-exec/pairing/        0770  root:ctrl-exec

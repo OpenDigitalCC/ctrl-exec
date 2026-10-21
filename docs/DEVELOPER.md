@@ -1714,8 +1714,11 @@ On the agent host:
 ```bash
 # Place script in the managed directory
 sudo cp my-script.sh /opt/ctrl-exec-scripts/
-sudo chmod 750 /opt/ctrl-exec-scripts/my-script.sh
-sudo chown root:ctrl-exec-agent /opt/ctrl-exec-scripts/my-script.sh
+# root-owned and readable/executable by the profile's run_as user (the
+# default profile runs as nobody; the scripts directory must be 755 for it,
+# see INSTALL.md)
+sudo chmod 755 /opt/ctrl-exec-scripts/my-script.sh
+sudo chown root:root /opt/ctrl-exec-scripts/my-script.sh
 
 # Add to allowlist
 echo "my-script = /opt/ctrl-exec-scripts/my-script.sh" \
