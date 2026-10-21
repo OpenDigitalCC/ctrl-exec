@@ -11,9 +11,9 @@ _ctrl_exec_agent() {
     COMPREPLY=()
 
     local modes="serve request-pairing pairing-status self-check self-ping
-        promote-cert cert-staged paired"
+        promote-cert cert-staged paired remove-dispatcher list-dispatchers"
     local opts="--config --allowlist --dispatcher --dispatcher-fingerprint --port
-        --background --timeout --lookup-by --rekey --version"
+        --background --timeout --lookup-by --rekey --pidfile --version"
 
     # "--opt=value": bash splits it into --opt, =, value.
     if [[ $prev == = && $COMP_CWORD -ge 2 ]]; then
@@ -23,7 +23,7 @@ _ctrl_exec_agent() {
     fi
 
     case $prev in
-        --config|--allowlist)
+        --config|--allowlist|--pidfile)
             COMPREPLY=($(compgen -f -- "$cur")); return 0 ;;
         --lookup-by)
             COMPREPLY=($(compgen -W "ip hostname" -- "$cur")); return 0 ;;
@@ -37,7 +37,7 @@ _ctrl_exec_agent() {
         w=${COMP_WORDS[i]}
         case $w in
             =) ((i++)) ;;
-            --config|--allowlist|--dispatcher|--dispatcher-fingerprint|--port|--timeout|--lookup-by)
+            --config|--allowlist|--dispatcher|--dispatcher-fingerprint|--port|--timeout|--lookup-by|--pidfile)
                 [[ ${COMP_WORDS[i+1]} == = ]] || ((i++)) ;;
             -*) ;;
             *) have_mode=1 ;;

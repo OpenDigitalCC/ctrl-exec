@@ -20,10 +20,11 @@ sub complete {
 }
 
 my @modes = qw(serve request-pairing pairing-status self-check self-ping
-    promote-cert cert-staged paired);
+    promote-cert cert-staged paired remove-dispatcher list-dispatchers);
 
 is_deeply(complete('cea', ''), [ sort @modes ], 'first word: all modes');
 is_deeply(complete('cea', 'self'), [qw(self-check self-ping)], 'mode prefix');
+is_deeply(complete('cea', 'rem'), ['remove-dispatcher'], 'remove-dispatcher completes');
 is_deeply(complete('cea', 'pa'), [qw(paired pairing-status)], 'prefix with two matches');
 is_deeply(complete('cea', '--config', '/x', 'ser'), ['serve'], 'option value is not the mode');
 is_deeply(complete('cea', 'serve', ''), [], 'no further words after the mode');
@@ -37,7 +38,7 @@ is_deeply(complete('cea', 'request-pairing', '--dispatcher', 'h', '--b'), ['--ba
 is_deeply(complete('cea', 'request-pairing', '--lookup-by', ''), [qw(hostname ip)], '--lookup-by values');
 is_deeply(complete('cea', '--'),
     [qw(--allowlist --background --config --dispatcher --dispatcher-fingerprint --lookup-by
-        --port --rekey --timeout --version)],
+        --pidfile --port --rekey --timeout --version)],
     'all options');
 is_deeply(complete('cea', 'serve', '--al'), ['--allowlist'], 'serve --allowlist');
 

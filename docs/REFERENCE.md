@@ -1434,6 +1434,70 @@ as before.
 
 ---
 
+### remove-dispatcher
+
+Stop trusting one dispatcher, without touching the others. Root only.
+
+```bash
+sudo ctrl-exec-agent remove-dispatcher <id>
+```
+
+`<id>` is the dispatcher identity shown by `list-dispatchers`. The command:
+
+1. removes every trusted-map entry for that id (the map is written first, so
+   a failure part-way never leaves trust extended);
+2. removes each CA those entries were under from the CA bundle (`ca.crt`),
+   unless an entry that stays is under it. A CA shared by two dispatchers
+   stays until the last of them goes. Both files are written atomically;
+3. sends SIGHUP to the running agent (found through `--pidfile <path>` if
+   given, else the init script's `/var/run/ctrl-exec-agent.pid`, else
+   systemd's `MainPID`; the process must be a `ctrl-exec-agent`), so the map
+   change takes effect at once: the dispatcher's next connection is refused as
+   not trusted. When no running agent is found it prints the reload command;
+4. logs `ACTION=remove-dispatcher ID=<id> ENTRIES=<n> CA=<fingerprints removed,
+   or ->`.
+
+An unknown id changes nothing, exits 1 and names the known ids:
+`unknown dispatcher 'x' (known: d1, d2)`. No id: usage, exit 2.
+
+Reload and restart. The TLS listener reads `ca.crt` only when the agent
+starts. After a reload the map no longer trusts the dispatcher, but its CA is
+still in the listener, so its certificate still completes the handshake and is
+then refused (HTTP 403). The CA is gone from the listener at the next restart,
+and the command prints that restart command when it removed a CA. Revoking
+trust is complete at the reload; the restart only closes the handshake.
+
+The last dispatcher. Removing the only remaining dispatcher is allowed. The
+map is then empty and the agent refuses every caller, but it still starts and
+answers: `ca.crt` is never left empty (an empty CA file would stop the TLS
+listener starting), so the last CA stays in the bundle and the command says
+so. `self-check` then prints `Dispatchers: NONE trusted`. Pair a dispatcher
+again with `request-pairing` to serve one.
+
+### list-dispatchers
+
+List the trusted dispatchers. Root only.
+
+```bash
+sudo ctrl-exec-agent list-dispatchers
+```
+
+One line per dispatcher and CA, sorted by id then CA, fields separated by one
+space:
+
+```
+<id> <ca-fingerprint> <serial>[,<serial>...]
+```
+
+`<ca-fingerprint>` is the 64-hex SHA-256 of the issuing CA (the value
+`ctrl-exec-dispatcher ca-fingerprint` prints without the `SHA256:` prefix, in
+lowercase), or `-` for an old map line that could not be tied to a CA.
+`<serial>` is the certificate serial in lowercase hex; a dispatcher with a
+rotation overlap lists both. Nothing is printed when no dispatcher is trusted.
+`self-check` prints the ids on one `Dispatchers:` line.
+
+---
+
 ### Confidential run input (scripts.conf `input=`)
 
 A run request may carry `input`: an object of named string fields (names
@@ -1681,6 +1745,8 @@ Checks performed:
 - The `script_ownership` mode; with `warn`, a script that breaks the
   ownership rule is listed with `[warning: <reason>]`
 - Pairing certificates are present and not expired
+- The trusted dispatchers (`Dispatchers:` line); `NONE trusted` when the agent
+  would refuse every caller
 - If `script_dirs` is configured, all scripts in `scripts.conf` fall under
   one of the permitted directories
 - If `revoked_serials` is configured, the file is readable and all entries

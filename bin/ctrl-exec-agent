@@ -47,6 +47,7 @@ sub main {
         'lookup-by=s'   => \$opts{lookup_by},
         'dispatcher-fingerprint=s' => \$opts{dispatcher_fingerprint},
         'rekey'         => \$opts{rekey},
+        'pidfile=s'     => \$opts{pidfile},
         'version'       => sub { print "ctrl-exec-agent $VERSION\n"; exit 0; },
     ) or die usage();
 
@@ -76,6 +77,8 @@ sub main {
         'promote-cert'    => \&mode_promote_cert,
         'cert-staged'     => \&mode_cert_staged,
         'paired'          => \&mode_paired,
+        'remove-dispatcher' => \&mode_remove_dispatcher,
+        'list-dispatchers'  => \&mode_list_dispatchers,
     );
 
     my $handler = $dispatch{$mode}
@@ -188,6 +191,136 @@ sub mode_paired ($opts) {
         exit 1 unless defined $f && -f $f;
     }
     exit 0;
+}
+
+# The trusted-dispatcher map and CA bundle paths, as the agent resolves them.
+sub _trust_paths ($config) {
+    return (
+        $config->{trusted_dispatchers_path} // '/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers',
+        $config->{ca},
+    );
+}
+
+# The pid of the running agent, or undef: --pidfile when given, else the init
+# script's pidfile, else systemd's MainPID. Only a process whose command line names
+# ctrl-exec-agent is accepted, so a stale pidfile never signals a stranger.
+sub _agent_pid ($pidfile) {
+    my @pids;
+    # An explicit --pidfile is the only place looked at.
+    for my $f (defined $pidfile ? ($pidfile) : '/var/run/ctrl-exec-agent.pid') {
+        next unless open my $fh, '<', $f;
+        my $pid = <$fh>;
+        close $fh;
+        push @pids, $1 if defined $pid && $pid =~ /^\s*(\d+)\s*$/;
+        last if @pids;
+    }
+    if (!@pids && !defined $pidfile && -d '/run/systemd/system') {
+        my $out = `systemctl show --property MainPID --value ctrl-exec-agent 2>/dev/null`;
+        push @pids, $1 if defined $out && $out =~ /^(\d+)$/m && $1 > 0;
+    }
+    for my $pid (@pids) {
+        next unless open my $fh, '<', "/proc/$pid/cmdline";
+        local $/;
+        my $cmd = <$fh>;
+        close $fh;
+        return $pid if defined $cmd && $cmd =~ /ctrl-exec-agent/;
+    }
+    return;
+}
+
+# ctrl-exec-agent remove-dispatcher <id>: the agent stops trusting that
+# dispatcher. See AgentPairing::remove_dispatcher for what goes.
+sub mode_remove_dispatcher ($opts) {
+    my $id = shift @ARGV;
+    unless (defined $id && length $id && !@ARGV) {
+        print STDERR "Usage: ctrl-exec-agent remove-dispatcher <id>\n";
+        exit 2;
+    }
+    my $config = eval { Exec::Agent::Config::load_config($CONFIG_PATH) };
+    if ($@ || !$config) {
+        my $err = $@ || 'no configuration'; $err =~ s/\s+\z//;
+        print STDERR "ctrl-exec-agent: remove-dispatcher: $err\n";
+        exit 1;
+    }
+    my ($map, $ca) = _trust_paths($config);
+    _need_root('remove-dispatcher', $CONFIG_PATH, $map, $ca);
+
+    my $r = eval {
+        Exec::Agent::AgentPairing::remove_dispatcher(path => $map, ca_path => $ca, id => $id)
+    };
+    if (!$r) {
+        my $err = $@ || 'failed'; $err =~ s/ at \S+ line \d+\.?\s*$//; $err =~ s/\s+\z//;
+        Exec::Log::log_action('ERR', {
+            ACTION => 'remove-dispatcher', ID => $id, RESULT => 'failed', ERROR => $err });
+        print STDERR "ctrl-exec-agent: remove-dispatcher: $err\n";
+        exit 1;
+    }
+
+    my @gone = @{ $r->{cas_removed} };
+    Exec::Log::log_action('INFO', {
+        ACTION  => 'remove-dispatcher',
+        ID      => $id,
+        ENTRIES => $r->{entries},
+        CA      => scalar(@gone) ? join(',', @gone) : '-',
+        RESULT  => 'ok',
+    });
+
+    printf "Removed dispatcher '%s': %d trusted-map %s.\n", $id, $r->{entries},
+        $r->{entries} == 1 ? 'entry' : 'entries';
+    print "CA removed from $ca: $_\n" for @gone;
+    print "CA kept in $ca (another dispatcher still uses it): $_\n" for @{ $r->{cas_kept} };
+    print "CA kept in $ca (the last CA: the file is never left empty): $_\n"
+        for @{ $r->{cas_kept_last} };
+    if (!$r->{remaining}) {
+        print "No trusted dispatchers remain: the agent will start and answer, but refuse every caller.\n";
+    }
+
+    my $pid = _agent_pid($opts->{pidfile});
+    if ($pid && kill 'HUP', $pid) {
+        print "Reloaded the running agent (SIGHUP to pid $pid): '$id' is no longer trusted,"
+            . " its connections are refused.\n";
+    }
+    else {
+        print "No running agent found to reload. If it runs, reload it (SIGHUP) or restart it:\n"
+            . "    " . _reload_command() . "\n";
+    }
+    if (@gone) {
+        print "The agent's TLS listener reads $ca only at start, so the removed CA stays in\n"
+            . "the listener until the agent is restarted; until then a certificate from it\n"
+            . "still completes the handshake and is refused as not trusted. To finish:\n"
+            . "    " . _restart_command() . "\n";
+    }
+}
+
+sub _reload_command {
+    return 'sudo systemctl reload ctrl-exec-agent' if -d '/run/systemd/system';
+    return 'sudo /etc/init.d/ctrl-exec-agent reload' if -e '/etc/init.d/ctrl-exec-agent';
+    return 'sudo kill -HUP <pid of ctrl-exec-agent serve>';
+}
+
+sub _restart_command {
+    return 'sudo systemctl restart ctrl-exec-agent' if -d '/run/systemd/system';
+    return 'sudo /etc/init.d/ctrl-exec-agent restart' if -e '/etc/init.d/ctrl-exec-agent';
+    return 'stop and start ctrl-exec-agent serve';
+}
+
+# ctrl-exec-agent list-dispatchers: one line per trusted dispatcher and CA,
+#   <id> <ca-fingerprint> <serial>[,<serial>...]
+# sorted by id then CA; serials are lowercase hex. <ca-fingerprint> is the 64
+# hex SHA-256 of the issuing CA, or "-" for an old map line not yet tied to a CA.
+# Nothing is printed when no dispatcher is trusted.
+sub mode_list_dispatchers ($opts) {
+    my $config = eval { Exec::Agent::Config::load_config($CONFIG_PATH) };
+    if ($@ || !$config) {
+        my $err = $@ || 'no configuration'; $err =~ s/\s+\z//;
+        print STDERR "ctrl-exec-agent: list-dispatchers: $err\n";
+        exit 1;
+    }
+    my ($map, $ca) = _trust_paths($config);
+    _need_root('list-dispatchers', $CONFIG_PATH, $map, $ca);
+    for my $e (Exec::Agent::AgentPairing::list_trusted_dispatchers(path => $map, ca_path => $ca)) {
+        print join(' ', $e->{id}, $e->{ca} // '-', join(',', @{ $e->{serials} })), "\n";
+    }
 }
 
 sub mode_serve ($opts) {
@@ -945,6 +1078,23 @@ sub mode_self_check {
         print "  Certs: NOT paired - $status->{reason}\n";
     }
 
+    # Who this agent serves: the trusted-dispatcher map (list-dispatchers has
+    # the detail).
+    {
+        my ($map, $ca) = _trust_paths($config);
+        my @d = eval {
+            Exec::Agent::AgentPairing::list_trusted_dispatchers(path => $map, ca_path => $ca)
+        };
+        my %ids = map { $_->{id} => 1 } @d;
+        if (%ids) {
+            printf "  Dispatchers: %d trusted (%s)\n", scalar(keys %ids), join(', ', sort keys %ids);
+        }
+        else {
+            print "  Dispatchers: NONE trusted - the agent starts but refuses every caller;"
+                . " pair a dispatcher (request-pairing) to serve one\n";
+        }
+    }
+
     for my $name (sort keys %$allowlist) {
         my $path    = Exec::Agent::Config::validate_script($name, $allowlist);
         my $profile = Exec::Agent::Config::script_profile($name, $allowlist);
@@ -1146,6 +1296,9 @@ Modes:
   pairing-status                 Show pairing/cert status
   self-check                     Validate local config and certs
   self-ping                      Connect to self on port 7443, verify mTLS and pairing
+  remove-dispatcher <id>         Stop trusting one dispatcher (root): its map entries
+                                 and, when no other dispatcher uses it, its CA
+  list-dispatchers               List trusted dispatchers: <id> <ca-fingerprint> <serials>
 
 Options:
   --config <path>                Path to agent.conf
@@ -1162,6 +1315,8 @@ Options:
   --rekey                        request-pairing: make a new key and have this
                                  dispatcher sign it, even when already paired
                                  (other dispatchers then need re-pairing)
+  --pidfile <path>               remove-dispatcher: pid file of the running agent to
+                                 reload (default: the init script's, else systemd's)
   --background                   Non-interactive pairing: print reqid and wait
                                  for approval (for orchestrated installations)
   --timeout <n>                  Seconds to wait for approval in background

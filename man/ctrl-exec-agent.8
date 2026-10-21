@@ -71,6 +71,25 @@ rejected - confirming the port is listening, the TLS stack works, and the agent
 is enforcing its trusted-dispatcher policy. Requires the agent to be running and
 paired; if nothing is listening on the configured port it reports that the agent
 is not running and how to start it, and exits 1.
+.TP
+.BI remove-dispatcher " id"
+Stop trusting one control host (root). Removes its trusted-map entries and
+each of its CAs from the CA bundle unless another trusted control host is under
+that CA, then sends SIGHUP to the running agent and logs
+.BR ACTION=remove-dispatcher .
+The map change takes effect at the reload; the CA leaves the TLS listener at
+the next restart, which the command says. The last CA is never removed, so
+removing the last control host leaves an agent that starts but refuses every
+caller;
+.B self-check
+says so. An unknown id changes nothing, exits 1 and names the known ids.
+.TP
+.B list-dispatchers
+Print each trusted control host as one line,
+.IR "id ca-fingerprint serial[,serial...]" ,
+sorted by id then CA (the fingerprint is
+.B \-
+for an old map line not yet tied to a CA). Root only.
 .SH OPTIONS
 .TP
 .BI \-\-config " path"
@@ -112,6 +131,11 @@ With
 generate a new key and have the control host sign it even when already
 paired. The control hosts the agent is paired with then refuse the new
 certificate until each is re-paired.
+.BI \-\-pidfile " path"
+For
+.BR remove-dispatcher :
+the pid file of the running agent to reload. Default: the init script's pid
+file, else systemd's main pid.
 .TP
 .B \-\-background
 Non-interactive pairing: print the request ID and wait for approval in the

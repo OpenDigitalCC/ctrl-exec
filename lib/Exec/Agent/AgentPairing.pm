@@ -892,6 +892,113 @@ sub remove_trusted_dispatcher (%opts) {
     return 1;
 }
 
+# --- remove / list dispatchers (operator commands) ---------------------------
+
+# Remove the CA certificates whose fingerprints are in @$fprs from the bundle at
+# $path, keeping the others as they are, in order. The file is rewritten
+# atomically. Dies when that would leave the bundle with no certificate: an
+# empty CA file is not one the TLS listener can start with. Returns the
+# fingerprints actually removed.
+sub remove_from_ca_bundle (%opts) {
+    my $path = $opts{path} or croak "path required";
+    my %drop = map { $_ => 1 } grep { _valid_fpr($_) } @{ $opts{fprs} // [] };
+
+    my (@keep, @gone);
+    for my $pem (pem_certs(Exec::FileUtil::slurp_maybe($path))) {
+        my $f = pem_fingerprint($pem);
+        if (defined $f && $drop{$f}) { push @gone, $f; next }
+        push @keep, $pem;
+    }
+    return () unless @gone;
+    croak "removing these would leave '$path' with no CA certificate"
+        unless @keep;
+
+    _write_file($path, join("\n", @keep) . "\n", 0644);
+    return @gone;
+}
+
+# The trusted dispatchers as a list sorted by id then CA:
+#   [ { id => 'd1', ca => '<fpr>' | undef, serials => [ '3ea', ... ] }, ... ]
+# one element per (id, CA). ca is undef for a pre-0.14 line that could not be
+# upgraded (no CA bundle). Opts: path (the map), ca_path (to upgrade it).
+sub list_trusted_dispatchers (%opts) {
+    my $path = $opts{path} or croak "path required";
+    my $trusted = load_trusted_dispatchers(path => $path, ca_path => $opts{ca_path});
+    my %group;
+    for my $k (keys %$trusted) {
+        my ($fpr, $serial) = $k =~ / / ? split(/ /, $k, 2) : (undef, $k);
+        push @{ $group{ $trusted->{$k} }{ $fpr // '' } }, $serial;
+    }
+    my @list;
+    for my $id (sort keys %group) {
+        for my $ca (sort keys %{ $group{$id} }) {
+            push @list, {
+                id      => $id,
+                ca      => length $ca ? $ca : undef,
+                serials => [ sort @{ $group{$id}{$ca} } ],
+            };
+        }
+    }
+    return @list;
+}
+
+# The agent stops trusting dispatcher $opts{id}: every map entry for it goes,
+# then each CA those entries were under goes from the bundle unless an entry that
+# stays is under it, or it is the last CA in the bundle (the bundle is never
+# left empty; the map is what then refuses everyone). The map is written
+# first, so a failure part-way leaves trust withdrawn, never extended. Dies,
+# naming the known ids, when the id has no entry.
+#
+# Opts: path (map), ca_path (bundle), id.
+# Returns { entries => N, cas_removed => [fpr...], cas_kept => [fpr...],
+#           cas_kept_last => [fpr...], remaining => N }
+#   cas_kept      CAs of the removed entries that another dispatcher still uses
+#   cas_kept_last CAs kept only because the bundle may not be left empty
+#   remaining     map entries left
+sub remove_dispatcher (%opts) {
+    my $path = $opts{path} or croak "path required";
+    my $id   = $opts{id};
+    croak "dispatcher id required" unless defined $id && length $id;
+
+    my $trusted = load_trusted_dispatchers(path => $path, ca_path => $opts{ca_path});
+    my @mine = grep { $trusted->{$_} eq $id } keys %$trusted;
+    unless (@mine) {
+        my %ids = map { $_ => 1 } values %$trusted;
+        croak "unknown dispatcher '$id' (known: "
+            . (%ids ? join(', ', sort keys %ids) : 'none') . ")";
+    }
+
+    my %cas;
+    for my $k (@mine) {
+        $cas{$1} = 1 if $k =~ /\A([0-9a-f]{64}) /;
+        delete $trusted->{$k};
+    }
+    my %still = map { /\A([0-9a-f]{64}) / ? ($1 => 1) : () } keys %$trusted;
+    my @cas_kept = sort grep {  $still{$_} } keys %cas;
+    my @drop     = sort grep { !$still{$_} } keys %cas;
+
+    _write_trusted($path, $trusted);
+
+    my (@removed, @kept_last);
+    if (@drop && defined $opts{ca_path}) {
+        my %drop = map { $_ => 1 } @drop;
+        my @left = grep { !$drop{$_} } ca_bundle_fingerprints($opts{ca_path});
+        if (@left) {
+            @removed = remove_from_ca_bundle(path => $opts{ca_path}, fprs => \@drop);
+        }
+        else {
+            @kept_last = @drop;
+        }
+    }
+    return {
+        entries       => scalar(@mine),
+        cas_removed   => \@removed,
+        cas_kept      => \@cas_kept,
+        cas_kept_last => \@kept_last,
+        remaining     => scalar(keys %$trusted),
+    };
+}
+
 # --- revoked serials -------------------------------------------------------
 
 # Load the revoked serials file. Tolerates an absent file - returns an empty
