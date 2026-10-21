@@ -417,7 +417,7 @@ sub verify_dispatcher_ca ($sock, $want_fpr) {
     # self-signed, so verification never reaches past it to a system store.
     Net::SSLeay::X509_STORE_set_flags($store, Net::SSLeay::X509_V_FLAG_PARTIAL_CHAIN());
     Net::SSLeay::sk_X509_push($sk, $_) for @chain[1 .. $#chain];
-    if (Net::SSLeay::X509_STORE_CTX_init($ctx, $store, $leaf, $sk)) {
+    if (Exec::CertInfo::store_ctx_init($ctx, $store, $leaf, $sk)) {
         $ok  = Net::SSLeay::X509_verify_cert($ctx) == 1;
         $err = Net::SSLeay::X509_verify_cert_error_string(
             Net::SSLeay::X509_STORE_CTX_get_error($ctx));

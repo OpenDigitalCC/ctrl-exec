@@ -101,7 +101,7 @@ sub verify_issued_by ($leaf_pem, $ca_pem) {
     my ($ok, $err);
     Net::SSLeay::X509_STORE_add_cert($store, $ca);
     Net::SSLeay::X509_STORE_set_flags($store, Net::SSLeay::X509_V_FLAG_PARTIAL_CHAIN());
-    if (Net::SSLeay::X509_STORE_CTX_init($ctx, $store, $leaf)) {
+    if (store_ctx_init($ctx, $store, $leaf)) {
         $ok  = Net::SSLeay::X509_verify_cert($ctx) == 1;
         $err = Net::SSLeay::X509_verify_cert_error_string(
             Net::SSLeay::X509_STORE_CTX_get_error($ctx));
@@ -163,6 +163,20 @@ sub x509_role ($x509) {
         return $role if $seen{$role};
     }
     return;
+}
+
+# Net::SSLeay::X509_STORE_CTX_init, true when the context was initialised.
+# Net::SSLeay before 1.92 (1.88 in Debian 11, with OpenSSL 1.1) returns nothing
+# from it although the context is initialised; testing that empty return as
+# failure meant verification never ran there and every check refused. No
+# return value is taken as initialised: should it not be, X509_verify_cert
+# fails, so the check still fails closed.
+sub store_ctx_init ($ctx, $store, $x509, $chain = undef) {
+    my @r = defined $chain
+        ? Net::SSLeay::X509_STORE_CTX_init($ctx, $store, $x509, $chain)
+        : Net::SSLeay::X509_STORE_CTX_init($ctx, $store, $x509);
+    return 1 unless @r && defined $r[0];
+    return $r[0] ? 1 : 0;
 }
 
 sub _x509 ($pem) {
