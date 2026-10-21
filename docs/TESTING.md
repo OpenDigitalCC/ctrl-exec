@@ -302,6 +302,17 @@ tools/upgrade-rig/run.sh --cli-to <plugins branch> s4  # the CLI from a plugins 
 ```
 
 
+## OpenSSL 1.1 Check
+
+Development hosts run OpenSSL 3; Debian 11 and Ubuntu 20.04 ship OpenSSL
+1.1.1 and Net::SSLeay 1.88. `tools/openssl11-check/run.sh` runs the tests that
+touch TLS, certificates, the agent's CA bundle and the trusted-dispatcher map
+in a Debian 11 (or, with `--distro focal`, Ubuntu 20.04) container against the
+committed HEAD, removes everything and prints `VERDICT: PASS` or `FAIL`. It
+pulls the base image and installs packages, so it is run by hand, not by
+`prove t/`; see `tools/openssl11-check/README.md`. Run it before a release cut.
+
+
 ## Test Library (`t/integration/lib.sh`)
 
 All integration test files source `lib.sh`, which provides:
