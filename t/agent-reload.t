@@ -125,16 +125,21 @@ my $rig = AgentRig->new(allowlist => "hello = /bin/true\n");
 ok $rig->start, 'agent started' or BAIL_OUT('rig agent did not start: ' . $rig->log_text);
 is $rig->request(as => 'trusted'), 200, 'trusted dispatcher served before any change';
 
-# 1. tightened setting takes effect after HUP
+# 1. a tightened setting takes effect at the next connection, with no HUP
+#    (T-059: the agent reloads when agent.conf or scripts.conf changed), and a
+#    HUP still reloads
 {
     my $from = $rig->log_len;
     $rig->set_conf("allowed_ips = 10.9.9.9\n");
-    is $rig->request(as => 'trusted'), 200, 'editing agent.conf alone changes nothing yet';
-    $rig->hup;
-    ok $rig->wait_log(qr/Reloading agent\.conf/, 5, $from), 'HUP handled';
-    is $rig->request(as => 'trusted'), undef, 'no reply for a peer outside allowed_ips';
+    is $rig->request(as => 'trusted'), undef, 'edit alone: no reply for a peer outside allowed_ips';
+    ok $rig->wait_log(qr/ACTION=allowlist-reload REASON=changed/, 5, $from),
+        'the change was picked up and logged';
     ok $rig->wait_log(qr/ACTION=ip-block PEER=127\.0\.0\.1/, 5, $from),
         'allowed_ips tightened: connection from 127.0.0.1 refused (ip-block logged)';
+    $from = $rig->log_len;
+    $rig->hup;
+    ok $rig->wait_log(qr/ACTION=allowlist-reload REASON=signal/, 5, $from), 'HUP handled';
+    is $rig->request(as => 'trusted'), undef, 'still refused after the HUP';
 }
 
 # 2. broken agent.conf leaves the old (tight) config in force and logs

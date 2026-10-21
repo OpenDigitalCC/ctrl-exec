@@ -905,6 +905,18 @@ sub _send_raw ($conn, $code, $body) {
 }
 
 
+# What identifies the on-disk state of the given files (T-059): device, inode,
+# size, modification and change time (sub-second), or 'missing'. The serve loop
+# keeps the signature of agent.conf and scripts.conf as last read and reloads
+# both when it differs, so an edit is picked up at the next connection - by a
+# rename (new inode), an in-place write (size, mtime) or a chmod (ctime).
+sub config_files_signature (@paths) {
+    return join '|', map {
+        my @st = Time::HiRes::stat($_);
+        @st ? join(':', @st[0, 1, 7, 9, 10]) : 'missing';
+    } @paths;
+}
+
 # The agent's fully-qualified hostname. This is the value reported at pairing -
 # which becomes the dispatcher's registry key and, under lookup_by=hostname, the
 # address it connects back on - and the self-reported host in run/capabilities

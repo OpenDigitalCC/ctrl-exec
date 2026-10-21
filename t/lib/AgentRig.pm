@@ -179,6 +179,33 @@ sub request {
     return $1 + 0;
 }
 
+# call($method, $path, $body, as => ...): one request as a dispatcher.
+# Returns (status, response body), or () when there was no HTTP reply.
+sub call {
+    my ($self, $method, $path, $body, %o) = @_;
+    my $as = $o{as} // 'trusted';
+    my $d  = $self->{dir};
+    local $SIG{PIPE} = 'IGNORE';
+    my $c = IO::Socket::SSL->new(
+        PeerAddr        => '127.0.0.1',
+        PeerPort        => $self->{port},
+        SSL_cert_file   => "$d/$as.crt",
+        SSL_key_file    => "$d/$as.key",
+        SSL_ca_file     => "$d/ca.crt",
+        SSL_verify_mode => SSL_VERIFY_NONE,
+        Timeout         => 15,
+    ) or return;
+    $body //= '';
+    print $c "$method $path HTTP/1.0\r\nContent-Length: " . length($body) . "\r\n\r\n$body";
+    local $/;
+    my $resp = <$c> // '';
+    close $c;
+    return unless $resp =~ m{^HTTP/\S+\s+(\d+)};
+    my $status = $1 + 0;
+    $resp =~ s/\A.*?\r\n\r\n//s;
+    return ($status, $resp);
+}
+
 # A TCP connection that never speaks TLS, held open; returns the socket.
 sub silent_connect {
     my ($self, %o) = @_;

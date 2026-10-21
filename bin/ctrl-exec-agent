@@ -206,6 +206,9 @@ sub mode_serve ($opts) {
     }
 
     my ($config, $allowlist, $skipped, $schemas);
+    # What the loaded copies were read from (T-059): checked on every
+    # connection, so an edit to either file is picked up without a reload.
+    my $files_sig = Exec::Agent::Server::config_files_signature($CONFIG_PATH, $ALLOWLIST_PATH);
     eval {
         $config    = Exec::Agent::Config::load_config($CONFIG_PATH);
         # A script naming a profile agent.conf does not define is skipped with
@@ -272,7 +275,13 @@ MSG
     my $rate_config  = $config->{rate_limit} // {};
     my $max_children = $config->{max_children} // 256;
 
-    $SIG{HUP} = sub {
+    # Reload agent.conf, scripts.conf and what derives from them. On SIGHUP
+    # ('signal'), and before handling a connection when either file changed on
+    # disk since it was last read ('changed', T-059): the executor reads both
+    # afresh, so the agent must act on the same files without being told.
+    my $reload = sub ($why) {
+        $files_sig = Exec::Agent::Server::config_files_signature($CONFIG_PATH, $ALLOWLIST_PATH);
+        Exec::Log::log_action('INFO', { ACTION => 'allowlist-reload', REASON => $why });
         warn "Reloading agent.conf, allowlist, schemas, revocation list, and trusted-dispatcher map...\n";
 
         # agent.conf and the allowlist are planned together and swapped in only
@@ -317,6 +326,7 @@ MSG
         warn "Trusted-dispatcher map reload failed: $@\n" if $@;
         %rate_state = ();
     };
+    $SIG{HUP} = sub { $reload->('signal') };
 
     # Pre-flight: the agent cannot serve until it has been paired - pairing is
     # what installs the certificate, key, and CA the TLS listener needs. Without
@@ -419,6 +429,20 @@ MSG
             next;
         }
         $accept_failures = 0;
+
+        # An edit to agent.conf or scripts.conf is picked up here, in the
+        # parent, before this connection is looked at (T-059): every handler
+        # is forked from the parent, so this and every later connection act on
+        # the files as they now are - the files the executor reads afresh for
+        # each run. Two stat() calls per connection; a reload only on change.
+        # SIGHUP is held off so its reload cannot interleave with this one.
+        if (Exec::Agent::Server::config_files_signature($CONFIG_PATH, $ALLOWLIST_PATH) ne $files_sig) {
+            my $hup  = POSIX::SigSet->new(POSIX::SIGHUP());
+            my $prev = POSIX::SigSet->new;
+            POSIX::sigprocmask(POSIX::SIG_BLOCK(), $hup, $prev);
+            $reload->('changed');
+            POSIX::sigprocmask(POSIX::SIG_SETMASK(), $prev);
+        }
 
         # $conn is a connected TCP socket with no TLS yet, so the peer address is
         # known even if the handshake below fails.
