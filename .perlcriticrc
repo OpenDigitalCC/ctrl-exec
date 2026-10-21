@@ -1,0 +1,41 @@
+# Perl::Critic policy for lib/ and bin/ (t/perlcritic.t runs it when
+# Perl::Critic is installed):  perlcritic lib bin
+#
+# Severity 4 (stern) with the policies below switched off or configured, each
+# for the reason given. Everything else at severity 4 and 5 applies, notably
+# ProhibitExplicitReturnUndef: a sub that returns one value or nothing uses a
+# bare `return`, and a call to it inside a hash literal or argument list is
+# wrapped in scalar() at the call site.
+
+severity = 4
+verbose  = %f:%l:%c %m (%p)\n
+
+# `no warnings qw(experimental::signatures)` under `use feature 'signatures'`
+# is the house preamble; a no-warnings that names its category is fine.
+[TestingAndDebugging::ProhibitNoWarnings]
+allow_with_category_restriction = 1
+
+# Subs run for their effect end without a `return`; callers never use the value.
+[-Subroutines::RequireFinalReturn]
+
+# `use constant` is the house idiom for fixed values and limits.
+[-ValuesAndExpressions::ProhibitConstantPragma]
+
+# Every leading-zero literal here is an octal file mode or mode mask, as intended.
+[-ValuesAndExpressions::ProhibitLeadingZeros]
+
+# Signal handlers are installed for the life of a server or pairing loop in the
+# process that runs it, $! = 0 is a deliberate "no errno", and %ENV is assigned
+# under `local %ENV` or in a forked child before exec (the policy sees neither).
+[-Variables::RequireLocalizedPunctuationVars]
+
+# The flagged handles are slurps (closed at scope exit) or locks held on purpose.
+[-InputOutput::RequireBriefOpen]
+
+# The few sub-second polling waits use the 4-argument select idiom; it works the
+# same as Time::HiRes::sleep.
+[-BuiltinFunctions::ProhibitSleepViaSelect]
+
+# The interactive pairing prompt reads the operator's terminal on purpose.
+[-InputOutput::ProhibitExplicitStdin]
+[-InputOutput::ProhibitInteractiveTest]

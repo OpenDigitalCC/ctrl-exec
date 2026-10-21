@@ -108,9 +108,11 @@ sub _run_forked ($script_path, $args, $stdin_data, $extra_env, $timeout) {
         open STDIN,  '<&', $stdin_r  or POSIX::_exit(127);
         open STDOUT, '>&', $stdout_w or POSIX::_exit(127);
         open STDERR, '>&', $stderr_w or POSIX::_exit(127);
+        ## no critic (RequireEncodingWithUTF8Layer) - no effect: layers do not survive exec
         binmode STDIN,  ':utf8';
         binmode STDOUT, ':utf8';
         binmode STDERR, ':utf8';
+        ## use critic
         close $stdin_r;
         close $stdout_w;
         close $stderr_w;
@@ -233,7 +235,8 @@ sub _write_stdin ($fh, $data, $timeout = undef) {
 }
 
 sub _slurp_utf8 ($fh) {
-    binmode $fh, ':utf8';
+    # :utf8 decodes leniently; :encoding(UTF-8) would change how bad output reads.
+    binmode $fh, ':utf8';   ## no critic (RequireEncodingWithUTF8Layer)
     local $/;
     return scalar <$fh> // '';
 }
