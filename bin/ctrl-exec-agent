@@ -282,8 +282,9 @@ sub mode_remove_dispatcher ($opts) {
     if (@own) {
         print "CA kept in $ca (it issued this agent's certificate): $_\n" for @own;
         my $msg = "This agent's certificate was issued by '$id', which can no longer renew it;"
-                . " it expires on $expiry. To keep the remaining dispatchers, re-pair with one"
-                . " of them before then: ctrl-exec-agent request-pairing --dispatcher <host>";
+                . " it expires on $expiry. Before then, have one remaining dispatcher issue a new"
+                . " one: ctrl-exec-agent request-pairing --dispatcher <host> --rekey; then re-pair"
+                . " each other remaining dispatcher (request-pairing, no --rekey)";
         print "WARNING: $msg\n";
         Exec::Log::log_action('WARNING', {
             ACTION => 'remove-dispatcher', ID => $id, REASON => 'agent-cert-issuer', MESSAGE => $msg });

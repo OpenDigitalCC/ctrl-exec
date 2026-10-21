@@ -1547,9 +1547,11 @@ agent's certificate against `ca.crt`, and renewal is pinned to its issuing CA,
 so that CA is never removed from the bundle. Removing the dispatcher still
 removes its map entries and the command prints and logs (`REASON=agent-cert-issuer`)
 `WARNING: This agent's certificate was issued by '<id>', which can no longer
-renew it; it expires on <date>`. To keep the remaining dispatchers, re-pair
-with one of them (`ctrl-exec-agent request-pairing --dispatcher <host>`)
-before that date.
+renew it; it expires on <date>`. Before that date, have one remaining
+dispatcher issue a new certificate (`ctrl-exec-agent request-pairing
+--dispatcher <host> --rekey`), then re-pair each other remaining dispatcher
+without `--rekey` so it pins the new issuing CA; see "When the issuing
+dispatcher is gone".
 
 The last dispatcher. Removing the only remaining dispatcher is allowed. The
 map is then empty and the agent refuses every caller, but it still starts and

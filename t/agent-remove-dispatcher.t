@@ -181,7 +181,7 @@ subtest 'the dispatcher that issued the agent certificate' => sub {
     ($out, $rc) = cea($rig, 'remove-dispatcher', 'test-dispatcher');
     is $rc, 0, 'removed' or diag $out;
     like $out, qr/CA kept in \S+ \(it issued this agent's certificate\): \Q$f1\E/, 'its CA is kept';
-    like $out, qr/WARNING: This agent's certificate was issued by 'test-dispatcher', which can no longer renew it; it expires on \w{3} .*GMT.*request-pairing --dispatcher <host>/,
+    like $out, qr/WARNING: This agent's certificate was issued by 'test-dispatcher', which can no longer renew it; it expires on \w{3} .*GMT.*request-pairing --dispatcher <host> --rekey; then re-pair each other remaining dispatcher/,
         'warns about renewal and expiry, and how to re-pair';
     like $out, qr/ACTION=remove-dispatcher .*REASON=agent-cert-issuer/s, 'and logs it';
     unlike $out, qr/CA removed from/, 'no CA left the bundle';
