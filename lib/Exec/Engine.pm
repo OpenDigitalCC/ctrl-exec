@@ -562,11 +562,14 @@ sub _dispatch_one (%opts) {
         my $result = $decoded // { status => 'error', error => 'invalid JSON response' };
         $result->{rtt}    = $rtt;
         $result->{reqid} //= $reqid;
+        # An agent that refuses the run (e.g. an output=confidential script,
+        # T-053) answers with an error and no status: that is not an
+        # acceptance, and the run store and CLI already read it as 'error'.
         Exec::Log::log_action('INFO', {
             ACTION => 'run-async',
             SCRIPT => $opts{script},
             TARGET => "$host:$port",
-            STATUS => $result->{status} // 'accepted',
+            STATUS => $result->{status} // 'error',
             RTT    => $rtt,
             REQID  => $reqid,
         });

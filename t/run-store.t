@@ -6,6 +6,7 @@ use File::Temp qw(tempdir);
 use FindBin    qw($Bin);
 use lib "$Bin/../lib";
 
+use JSON qw();
 use Exec::RunStore qw();
 
 # Suppress syslog output during tests.
@@ -220,6 +221,55 @@ my $resolver = sub { $_[0] };
 
     eval { Exec::RunStore::record_async(reqid => '../evil', dispatch_results => []) };
     like $@, qr/invalid reqid/, 'record_async rejects path characters in reqid';
+}
+
+# --- confidential output (T-053): exit and metadata stored, output never ---
+{
+    my $S_OUT = 'OUT-SENTINEL-rs53-9c1e';
+    my $S_ERR = 'ERR-SENTINEL-rs53-4b7a';
+    my $dir   = tempdir(CLEANUP => 1);
+    my @results = (
+        { host => 'h1', exit => 0, stdout => "$S_OUT\n", stderr => "$S_ERR\n",
+          output_confidential => JSON::true, rtt => '5ms', reqid => 'aabbccdd00530001' },
+        { host => 'h2', exit => 0, stdout => "plain-out\n", stderr => '', rtt => '6ms' },
+    );
+    Exec::RunStore::record_sync(
+        reqid => 'aabbccdd00530001', script => 'issue', hosts => ['h1', 'h2'],
+        results => \@results, runs_dir => $dir,
+    );
+    my $raw = do { local $/; open my $fh, '<', "$dir/aabbccdd00530001.json" or die $!; <$fh> };
+    unlike $raw, qr/\Q$S_OUT\E|\Q$S_ERR\E/, 'confidential: no output in the stored sync record';
+    my $rec = Exec::RunStore::load('aabbccdd00530001', $dir);
+    my ($h1, $h2) = @{ $rec->{results} };
+    is $h1->{exit}, 0, 'confidential: exit stored';
+    ok $h1->{output_confidential}, 'confidential: marker stored';
+    ok !exists $h1->{stdout} && !exists $h1->{stderr}, 'confidential: no stdout/stderr keys';
+    is $h1->{rtt}, '5ms', 'confidential: metadata kept';
+    is $h2->{stdout}, "plain-out\n", 'a normal result in the same run is stored whole';
+    is $results[0]{stdout}, "$S_OUT\n", "the caller's results are not changed";
+
+    # Async: a fetched result marked confidential is returned by that
+    # aggregation but never written; the next one shows exit only.
+    Exec::RunStore::record_async(
+        reqid => 'aabbccdd00530002', script => 'issue', runs_dir => $dir,
+        dispatch_results => [ { host => 'h1', status => 'accepted' }, { host => 'h2', status => 'accepted' } ],
+    );
+    local %FETCH = (
+        h1 => { status => 'done', exit => 0, stdout => "$S_OUT\n", stderr => "$S_ERR\n",
+                output_confidential => JSON::true },
+        h2 => { status => 'done', exit => 0, stdout => "plain-out\n", stderr => '' },
+    );
+    my $agg = Exec::RunStore::aggregate(reqid => 'aabbccdd00530002', config => {},
+                                        runs_dir => $dir, resolver => $resolver);
+    is $agg->{hosts}{h1}{stdout}, "$S_OUT\n", 'async confidential: the fetching call gets the output';
+    ok $agg->{hosts}{h1}{output_confidential}, 'async confidential: marked';
+    $raw = do { local $/; open my $fh, '<', "$dir/aabbccdd00530002.json" or die $!; <$fh> };
+    unlike $raw, qr/\Q$S_OUT\E|\Q$S_ERR\E/, 'async confidential: no output in the stored record';
+    like $raw, qr/plain-out/, 'async: a normal fetched result is stored as before';
+    my $again = Exec::RunStore::aggregate(reqid => 'aabbccdd00530002', config => {},
+                                          runs_dir => $dir, resolver => $resolver);
+    is $again->{hosts}{h1}{exit}, 0, 'async confidential: a later read has the exit';
+    ok !exists $again->{hosts}{h1}{stdout}, 'async confidential: and no output';
 }
 
 done_testing;

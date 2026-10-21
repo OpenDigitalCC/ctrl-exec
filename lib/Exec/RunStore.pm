@@ -26,6 +26,12 @@ my %PENDING = map { $_ => 1 } qw(accepted running);
 # dispatcher store shape (reqid/script/hosts/results/completed) and adds
 # mode/complete so async and sync records are read uniformly.
 #
+# A result the agent marked output_confidential (T-053: its script is declared
+# output=confidential in the agent's scripts.conf) is stored without its stdout
+# and stderr: exit status and metadata only, with the marker kept so a later
+# /status shows why the output is absent. An unmarked result is stored whole -
+# the dispatcher cannot know a script's output is secret unless its agent says.
+#
 #   reqid    => $hex
 #   script   => $name
 #   hosts    => \@hostnames        (as dispatched)
@@ -117,6 +123,10 @@ sub load ($reqid, $runs_dir = undef) {
 #   running -> still pending (re-fetched next time)
 #   unknown -> expired (the agent purged the result, or never held it)
 #   error   -> transient fetch failure; status kept, fetch_error annotated
+# A fetched result marked output_confidential (T-053) is in the returned record
+# but never in the stored one: a later aggregation shows exit status only.
+# (Agents refuse async runs of such scripts; this keeps an agent that did not
+# from putting the output on the dispatcher's disk.)
 # Returns the record, or undef if no such reqid.
 sub aggregate (%opts) {
     my $reqid    = $opts{reqid}  or croak "reqid required";
@@ -151,6 +161,9 @@ sub aggregate (%opts) {
                     exit   => $f->{exit},
                     stdout => $f->{stdout},
                     stderr => $f->{stderr},
+                    # Confidential output (T-053) is returned by this call
+                    # only; the record written below leaves it out.
+                    ($f->{output_confidential} ? (output_confidential => JSON::true) : ()),
                 );
             }
             elsif ($st eq 'running') {
@@ -172,6 +185,39 @@ sub aggregate (%opts) {
     _summarise($record);
     _write($runs_dir, $reqid, $record);
     return $record;
+}
+
+# Whether a per-host result carries the agent's confidential-output marker.
+sub _confidential ($r) {
+    return ref $r eq 'HASH' && $r->{output_confidential} ? 1 : 0;
+}
+
+# The record as it may be written: a copy in which every result marked
+# output_confidential has no stdout or stderr. Sync records hold results in an
+# array, async ones in a per-host map; both are covered. The caller's record is
+# not changed.
+sub _storable ($record) {
+    my %copy = %$record;
+    if (ref $copy{results} eq 'ARRAY') {
+        $copy{results} = [ map {
+            _confidential($_) ? _without_output($_) : $_
+        } @{ $copy{results} } ];
+    }
+    if (ref $copy{hosts} eq 'HASH') {
+        my %h = %{ $copy{hosts} };
+        for my $k (keys %h) {
+            $h{$k} = _without_output($h{$k}) if _confidential($h{$k});
+        }
+        $copy{hosts} = \%h;
+    }
+    return \%copy;
+}
+
+sub _without_output ($r) {
+    my %c = %$r;
+    delete @c{qw(stdout stderr)};
+    $c{output_confidential} = JSON::true;
+    return \%c;
 }
 
 # Remove records older than $ttl seconds (by mtime). Returns the count removed.
@@ -228,7 +274,7 @@ sub _write ($runs_dir, $reqid, $record) {
 
     my $path = "$runs_dir/$reqid.json";
     my ($fh, $tmp) = tempfile(DIR => $runs_dir, SUFFIX => '.tmp', UNLINK => 0);
-    print {$fh} encode_json($record);
+    print {$fh} encode_json(_storable($record));
     close $fh;
     chmod 0640, $tmp;
     unless (rename $tmp, $path) {
