@@ -143,7 +143,7 @@ sudo tee /opt/ctrl-exec-scripts/check-disk.sh > /dev/null <<'EOF'
 #!/bin/bash
 df -h /
 EOF
-sudo chmod 755 /opt/ctrl-exec-scripts /opt/ctrl-exec-scripts/check-disk.sh
+sudo chmod 755 /opt/ctrl-exec-scripts/check-disk.sh
 ```
 
 Add it to the allowlist at `/etc/ctrl-exec-agent/scripts.conf`:

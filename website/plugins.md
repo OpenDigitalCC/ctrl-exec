@@ -35,7 +35,7 @@ Management interfaces
    scp plugins/agent/check-disk.sh agent-host:/tmp/
    ssh agent-host sudo install -o root -g root -m 755 /tmp/check-disk.sh /opt/ctrl-exec-scripts/
    ```
-   The script must be owned by root and readable and executable by the profile's `run_as` user (the default profile runs as `nobody`, which also needs `/opt/ctrl-exec-scripts` to be mode 755). See the install guide.
+   The script must be owned by root and readable and executable by the profile's `run_as` user (the default profile runs as `nobody`). See the install guide.
 3. Add it to the allowlist on the agent:
    ```ini
    check-disk = /opt/ctrl-exec-scripts/check-disk.sh

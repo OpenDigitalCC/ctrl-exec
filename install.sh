@@ -68,6 +68,25 @@ check_root() {
 
 # Copy a file and set permissions. Replaces coreutils 'install' which is
 # absent on OpenWRT.
+# Create the agent scripts directory 755 root:root. An existing directory in the
+# state earlier releases created (750 root:$AGENT_GROUP, which the default
+# profile's run_as user cannot enter) is brought to 755 root:root; any other
+# mode or owner is the operator's choice and is left alone. Exact path only.
+setup_scripts_dir() {
+    if [[ ! -d "$SCRIPTS_DIR" ]]; then
+        mkdir -p "$SCRIPTS_DIR"
+        chmod 755 "$SCRIPTS_DIR"
+        chown root:root "$SCRIPTS_DIR"
+        info "Script directory created: $SCRIPTS_DIR"
+    elif [[ "$(stat -c '%a %U:%G' "$SCRIPTS_DIR")" == "750 root:$AGENT_GROUP" ]]; then
+        chmod 755 "$SCRIPTS_DIR"
+        chown root:root "$SCRIPTS_DIR"
+        info "Script directory opened to 755 root:root (was 750 root:$AGENT_GROUP): $SCRIPTS_DIR"
+    else
+        info "Script directory already exists: $SCRIPTS_DIR"
+    fi
+}
+
 safe_install() {
     local mode="$1" src="$2" dst="$3"
     cp "$src" "$dst" || return 1
@@ -732,15 +751,11 @@ install_agent() {
     # inactive until the operator sets auth_hook in agent.conf (off by default).
     safe_install 755 "$SOURCE_DIR/etc/auth-hook-args.example" "$AGENT_CONF_DIR/auth-hook-args.example"
 
-    # Scripts directory - root owns, agent group can read/execute
-    if [[ ! -d "$SCRIPTS_DIR" ]]; then
-        mkdir -p "$SCRIPTS_DIR"
-        chmod 750 "$SCRIPTS_DIR"
-        chown root:"$AGENT_GROUP" "$SCRIPTS_DIR"
-        info "Script directory created: $SCRIPTS_DIR"
-    else
-        info "Script directory already exists: $SCRIPTS_DIR"
-    fi
+    # Scripts directory - root owns, world can traverse and read. Scripts run
+    # as their profile's run_as user (the shipped default profile: nobody), which
+    # must be able to reach them. Root-owned and not group/other-writable is
+    # what the agent and executor enforce, not secrecy.
+    setup_scripts_dir
 
     # Agent state directory - holds the trusted-dispatcher map and the async
     # result store. The agent (running as $AGENT_USER) must rewrite the map in
@@ -786,8 +801,8 @@ install_agent() {
 
     # Install demonstrator script - disabled in scripts.conf by default,
     # uncomment the entry to enable it for evaluating ctrl-exec capabilities
-    safe_install 750 "$SOURCE_DIR/etc/ctrl-exec-demonstrator.sh" "$SCRIPTS_DIR/ctrl-exec-demonstrator.sh"
-    chown root:"$AGENT_GROUP" "$SCRIPTS_DIR/ctrl-exec-demonstrator.sh"
+    safe_install 755 "$SOURCE_DIR/etc/ctrl-exec-demonstrator.sh" "$SCRIPTS_DIR/ctrl-exec-demonstrator.sh"
+    chown root:root "$SCRIPTS_DIR/ctrl-exec-demonstrator.sh"
     info "Demonstrator script installed at $SCRIPTS_DIR/ctrl-exec-demonstrator.sh"
 
 
@@ -1095,8 +1110,7 @@ print_next_steps_agent() {
     echo "       $SUDO_CMD cp your-script.sh $SCRIPTS_DIR/"
     echo "       $SUDO_CMD chmod 755 $SCRIPTS_DIR/your-script.sh"
     echo "       $SUDO_CMD chown root:root $SCRIPTS_DIR/your-script.sh"
-    echo "     The default profile runs scripts as 'nobody', which also needs"
-    echo "     $SCRIPTS_DIR to be mode 755 (it is created 750): see docs/INSTALL.md."
+    echo "     (755 root:root lets the default profile's run_as user, nobody, run it.)"
     echo ""
     echo "  3. Request pairing (while the dispatcher host is in pairing-mode):"
     echo "       $SUDO_CMD ctrl-exec-agent request-pairing --dispatcher <dispatcher-host>"

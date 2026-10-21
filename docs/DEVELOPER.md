@@ -1635,7 +1635,7 @@ auth hook token
 file permissions
 : CA key: 0600 root. dispatcher key: 0600 ctrl-exec (the API service user; root
   also reads it). dispatcher cert: 0644 root. Agent cert/key: 0640
-  root:ctrl-exec-agent. Scripts: 0750 root:ctrl-exec-agent. The
+  root:ctrl-exec-agent. Scripts directory and scripts: 0755 root:root. The
   `ctrl-exec-agent` system user has no login shell and no home directory.
   Runtime dirs: 0770 root:ctrl-exec; the shared agents/locks/runs dirs are setgid
   (2770) so files the root CLI and the unprivileged ctrl-exec API create both
@@ -1715,8 +1715,7 @@ On the agent host:
 # Place script in the managed directory
 sudo cp my-script.sh /opt/ctrl-exec-scripts/
 # root-owned and readable/executable by the profile's run_as user (the
-# default profile runs as nobody; the scripts directory must be 755 for it,
-# see INSTALL.md)
+# default profile runs as nobody)
 sudo chmod 755 /opt/ctrl-exec-scripts/my-script.sh
 sudo chown root:root /opt/ctrl-exec-scripts/my-script.sh
 

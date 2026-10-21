@@ -1177,15 +1177,14 @@ docker compose kill -s HUP agent
 The executor runs the script as its profile's `run_as` user, so that user must
 be able to read and execute it, and to reach it. A script with no `profile=`
 uses `[profile default]`, which the packaged `agent.conf` sets to
-`run_as = nobody`, and the packaged scripts directory is mode 750
-`root:ctrl-exec-agent`, which `nobody` cannot enter. For scripts that run as
-`nobody`, open the directory once:
+`run_as = nobody`, so scripts are installed 755 `root:root` as above, in the
+packaged scripts directory (755 `root:root`). A `agent-scripts` volume created
+by an earlier release keeps the old mode 750 `root:ctrl-exec-agent`, which
+`nobody` cannot enter; open it once with
+`docker compose exec agent chmod 755 /opt/ctrl-exec-scripts`.
 
-```bash
-docker compose exec agent chmod 755 /opt/ctrl-exec-scripts
-```
-
-Otherwise give the script a profile whose `run_as` user can reach it, for
+To restrict a script, give it a profile whose `run_as` user can reach it, for
+example a group the user is in. Give the script a profile whose `run_as` user can reach it, for
 example a group the user is in (see the run_as note in `agent.conf`). Either
 way the script and every directory above it must be owned by root and not
 writable by group or other, or the agent skips it and the executor refuses it

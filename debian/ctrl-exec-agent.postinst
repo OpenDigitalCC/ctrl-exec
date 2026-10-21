@@ -58,15 +58,24 @@ case "$1" in
             fi
         fi
 
-        # Scripts directory - root owns, agent group can read/execute.
-        mkdir -p /opt/ctrl-exec-scripts
-        chmod 750 /opt/ctrl-exec-scripts
-        chown root:ctrl-exec-agent /opt/ctrl-exec-scripts
+        # Scripts directory - 755 root:root: scripts run as their profile's
+        # run_as user (the shipped default profile: nobody), which must be able to
+        # reach them. An existing directory in the state earlier releases created
+        # (750 root:ctrl-exec-agent) is opened; any other mode or owner is the
+        # operator's choice. Exact path only, never recursive.
+        if [ ! -d /opt/ctrl-exec-scripts ]; then
+            mkdir -p /opt/ctrl-exec-scripts
+            chmod 755 /opt/ctrl-exec-scripts
+            chown root:root /opt/ctrl-exec-scripts
+        elif [ "$(stat -c '%a %U:%G' /opt/ctrl-exec-scripts)" = "750 root:ctrl-exec-agent" ]; then
+            chmod 755 /opt/ctrl-exec-scripts
+            chown root:root /opt/ctrl-exec-scripts
+        fi
         # Demonstrator script (disabled in scripts.conf by default).
         cp /usr/share/ctrl-exec/examples/ctrl-exec-demonstrator.sh \
            /opt/ctrl-exec-scripts/ctrl-exec-demonstrator.sh
-        chmod 750 /opt/ctrl-exec-scripts/ctrl-exec-demonstrator.sh
-        chown root:ctrl-exec-agent /opt/ctrl-exec-scripts/ctrl-exec-demonstrator.sh
+        chmod 755 /opt/ctrl-exec-scripts/ctrl-exec-demonstrator.sh
+        chown root:root /opt/ctrl-exec-scripts/ctrl-exec-demonstrator.sh
         ;;
 esac
 

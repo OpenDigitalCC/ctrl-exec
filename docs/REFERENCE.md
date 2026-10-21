@@ -1650,11 +1650,7 @@ agent-side information. It is installed on every agent host by the
 installer and is disabled in `scripts.conf` by default.
 
 To enable it, uncomment the entry in `/etc/ctrl-exec-agent/scripts.conf`
-on the agent host and reload the allowlist. The installer creates the script
-mode 750 `root:ctrl-exec-agent` in a 750 directory, which the default profile's
-`run_as = nobody` cannot reach; to run it under the default profile, open both
-to `nobody` as described in INSTALL.md (`chmod 755` on the directory and the
-script):
+on the agent host and reload the allowlist:
 
 ```bash
 # On systemd hosts (preferred)

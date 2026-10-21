@@ -19,8 +19,8 @@ COPY agent.conf scripts.conf /opt/rig/
 COPY rig-hello.sh /opt/ctrl-exec-scripts/rig-hello.sh
 COPY sampler.pl /opt/rig/sampler.pl
 COPY entrypoint.sh /entrypoint.sh
-RUN chown root:ctrl-exec-agent /opt/ctrl-exec-scripts/rig-hello.sh \
-    && chmod 750 /opt/ctrl-exec-scripts/rig-hello.sh \
+RUN chown root:root /opt/ctrl-exec-scripts/rig-hello.sh \
+    && chmod 755 /opt/ctrl-exec-scripts/rig-hello.sh \
     && chmod 755 /entrypoint.sh /opt/rig/sampler.pl
 
 EXPOSE 7445
