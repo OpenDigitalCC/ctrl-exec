@@ -14,7 +14,7 @@ use File::Temp qw(tempfile);
 use Exporter   qw(import);
 
 our @EXPORT_OK = qw(pairing_code pairing_code_v2 pairing_code_for
-                    canonical_csr sha256_hex);
+                    canonical_csr canonical_cert sha256_hex);
 
 # Pairing code versions. The agent states the version it computed in its
 # pairing request (code_version); a request without one comes from an agent
@@ -30,6 +30,12 @@ our @EXPORT_OK = qw(pairing_code pairing_code_v2 pairing_code_for
 #                                              terminates TLS presents its own
 #                                              certificate, so the agent's code
 #                                              differs from the dispatcher's.
+#
+# Keep-certificate form (T-062): an agent that already holds a certificate and
+# pairs with another dispatcher sends that certificate and its issuing CA with
+# the CSR. The code is then computed, in either version, over the CSR followed
+# by the certificate and the CA PEM exactly as sent (pairing_input), so a relay
+# cannot swap the certificate or CA while passing the CSR through unchanged.
 #
 # Both truncate the same way: first 4 bytes as a uint32 modulo 1,000,000, six
 # digits, so operators see the same format whichever version is shown.
@@ -60,6 +66,13 @@ sub pairing_code_for ($version, $csr_pem, $fpr_hex = undef) {
     die "unsupported pairing code version '$version'\n";
 }
 
+# The bytes the pairing code is computed over: the CSR, then (keep-certificate
+# form) the agent certificate and its CA as sent.
+sub pairing_input ($csr_pem, $agent_cert = undef, $agent_ca = undef) {
+    return $csr_pem unless defined $agent_cert;
+    return $csr_pem . $agent_cert . ($agent_ca // '');
+}
+
 # The CSR as openssl writes it (re-encoded PEM), or undef if openssl cannot
 # parse it. openssl ignores text around the PEM block, so the dispatcher
 # requires a received CSR to equal this form: otherwise a relay could append
@@ -72,6 +85,20 @@ sub canonical_csr ($csr_pem) {
     my $out = `openssl req -in \Q$path\E -outform PEM 2>/dev/null`;
     return unless $? == 0 && defined $out
         && $out =~ /\A-----BEGIN CERTIFICATE REQUEST-----\n/;
+    return $out;
+}
+
+# One certificate as openssl writes it (re-encoded PEM), or undef if openssl
+# cannot parse it. The keep-certificate pairing request (T-062) carries the
+# agent's certificate and its issuing CA; both are hashed into the pairing code,
+# so, as for the CSR, the dispatcher requires each to be exactly this form.
+sub canonical_cert ($pem) {
+    my ($fh, $path) = tempfile(UNLINK => 1);
+    print $fh $pem // '';
+    close $fh;
+    my $out = `openssl x509 -in \Q$path\E -outform PEM 2>/dev/null`;
+    return unless $? == 0 && defined $out
+        && $out =~ /\A-----BEGIN CERTIFICATE-----\n/;
     return $out;
 }
 

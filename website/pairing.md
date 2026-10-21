@@ -54,7 +54,9 @@ One-time ceremony
 
 An agent can serve more than one dispatcher natively. Pairing appends to the agent's trusted-dispatcher map rather than replacing it, so re-pairing the agent against a further dispatcher enrols that dispatcher while leaving existing ones trusted.
 
-Each dispatcher presents its own certificate, all chaining to a shared CA root, and is identified by a stable `dispatcher_id`. The agent records one `<hex-serial> <dispatcher-id>` line per dispatcher and resolves the matching id on every connection, which drives permission and attribution.
+Each dispatcher has its own CA and presents its own certificate, and is identified by a stable `dispatcher_id`. The agent holds a bundle of the dispatchers' CAs, records one `<ca-fingerprint> <hex-serial> <dispatcher-id>` line per dispatcher certificate, and resolves the matching id on every connection, which drives permission and attribution.
+
+From 0.14 an agent that is already paired keeps its key and certificate when it pairs with a further dispatcher: it presents them, with the CA that issued them, and the new dispatcher pins that CA for this agent alone instead of signing a certificate. Nothing secret is copied between dispatcher hosts, the first dispatcher keeps verifying the agent, and the running agent takes the new dispatcher without a restart. The dispatcher that issued the certificate keeps renewing it. `--rekey` asks for a new key and certificate instead; the other dispatchers then need re-pairing.
 
 This is the supported way to give several operators of differing trust classes access to a single host — keyed per dispatcher in the auth hook (`ENVEXEC_DISPATCHER`) and attributed in the agent logs (`DISPATCHER`) — rather than running separate agent instances. To enrol an additional dispatcher, run `request-pairing` against it from the agent and approve as normal; the existing dispatchers stay in the map.
 

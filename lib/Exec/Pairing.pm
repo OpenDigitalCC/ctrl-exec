@@ -447,21 +447,36 @@ sub approve_request (%opts) {
 
     require Exec::CA;
 
-    # Serialise concurrent signing through an exclusive lock on ca.serial.
-    # Prevents duplicate serial numbers when multiple pairing approvals race.
-    my $serial_file = "$ca_dir/ca.serial";
-    open my $serial_lock, '<', $serial_file
-        or croak "Cannot open serial file for locking: $!";
-    flock $serial_lock, LOCK_EX
-        or croak "Cannot lock serial file: $!";
+    # Keep-certificate request (T-062): nothing is signed. The agent keeps the
+    # certificate another dispatcher's CA issued; this dispatcher pins that CA
+    # in this agent's registry entry and verifies the agent against it alone
+    # (Exec::Engine). When the CA is this dispatcher's own (an agent re-pairing
+    # with the dispatcher that issued its certificate) nothing is pinned: the
+    # agent is an ordinary agent of this dispatcher, which renews it as before.
+    my $keep = defined $req->{agent_cert} && length $req->{agent_cert};
+    my ($cert_pem, $pin_ca);
+    if ($keep) {
+        $cert_pem = $req->{agent_cert};
+        my $own = Exec::CertInfo::fingerprint_from_path("$ca_dir/ca.crt") // '';
+        $pin_ca = ($req->{agent_ca_fpr} // '') ne $own;
+    }
+    else {
+        # Serialise concurrent signing through an exclusive lock on ca.serial.
+        # Prevents duplicate serial numbers when multiple pairing approvals race.
+        my $serial_file = "$ca_dir/ca.serial";
+        open my $serial_lock, '<', $serial_file
+            or croak "Cannot open serial file for locking: $!";
+        flock $serial_lock, LOCK_EX
+            or croak "Cannot lock serial file: $!";
 
-    my $cert_pem = Exec::CA::sign_csr(
-        csr_pem => $req->{csr},
-        ca_dir  => $ca_dir,
-    );
+        $cert_pem = Exec::CA::sign_csr(
+            csr_pem => $req->{csr},
+            ca_dir  => $ca_dir,
+        );
 
-    flock $serial_lock, LOCK_UN;
-    close $serial_lock;
+        flock $serial_lock, LOCK_UN;
+        close $serial_lock;
+    }
     my $ca_pem = Exec::CA::read_ca_cert(ca_dir => $ca_dir);
 
     # Read the dispatcher cert serial so the agent can store it and use it
@@ -490,7 +505,7 @@ sub approve_request (%opts) {
     my $resp_file = "$pairing_dir/$reqid.approved";
     _write_file($resp_file, encode_json({
         status          => 'approved',
-        cert            => $cert_pem,
+        ($keep ? (cert_mode => 'keep') : (cert => $cert_pem)),
         ca              => $ca_pem,
         nonce           => $req->{nonce} // '',
         dispatcher_serial => $disp_serial,
@@ -513,9 +528,13 @@ sub approve_request (%opts) {
         serial_confirmed  => (length $disp_serial
                                 ? strftime('%Y-%m-%dT%H:%M:%SZ', gmtime)
                                 : ''),
+        ($pin_ca ? (agent_ca     => $req->{agent_ca},
+                    agent_ca_fpr => $req->{agent_ca_fpr}) : ()),
     );
 
-    $log_fn->({ ACTION => 'pair-approve', AGENT => $req->{hostname}, REQID => $reqid });
+    $log_fn->({ ACTION => 'pair-approve', AGENT => $req->{hostname}, REQID => $reqid,
+        ($keep ? (CERT_MODE => 'keep', AGENT_CA => $req->{agent_ca_fpr} // '',
+                  PINNED => ($pin_ca ? 1 : 0)) : ()) });
 
     # Report exactly what was registered and how the dispatcher will reach it,
     # then how to change it without re-pairing. edit-agent only rewrites the
@@ -525,6 +544,7 @@ sub approve_request (%opts) {
     my $addr = ($lookup_by eq 'hostname') ? $name : ($ip // '?');
     print "Approved '$name' ($reqid). Cert delivered on next poll.\n";
     printf "  Code:        %s\n", code_label($req);
+    print "$_\n" for kept_cert_lines($req, $pin_ca);
     printf "  Registered:  %s   lookup_by=%s   addr=%s:%s\n",
         $name, $lookup_by, $addr, ($port // '?');
     if (length($req->{source_ip} // '') || $req->{reverse_confirmed}) {
@@ -639,6 +659,7 @@ sub _interactive_prompt ($log_fn) {
             code_label($r);
         print "$_\n" for code_note($r);
         printf "  Received: %s\n", $r->{received} // '?';
+        print "$_\n" for kept_cert_lines($r);
         print "$_\n" for Exec::Pairing::Identity::identity_lines($r);
         if (my $rec = Exec::Pairing::Identity::identity_recommendation($r)) {
             print "$rec\n";
@@ -749,7 +770,7 @@ sub _handle_pair_request ($conn, $peer_ip, $log_fn, $max_queue = undef, $pairing
     }
 
     my $data = eval { decode_json($body) };
-    unless ($data && $data->{csr} && $data->{hostname}) {
+    unless ($data && ref $data eq 'HASH' && $data->{csr} && $data->{hostname}) {
         _send_raw($conn, encode_json({ status => 'error', reason => 'invalid request' }));
         return;
     }
@@ -779,6 +800,23 @@ sub _handle_pair_request ($conn, $peer_ip, $log_fn, $max_queue = undef, $pairing
         return;
     }
 
+    # Keep-certificate form (T-062): an agent already paired with another
+    # dispatcher sends its certificate and the CA that issued it with the CSR,
+    # and keeps them. This dispatcher signs nothing for it; on approval it pins
+    # that CA for this agent alone. The CSR (made from the agent's existing key)
+    # proves the agent holds the key of the certificate it presents.
+    my $kept;
+    if (defined $data->{agent_cert} || defined $data->{agent_ca}) {
+        $kept = check_kept_cert($data->{csr}, $data->{agent_cert}, $data->{agent_ca});
+        unless ($kept->{ok}) {
+            _send_raw($conn, encode_json({ status => 'error',
+                reason => "agent certificate refused: $kept->{error}" }));
+            $log_fn->({ ACTION => 'pair-reject', IP => $peer_ip,
+                REASON => 'kept-cert-invalid', ERROR => $kept->{error} });
+            return;
+        }
+    }
+
     # Code version: the agent states the one it computed. None means an agent
     # older than 0.13, which computes v1. Anything else is refused rather than
     # shown as a code the agent does not display.
@@ -805,7 +843,9 @@ sub _handle_pair_request ($conn, $peer_ip, $log_fn, $max_queue = undef, $pairing
     # still override it at 'approve --ip'.
     my $eff_ip     = $reported_ip // $peer_ip;
     my $received   = strftime('%Y-%m-%dT%H:%M:%SZ', gmtime);
-    my $code       = _pairing_code($code_version, $csr, $cert_fpr);
+    my $code       = _pairing_code($code_version,
+        Exec::Digest::pairing_input($csr, ($kept ? @$data{qw(agent_cert agent_ca)} : ())),
+        $cert_fpr);
 
     # Resolve the network's canonical name for the connection's source IP once,
     # now, so the operator can see how this dispatcher resolves the agent before
@@ -841,11 +881,19 @@ sub _handle_pair_request ($conn, $peer_ip, $log_fn, $max_queue = undef, $pairing
         code_version => $code_version,
         reverse_dns       => ($rev ? $rev->{ptr} : ''),
         reverse_confirmed => ($rev && $rev->{confirmed} ? 1 : 0),
+        ($kept ? (
+            agent_cert       => $data->{agent_cert},
+            agent_ca         => $data->{agent_ca},
+            agent_cert_fpr   => $kept->{cert_fpr},
+            agent_ca_fpr     => $kept->{ca_fpr},
+            agent_ca_subject => $kept->{ca_subject},
+        ) : ()),
     }));
 
     $log_fn->({ ACTION => 'pair-request', AGENT => $hostname, IP => $peer_ip,
         ($reported_ip ? (REPORTED_IP => $reported_ip) : ()),
-        REQID => $reqid, CODE_VERSION => $code_version, STATUS => 'pending' });
+        REQID => $reqid, CODE_VERSION => $code_version, STATUS => 'pending',
+        ($kept ? (CERT_MODE => 'keep', AGENT_CA => $kept->{ca_fpr}) : ()) });
     print "Pairing request queued: $hostname ($eff_ip) - ID: $reqid\n";
 
     # Send reqid to agent immediately so orchestrators can use it to call
@@ -854,8 +902,11 @@ sub _handle_pair_request ($conn, $peer_ip, $log_fn, $max_queue = undef, $pairing
     # a second response for the approval or denial.
     # code_version tells a 0.13+ agent this dispatcher computed the code version
     # it asked for; older agents ignore the extra field.
+    # cert_mode tells a 0.14+ agent that sent its certificate that this
+    # dispatcher will keep it rather than sign the CSR; an agent that gets no
+    # such confirmation (a dispatcher before 0.14) withdraws.
     _send_raw($conn, encode_json({ status => 'pending', reqid => $reqid,
-        code_version => $code_version }));
+        code_version => $code_version, ($kept ? (cert_mode => 'keep') : ()) }));
 
     # Poll for approval or denial (max 10 minutes)
     my $resp_approved = "$pairing_dir/$reqid.approved";
@@ -938,6 +989,67 @@ sub code_note ($r) {
     return () if ($r->{code_version} // 1) == 2;
     return "  Note:     a v1 code (agent older than 0.13) is not bound to this "
          . "dispatcher,\n            so a matching code does not rule out a relay.";
+}
+
+# Check a keep-certificate pairing request (T-062): $cert and $ca are the
+# agent's certificate and the CA that issued it, each one canonical PEM
+# certificate (they are hashed into the pairing code); the CSR, made from the
+# agent's existing key, carries the certificate's public key and a valid
+# self-signature (so the sender holds that key); and the certificate verifies
+# with that CA as the only trust anchor.
+# Returns { ok => 1, cert_fpr, ca_fpr, ca_subject, expiry }
+#      or { ok => 0, error => '...' }
+sub check_kept_cert ($csr, $cert, $ca) {
+    for ([certificate => $cert], [CA => $ca]) {
+        my ($what, $pem) = @$_;
+        return { ok => 0, error => "no $what" } unless defined $pem && !ref $pem && length $pem;
+        my $canon = Exec::Digest::canonical_cert($pem);
+        return { ok => 0, error => "the $what is not exactly one PEM certificate" }
+            unless defined $canon && $canon eq $pem;
+    }
+    my $req_key  = Exec::CertInfo::public_key_from_pem($csr, 'req');
+    my $cert_key = Exec::CertInfo::public_key_from_pem($cert);
+    return { ok => 0, error => "the certificate's key is not the CSR's key" }
+        unless defined $req_key && defined $cert_key && $req_key eq $cert_key;
+    my $tmp = File::Temp->new(SUFFIX => '.csr', UNLINK => 1);
+    print $tmp $csr;
+    close $tmp;
+    my $out = `openssl req -verify -noout -in \Q${\ $tmp->filename}\E 2>&1`;
+    return { ok => 0, error => 'the CSR signature does not verify' } unless $? == 0;
+    my $why = Exec::CertInfo::verify_issued_by($cert, $ca);
+    return { ok => 0, error => "the certificate does not verify against its CA ($why)" }
+        if defined $why;
+    return {
+        ok         => 1,
+        cert_fpr   => Exec::CertInfo::fingerprint_from_pem($cert) // '',
+        ca_fpr     => Exec::CertInfo::fingerprint_from_pem($ca)   // '',
+        ca_subject => Exec::CertInfo::subject_from_pem($ca)       // '',
+        expiry     => Exec::CertInfo::expiry_from_pem($cert)      // '',
+    };
+}
+
+# Lines describing a keep-certificate request for the operator (list-requests,
+# the interactive prompt, approve): the agent's certificate and the CA it
+# chains to, by fingerprint, so what is approved is what is seen. Empty for an
+# ordinary (CSR) request. $pinned, when known (approve), says what happens.
+sub kept_cert_lines ($r, $pinned = undef) {
+    return () unless defined $r->{agent_cert} && length $r->{agent_cert};
+    my @l = (
+        '  Keeps cert: ' . Exec::CertInfo::format_sha256_fingerprint($r->{agent_cert_fpr} // ''),
+        '  Issued by:  ' . Exec::CertInfo::format_sha256_fingerprint($r->{agent_ca_fpr} // '')
+            . (length($r->{agent_ca_subject} // '') ? " ($r->{agent_ca_subject})" : ''),
+    );
+    if (defined $pinned) {
+        push @l, $pinned
+            ? '  This dispatcher verifies this agent against that CA (pinned for it '
+              . "alone)\n  and does not renew its certificate; the issuing dispatcher does."
+            : "  That is this dispatcher's own CA: an ordinary agent of this dispatcher.";
+    }
+    else {
+        push @l, '  The agent keeps that certificate (already paired with another '
+               . 'dispatcher);\n  approving pins its CA for this agent alone.';
+    }
+    return @l;
 }
 
 # Extract the notAfter date from a PEM cert string (via Exec::CertInfo).

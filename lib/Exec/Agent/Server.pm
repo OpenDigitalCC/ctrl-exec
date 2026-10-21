@@ -867,6 +867,30 @@ sub peer_issuers ($conn, $bundle) {
     return \@fprs;
 }
 
+# Give the TLS listener a new set of trusted CAs without a restart (T-062):
+# $ctx is the listener's SSL_CTX (from SSL_create_ctx_callback), $bundle the CA
+# bundle as AgentPairing::load_ca_bundle returns it. A fresh certificate store
+# holding exactly those CAs replaces the context's store (the context frees the
+# old one), with the verification flags IO::Socket::SSL sets. It runs in the
+# accept-loop parent between connections; a handshake already done keeps the
+# result it had, and every later handshake verifies against the new set.
+# Returns 1, or 0 when the store could not be built (the old one stays).
+sub set_listener_cas ($ctx, $bundle) {
+    return 0 unless $ctx && ref $bundle eq 'ARRAY' && @$bundle;
+    my $store = Net::SSLeay::X509_STORE_new() or return 0;
+    for my $ca (@$bundle) {
+        unless ($ca->{x509} && Net::SSLeay::X509_STORE_add_cert($store, $ca->{x509})) {
+            Net::SSLeay::X509_STORE_free($store);
+            Net::SSLeay::ERR_clear_error();
+            return 0;
+        }
+    }
+    my $flags = eval { Net::SSLeay::X509_V_FLAG_TRUSTED_FIRST() } // 0;
+    Net::SSLeay::X509_STORE_set_flags($store, $flags) if $flags;
+    Net::SSLeay::CTX_set_cert_store($ctx, $store);
+    return 1;
+}
+
 # Bounds for draining a refused connection (see drain_refused).
 use constant DRAIN_MAX_BYTES => 65536;
 use constant DRAIN_TIMEOUT   => 1;

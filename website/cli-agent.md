@@ -30,16 +30,19 @@ sudo systemctl kill --signal=HUP ctrl-exec-agent
 # request-pairing
 
 ```
-ctrl-exec-agent request-pairing --dispatcher <hostname> [--dispatcher-fingerprint SHA256:<hex>] [--port <n>] [--lookup-by ip|hostname] [--background] [--timeout <s>]
+ctrl-exec-agent request-pairing --dispatcher <hostname> [--dispatcher-fingerprint SHA256:<hex>] [--rekey] [--port <n>] [--lookup-by ip|hostname] [--background] [--timeout <s>]
 ```
 
-Generates a key pair and CSR, connects to the dispatcher pairing port, and waits for approval. On approval, stores the signed certificate and CA certificate, and records the approving dispatcher — its serial and stable id — in the agent's trusted-dispatcher map. The entry is appended: re-pairing against a further dispatcher leaves existing dispatchers trusted. The agent's configured operational port is reported in the request so dispatch can reach it without a per-command port.
+Generates a key pair and CSR, connects to the dispatcher pairing port, and waits for approval. On approval, stores the signed certificate and CA certificate, and records the approving dispatcher — its serial and stable id — in the agent's trusted-dispatcher map. The entry is appended: re-pairing against a further dispatcher leaves existing dispatchers trusted. An agent already paired keeps its key and certificate and presents them with their CA; the further dispatcher pins that CA for this agent and signs nothing, so the dispatchers already paired keep verifying it. The agent's configured operational port is reported in the request so dispatch can reach it without a per-command port.
 
 `--dispatcher <hostname>`
 : Hostname or IP of the dispatcher instance. Required.
 
 `--dispatcher-fingerprint SHA256:<hex>`
 : Verified pairing. The SHA-256 fingerprint of the dispatcher's CA certificate, from `ced ca-fingerprint` or the `pairing-mode` banner (colons and either case accepted). After the TLS handshake the agent checks the dispatcher's certificate chains to that CA, and stops before sending its CSR if it does not. Use it on any network you do not control.
+
+`--rekey`
+: Generate a new key and have this dispatcher sign it even when already paired. The dispatchers already paired then refuse the agent until each is re-paired.
 
 `--port <n>`
 : Pairing port on the dispatcher host. Default: 7444.

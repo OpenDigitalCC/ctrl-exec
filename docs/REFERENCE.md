@@ -328,12 +328,28 @@ code with its version (`v2`, or `v1, pre-0.13 agent`). Verify the
 confirmation code matches the 6-digit code displayed on the agent before
 approving. `approve` repeats the code and its version.
 
+A request from an agent already paired with another dispatcher (see
+*Pairing with another dispatcher* under `request-pairing`) is followed by two
+lines: `Keeps cert:` with the SHA-256 fingerprint of the agent's certificate,
+and `Issued by:` with the fingerprint and subject of the CA that issued it.
+Compare them with the agent's own display before approving.
+
 ---
 
 ### approve
 
 Approve a pending pairing request by ID. Signs the agent's CSR and
 delivers the certificate on the agent's next poll.
+
+For an agent that keeps its certificate (already paired with another
+dispatcher), nothing is signed: the CA that issued the agent's certificate is
+pinned in the agent's registry entry (`agent_ca`, `agent_ca_fpr`), this
+dispatcher verifies that agent's TLS certificate against that CA alone, and it
+never renews the certificate (the issuing dispatcher does; this dispatcher
+records the expiry the agent reports on `ping`). `approve` says so. When the
+issuing CA is this dispatcher's own (an agent re-pairing with the dispatcher
+that issued its certificate) nothing is pinned and the agent is an ordinary
+agent of this dispatcher.
 
 ```bash
 ced approve <reqid>
@@ -502,6 +518,12 @@ ced setup-ca
 ```
 
 Writes to `/etc/ctrl-exec-dispatcher/`. Does not overwrite an existing CA.
+The CA's subject is `CN=ctrl-exec CA <dispatcher-id> <8 random hex digits>`
+(0.14; earlier releases named every CA `ctrl-exec CA`), so the CAs of
+several dispatchers never share a name in an agent's CA bundle. Every
+certificate the CA issues carries Subject and Authority Key Identifiers, so a
+verifier holding several CAs finds the issuer by key. An existing CA is not
+regenerated.
 
 ---
 
@@ -791,8 +813,11 @@ Key settings:
   listener accepts a peer certificate issued by any CA in the bundle; which
   dispatcher the peer is, if any, is decided by the trusted-dispatcher map
   below, by issuing CA and serial. A renewed agent certificate must come from
-  the CA that issued the current one. The listener reads the bundle at start,
-  so restart the agent after pairing it with another dispatcher.
+  the CA that issued the current one. The running agent watches the file:
+  when it changes (a pairing appends to it) the listener is given the new set
+  of CAs at the next connection, with no restart (`ACTION=ca-bundle-reload`).
+  A bundle with no readable certificate leaves the listener with the CAs it
+  had.
 
 `revoked_serials`
 : Path to a file listing revoked TLS certificate serial numbers, one per line.
@@ -1183,10 +1208,13 @@ request and stored in the registry so dispatch can reach it without a
 per-command `--port`; the operator can override it with `approve --agent-port`.
 
 ```bash
-ctrl-exec-agent request-pairing --dispatcher <host> [--dispatcher-fingerprint SHA256:<hex>]
+ctrl-exec-agent request-pairing --dispatcher <host> [--dispatcher-fingerprint SHA256:<hex>] [--rekey]
 ctrl-exec-agent request-pairing --dispatcher <host> --background [--timeout <n>]
-    [--dispatcher-fingerprint SHA256:<hex>]
+    [--dispatcher-fingerprint SHA256:<hex>] [--rekey]
 ```
+
+An agent that is not yet paired generates a new key. An agent already paired
+keeps its key and certificate; see *Pairing with another dispatcher* below.
 
 `--dispatcher <host>`
 : Hostname or IP of the dispatcher host. Required.
@@ -1203,8 +1231,17 @@ ctrl-exec-agent request-pairing --dispatcher <host> --background [--timeout <n>]
   sending its CSR (with `--background`, before printing a request ID). On
   success it prints `Dispatcher verified: ...` above the pairing code. Use it on
   any network you do not control; see SECURITY.md, *Verified pairing*. Needs a
-  0.14 or later dispatcher, which sends its CA certificate. Without the flag,
-  pairing runs as before.
+  0.14 or later dispatcher, which sends its CA certificate. The CA certificate
+  the dispatcher delivers at approval must be that same CA, and only it;
+  otherwise nothing is stored and the agent stops with `Pairing refused:`
+  (`ACTION=pair-verify-failed`). Without the flag, pairing runs as before.
+
+`--rekey`
+: Generate a new key and have this dispatcher sign it, even when the agent is
+  already paired. The new certificate replaces the one the other dispatchers
+  verify, so each of them refuses the agent until it is re-paired with it;
+  the command names them. Use it when the certificate's issuing dispatcher is
+  gone (below).
 
 `--port <n>`
 : Override the pairing port on the dispatcher (default 7444).
@@ -1235,6 +1272,57 @@ ready to serve.
 If the connection fails with a configuration error, check that the
 dispatcher host is reachable, that `pairing-mode` is active on the
 dispatcher, and that the correct address was specified.
+
+#### Pairing with another dispatcher
+
+An agent already paired with dispatcher A pairs with dispatcher B, which has
+its own CA, with the same two steps as any pairing: `request-pairing
+--dispatcher B` on the agent, `approve` on B. No key or CA file is copied
+between hosts.
+
+1. The agent finds it is paired: `agent.crt`, `agent.key` and `ca.crt` are
+   present, the certificate verifies against the CA in the bundle that issued
+   it, and its key is `agent.key`. It prints `Already paired: keeping this
+   agent's key and certificate (issued by CA SHA256:...)`.
+2. It sends a CSR made from its existing key, with its certificate and that
+   CA certificate. The pairing code covers all three. B checks that the CSR
+   and the certificate carry the same key, the CSR's self-signature, and that
+   the certificate verifies against the CA sent; anything else is refused
+   before it is queued. B's acknowledgement confirms it keeps the
+   certificate.
+3. The operator compares the code and the two fingerprints (`list-requests`)
+   and approves on B. B signs nothing; it pins the agent's issuing CA in that
+   agent's registry entry and returns its own CA certificate and identity.
+4. The agent adds B's CA to its bundle and B to its trusted-dispatcher map.
+   `agent.crt` and `agent.key` are unchanged, so A keeps verifying the agent.
+   The running agent sees `ca.crt` and the map change and reloads them, the
+   TLS listener's CAs included (`ACTION=ca-bundle-reload`), at its next
+   connection: no restart.
+
+Renewal stays with the dispatcher that issued the certificate. B pins the CA,
+not the certificate, so A's renewals do not affect B; B never renews it.
+
+A dispatcher older than 0.14 does not confirm that it keeps the certificate.
+The agent then withdraws before anything is stored (`Pairing not done: ...`,
+`ACTION=pair-keep-unsupported`); deny the request on that dispatcher. Upgrade
+it, or use `--rekey`.
+
+Re-pairing with the dispatcher that issued the certificate also keeps it: that
+dispatcher registers the agent as its own, pins nothing, and goes on renewing
+it.
+
+When the issuing dispatcher is gone
+: An agent whose certificate A issued, with A removed (`remove-dispatcher`)
+  or decommissioned, can no longer have its certificate renewed: only A's CA
+  may renew it (the agent refuses a renewal from another CA, so no dispatcher
+  can move it onto its own CA and cut the others off). Before the certificate
+  expires, re-key with one of the remaining dispatchers, B:
+  `request-pairing --dispatcher B --rekey`, approve on B. B now issues and
+  renews the certificate. Every other remaining dispatcher pinned A's CA for
+  this agent and refuses the new certificate, so re-pair each of them
+  (`request-pairing --dispatcher C`, no `--rekey`): the agent keeps the B-issued
+  certificate and C pins B's CA. Until then C cannot reach the agent. With B
+  the only remaining dispatcher there is nothing more to do.
 
 ---
 

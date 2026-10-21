@@ -37,6 +37,11 @@ my $DEFAULT_PORT = 7443;
 #   port      => $int   the agent's operational port. Default 7443. Used by
 #       resolve_target so non-default-port agents are reachable without a
 #       per-command --port. Out-of-range values normalise to 7443.
+#
+# Optional pinned CA (keep-certificate pairing, T-062):
+#   agent_ca     => $pem   the CA that issued the agent's certificate
+#   agent_ca_fpr => $hex   its SHA-256 fingerprint
+# A record written without them (an ordinary pairing, or a re-pair) has none.
 sub register_agent (%opts) {
     my $hostname = $opts{hostname} or croak "hostname required";
     valid_agent_name($hostname)
@@ -59,6 +64,13 @@ sub register_agent (%opts) {
         serial_broadcast  => $opts{serial_broadcast}  // '',
         serial_confirmed  => $opts{serial_confirmed}  // '',
     };
+    # Pinned issuing CA (T-062): an agent that kept a certificate another
+    # dispatcher's CA issued is verified against this CA alone (Exec::Engine),
+    # and this dispatcher does not renew its certificate.
+    if (defined $opts{agent_ca} && length $opts{agent_ca}) {
+        $record->{agent_ca}     = $opts{agent_ca};
+        $record->{agent_ca_fpr} = $opts{agent_ca_fpr} // '';
+    }
 
     write_atomic("$dir/$hostname.json", encode_json($record));
 }

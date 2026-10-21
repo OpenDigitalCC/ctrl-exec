@@ -504,6 +504,8 @@ Fields
 | IP | string | Source IP of the agent connection |
 | REQID | hex | Pairing request ID |
 | STATUS | string | `pending` |
+| CERT_MODE | string | `keep` when the agent keeps its certificate (already paired with another dispatcher, 0.14); absent otherwise |
+| AGENT_CA | hex | With `CERT_MODE=keep`: SHA-256 fingerprint of the CA that issued the agent's certificate |
 
 ```
 ACTION=pair-request AGENT=web-01 IP=10.0.0.5 REQID=a1b2c3d4e5f60001 STATUS=pending
@@ -523,7 +525,8 @@ Fields
 | --- | --- | --- |
 | ACTION | string | `pair-reject` |
 | IP | string | Source IP of the rejected connection |
-| REASON | string | `queue-full` |
+| REASON | string | `queue-full`, or `kept-cert-invalid` (an agent's certificate offered for keeping was refused; ERROR says why) |
+| ERROR | string | With `kept-cert-invalid`: the check that failed |
 
 ```
 ACTION=pair-reject IP=10.0.0.5 REASON=queue-full
@@ -544,6 +547,9 @@ Fields
 | ACTION | string | `pair-approve` |
 | AGENT | string | Hostname of the approved agent |
 | REQID | hex | Pairing request ID |
+| CERT_MODE | string | `keep`: nothing was signed, the agent keeps its certificate (absent for an ordinary approval) |
+| AGENT_CA | hex | With `CERT_MODE=keep`: fingerprint of the agent's issuing CA |
+| PINNED | integer | With `CERT_MODE=keep`: 1 when that CA was pinned in the registry entry, 0 when it is this dispatcher's own CA |
 
 ```
 ACTION=pair-approve AGENT=web-01 REQID=a1b2c3d4e5f60001
@@ -1250,9 +1256,40 @@ Fields
 | STATUS | string | `approved` |
 | DISPATCHER | string | Id of the dispatcher, as delivered at pairing |
 | DISPATCHER_HOST | string | Hostname or IP of the dispatcher that was contacted |
+| CERT_MODE | string | `new` (a certificate was delivered and stored) or `keep` (the agent kept its key and certificate; pairing with another dispatcher, 0.14) |
 
 ```
-ACTION=pair-complete STATUS=approved DISPATCHER=ctrl-exec-primary DISPATCHER_HOST=ctrl-exec.example.com
+ACTION=pair-complete STATUS=approved CERT_MODE=keep DISPATCHER=d2 DISPATCHER_HOST=d2.example.com
+```
+
+### pair-keep-unsupported
+
+Emitted by the agent when it asked a dispatcher to keep its existing
+certificate (it is already paired with another dispatcher) and the dispatcher
+did not confirm it would - a dispatcher older than 0.14, which would sign a new
+certificate. The agent withdraws and stores nothing.
+
+Priority
+: WARNING
+
+Fields: `ACTION`, `DISPATCHER_HOST`, `REQID` (the request left pending on the
+dispatcher, to deny).
+
+### ca-bundle-reload
+
+Emitted by the agent when its CA bundle (`ca` in `agent.conf`) changed on disk
+- a pairing appended a dispatcher's CA - and the TLS listener was given the new
+set of CAs without a restart. At WARNING, with PATH and REASON, when the file
+held no readable certificate and the listener kept the CAs it had.
+
+Priority
+: INFO (WARNING when the bundle was unreadable)
+
+Fields: `ACTION`, `CAS` (number of CAs now trusted; INFO), `PATH`, `REASON`
+(WARNING).
+
+```
+ACTION=ca-bundle-reload CAS=2
 ```
 
 ### pair-denied (agent-side)
@@ -1690,8 +1727,8 @@ ACTION=rotation-state-corrupt PATH=/var/lib/ctrl-exec/rotation.json ERROR="..." 
 
 | Priority | Syslog level | Used for |
 | --- | --- | --- |
-| INFO | `daemon.info` | Normal operations: `start`, `run`, `ping`, `dispatch`, `lock-acquire`, `lock-release`, `renew`, `renew-complete`, `auth` pass, `pair-complete`, `pair-approve`, `pair-deny`, `pair-request`, `pair-reject`, `pairing-mode-start`, `pairing-mode-stop`, `capabilities` success, `rate-evict`, `unpair`, `api-start`, `api-stop`, `api-request`, `status-read` (served, not-found), `cert-check`, `cert-renewal-start`, `cert-rotated`, `serial-broadcast`, `serial-retire`, `serial-confirmed`, `revoked-serials-absent`, `trusted-map-upgrade` |
-| WARNING | `daemon.warning` | Security and access events requiring attention: `deny`, `serial-reject`, `result-deny`, `status-read` (denied), `revoked-cert`, `tls-failure`, `ip-block`, `rate-block`, `capabilities-deny`, `capabilities-no-serial`, `pair-denied`, `pair-timeout`, `lock-conflict`, `config-warn`, `allowlist-skip`, `stdin-timeout`, `auth` deny, `serial-broadcast-fail`, `serial-stale` |
+| INFO | `daemon.info` | Normal operations: `start`, `run`, `ping`, `dispatch`, `lock-acquire`, `lock-release`, `renew`, `renew-complete`, `auth` pass, `pair-complete`, `pair-approve`, `pair-deny`, `pair-request`, `pair-reject`, `pairing-mode-start`, `pairing-mode-stop`, `capabilities` success, `rate-evict`, `unpair`, `api-start`, `api-stop`, `api-request`, `status-read` (served, not-found), `cert-check`, `cert-renewal-start`, `cert-rotated`, `serial-broadcast`, `serial-retire`, `serial-confirmed`, `revoked-serials-absent`, `trusted-map-upgrade`, `ca-bundle-reload` |
+| WARNING | `daemon.warning` | Security and access events requiring attention: `deny`, `serial-reject`, `result-deny`, `status-read` (denied), `revoked-cert`, `tls-failure`, `ip-block`, `rate-block`, `capabilities-deny`, `capabilities-no-serial`, `pair-denied`, `pair-timeout`, `lock-conflict`, `config-warn`, `allowlist-skip`, `stdin-timeout`, `auth` deny, `serial-broadcast-fail`, `serial-stale`, `pair-keep-unsupported` |
 | ERR | `daemon.err` | Failures requiring investigation: `accept-fatal`, `renew` failure, `capabilities` error, `ping` error, `run` error, `auth` error (hook not executable), `cert-rotation-fail`, `rotation-state-corrupt`, `run-store-fail`, `status-read` (error) |
 
 

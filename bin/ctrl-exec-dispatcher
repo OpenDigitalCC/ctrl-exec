@@ -644,6 +644,8 @@ sub mode_list_requests {
             $r->{source_ip} // $r->{ip} // '?',
             $rev,
             Exec::Pairing::code_label($r);
+        # An agent already paired elsewhere keeps its certificate (T-062).
+        print "$_\n" for Exec::Pairing::kept_cert_lines($r);
     }
     print "\nReverse DNS is how this dispatcher resolves each agent's IP; "
         . "(ok) = forward-confirmed.\n"

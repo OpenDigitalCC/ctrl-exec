@@ -49,7 +49,10 @@ Generate a key and CSR and submit a pairing request to a control host (see
 .B \-\-dispatcher
 below). After the operator approves, the signed certificate is stored. With
 .BR \-\-dispatcher-fingerprint ,
-the control host is verified before the CSR is sent.
+the control host is verified before the CSR is sent. An agent already paired
+keeps its key and certificate and presents them with their CA instead; the
+control host pins that CA for this agent and signs nothing, so the control
+hosts it is already paired with keep verifying it.
 .TP
 .B pairing-status
 Show pairing and certificate status. Reads the root-only certificate files;
@@ -102,6 +105,13 @@ Suggest how the control host should resolve this agent for dispatch
 (default: hostname). The control host's
 .B "approve \-\-lookup-by"
 overrides it.
+.TP
+.B \-\-rekey
+With
+.BR request-pairing :
+generate a new key and have the control host sign it even when already
+paired. The control hosts the agent is paired with then refuse the new
+certificate until each is re-paired.
 .TP
 .B \-\-background
 Non-interactive pairing: print the request ID and wait for approval in the

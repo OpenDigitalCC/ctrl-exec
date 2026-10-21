@@ -76,6 +76,7 @@ sub dispatch_all (%opts) {
     my $fanned  = _fan_out(\@entries, $max_par, sub ($name, $target) {
         my ($host, $hport)  = parse_host($target, $port);
         return _dispatch_one(
+            name     => $name,   # registry name: its pinned CA, if any
             host     => $host,
             port     => $hport,
             script   => $script,
@@ -136,6 +137,7 @@ sub result_all (%opts) {
     my $fanned  = _fan_out(\@entries, $max_par, sub ($name, $target) {
         my ($host, $hport)  = parse_host($target, $port);
         return _result_one(
+            name     => $name,   # registry name: its pinned CA, if any
             host   => $host,
             port   => $hport,
             reqid  => $reqid,
@@ -189,6 +191,7 @@ sub ping_all (%opts) {
     my $fanned  = _fan_out(\@entries, $max_par, sub ($name, $target) {
         my ($host, $hport)  = parse_host($target, $port);
         return _ping_one(
+            name     => $name,   # registry name: its pinned CA, if any
             host   => $host,
             port   => $hport,
             reqid  => $reqid,
@@ -206,7 +209,21 @@ sub ping_all (%opts) {
         # has a renewed cert staged (awaiting its next restart): its live expiry
         # still reads old, so re-renewing each run would just re-sign and re-stage
         # redundantly until the agent restarts.
-        if ($renew && ($result->{status} // '') eq 'ok' && $result->{expiry}
+        # An agent whose CA is pinned (keep-certificate pairing, T-062) holds a
+        # certificate another dispatcher issued; that dispatcher renews it.
+        # Renewing it here would sign with this dispatcher's CA, which the agent
+        # refuses (renewal stays with the issuing CA). The expiry it reports is
+        # recorded, so list-agents follows the issuing dispatcher's renewals.
+        my $pinned = defined _pinned_ca($config, $f->{name});
+        if ($pinned && ($result->{status} // '') eq 'ok'
+                && defined Exec::CertInfo::expiry_epoch($result->{expiry})) {
+            my $rec = eval { Exec::Registry::get_agent(hostname => $f->{name},
+                registry_dir => $config->{registry_dir}) } // {};
+            eval { Exec::Registry::update_expiry(hostname => $f->{name},
+                expiry => $result->{expiry}, registry_dir => $config->{registry_dir}) }
+                if ($rec->{expiry} // '') ne $result->{expiry};
+        }
+        if ($renew && !$pinned && ($result->{status} // '') eq 'ok' && $result->{expiry}
                 && !$result->{staged}) {
             my $cert_days = $config->{cert_days} // 365;
             if (_renewal_due($result->{expiry}, $cert_days)) {
@@ -265,6 +282,7 @@ sub capabilities_all (%opts) {
     my $fanned  = _fan_out(\@entries, $max_par, sub ($name, $target) {
         my ($host, $hport)  = parse_host($target, $port);
         return _capabilities_one(
+            name     => $name,   # registry name: its pinned CA, if any
             host   => $host,
             port   => $hport,
             config => $config,
@@ -474,7 +492,7 @@ sub _dispatch_one (%opts) {
 
     require Time::HiRes;
     my $t0 = Time::HiRes::time();
-    my $ua = _build_ua($config);
+    my $ua = _build_ua($config, $opts{name});
 
     my %body = (
         script   => $opts{script},
@@ -606,7 +624,7 @@ sub _result_one (%opts) {
 
     require Time::HiRes;
     my $t0 = Time::HiRes::time();
-    my $ua = _build_ua($config);
+    my $ua = _build_ua($config, $opts{name});
 
     my $resp = eval {
         $ua->get("https://$host:$port/result/$reqid");
@@ -670,7 +688,7 @@ sub _ping_one (%opts) {
 
     require Time::HiRes;
     my $t0 = Time::HiRes::time();
-    my $ua = _build_ua($config);
+    my $ua = _build_ua($config, $opts{name});
 
     my $resp = eval {
         $ua->post(
@@ -721,7 +739,7 @@ sub _capabilities_one (%opts) {
 
     require Time::HiRes;
     my $t0 = Time::HiRes::time();
-    my $ua = _build_ua($config);
+    my $ua = _build_ua($config, $opts{name});
 
     my $resp = eval {
         $ua->get("https://$host:$port/capabilities");
@@ -833,6 +851,7 @@ sub rotate_all (%opts) {
     my $fanned  = _fan_out(\@entries, $max_par, sub ($name, $target) {
         my ($host, $hport)  = parse_host($target, $port);
         return _rotate_one(
+            name     => $name,   # registry name: its pinned CA, if any
             host => $host, port => $hport,
             serial => $serial, action => $action, config => $config,
         );
@@ -852,7 +871,7 @@ sub _rotate_one (%opts) {
     my ($host, $port, $config) = @opts{qw(host port config)};
     require Time::HiRes;
     my $t0 = Time::HiRes::time();
-    my $ua = _build_ua($config);
+    my $ua = _build_ua($config, $opts{name});
 
     my $payload = encode_json({ serial => $opts{serial}, action => $opts{action} });
     my $resp = eval {
@@ -873,32 +892,73 @@ sub _rotate_one (%opts) {
     return $decoded;
 }
 
-sub _build_ua ($config) {
+# The agent's TLS certificate is verified against this dispatcher's CA
+# (ctrl-exec.conf 'ca'), unless the agent's registry entry pins another CA
+# (keep-certificate pairing, T-062): then against that CA alone, for that agent
+# alone - never a bundle shared by every agent, so one agent's CA cannot vouch
+# for another agent. $name is the agent's registry name; undef, or a name with
+# no registry entry, uses the dispatcher's CA as before.
+sub _build_ua ($config, $name = undef) {
     require LWP::UserAgent;
     require IO::Socket::SSL;
     require Exec::TLS;
 
+    my %ca = (SSL_ca_file => $config->{ca}, SSL_ca => undef);
+    if (defined(my $pem = _pinned_ca($config, $name))) {
+        my $x509 = _x509_cached($pem)
+            // die "the CA pinned for agent '$name' in the registry is unreadable\n";
+        %ca = (SSL_ca_file => undef, SSL_ca => [ $x509 ]);
+    }
+
     # LWP's ssl_opts hash does not pass SSL_cert_file/SSL_key_file through
     # to IO::Socket::SSL for client cert presentation. Set them as global
     # SSL defaults so every outbound connection uses the dispatcher cert.
-    # Exec::TLS::hardening adds the shared cipher/version policy.
+    # Exec::TLS::hardening adds the shared cipher/version policy. The CA
+    # options are set on every call (both of them), so a pinned CA from an
+    # earlier call in this process never carries over.
     IO::Socket::SSL::set_defaults(
         SSL_cert_file    => $config->{cert},
         SSL_key_file     => $config->{key},
-        SSL_ca_file      => $config->{ca},
+        %ca,
         SSL_verify_mode  => 0x01,
         Exec::TLS::hardening(),
     );
 
     my $ua = LWP::UserAgent->new(
         ssl_opts => {
-            SSL_ca_file     => $config->{ca},
+            %ca,
             SSL_verify_mode => 0x01,
             verify_hostname => 0,   # verified by CA, not hostname
         },
         timeout => $config->{read_timeout} // $config->{timeout} // 60,
     );
     return $ua;
+}
+
+# The CA certificate (PEM) pinned in agent $name's registry entry, or undef
+# when it has none (an ordinary agent of this dispatcher) or $name is not a
+# registered agent.
+sub _pinned_ca ($config, $name) {
+    return unless defined $name && length $name;
+    require Exec::Registry;
+    return unless Exec::Registry::valid_agent_name($name);
+    my $rec = eval {
+        Exec::Registry::get_agent(hostname => $name, registry_dir => $config->{registry_dir})
+    } or return;
+    my $pem = $rec->{agent_ca};
+    return (defined $pem && !ref $pem && length $pem) ? $pem : undef;
+}
+
+# A parsed CA certificate for SSL_ca, kept for the life of the process (the
+# context that loads it takes its own reference).
+my %X509_CACHE;
+sub _x509_cached ($pem) {
+    return $X509_CACHE{$pem} if $X509_CACHE{$pem};
+    my $bio = Net::SSLeay::BIO_new(Net::SSLeay::BIO_s_mem()) or return;
+    Net::SSLeay::BIO_write($bio, $pem);
+    my $x509 = Net::SSLeay::PEM_read_bio_X509($bio);
+    Net::SSLeay::BIO_free($bio);
+    return $x509 ? ($X509_CACHE{$pem} = $x509) : undef;
 }
 
 # Returns true if the cert should be renewed.
@@ -933,7 +993,7 @@ sub _renew_one (%opts) {
         STATUS => 'starting',
     });
 
-    my $ua = _build_ua($config);
+    my $ua = _build_ua($config, $opts{name});
 
     # Request CSR from agent
     my $resp = $ua->post(
@@ -978,7 +1038,8 @@ sub _renew_one (%opts) {
     # resolved connect address, which under lookup_by=ip would create a stray
     # IP-keyed record).
     my $expiry = _extract_expiry($cert_pem) // 'unknown';
-    Exec::Registry::update_expiry(hostname => $name, expiry => $expiry);
+    Exec::Registry::update_expiry(hostname => $name, expiry => $expiry,
+        registry_dir => $config->{registry_dir});
 
     Exec::Log::log_action('INFO', {
         ACTION => 'renew-complete',

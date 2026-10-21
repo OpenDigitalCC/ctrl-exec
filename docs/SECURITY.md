@@ -87,6 +87,13 @@ the operational port - only certs from the private CA are accepted.
 The CA private key never leaves the dispatcher host. Loss of the CA key means
 all agent certs must be reissued via re-pairing.
 
+Several distinct dispatchers each keep their own CA (0.14). An agent trusts a
+bundle of their CAs; each dispatcher verifies the agents it paired normally
+against its own CA, and an agent another dispatcher's CA certified against
+that CA, pinned in that agent's registry entry at pairing (*Pairing with
+another dispatcher*, below). Only redundant instances of one dispatcher (HA)
+share a CA.
+
 In a container the same split holds: the API runs as the unprivileged
 `ctrl-exec` user and cannot read the CA key, which only root operations
 (`setup-ca`, `pairing-mode`, `approve`, `rotate-cert`, `maintain`) can. See
@@ -209,6 +216,44 @@ Verified pairing
   agent's certificate and key therefore also passes the check; in the path, it
   is back to the grinding window the code alone leaves (above). Protect agent
   keys as the credentials they are, and revoke a compromised agent promptly.
+
+Pairing with another dispatcher
+: An agent already paired (its certificate verifies against a CA in its
+  bundle and matches its key) pairing with another dispatcher B keeps its key
+  and certificate. Its request carries a CSR made from its existing key, its
+  certificate and the CA that issued it; the pairing code is computed over all
+  three, so a relay cannot swap the certificate or CA under an unchanged CSR.
+  What each side accepts:
+
+  - B, at the request: the certificate and CA must each be exactly one
+    canonical PEM certificate, the CSR's self-signature must verify (the
+    sender holds the key), the CSR and the certificate must carry the same
+    public key, and the certificate must verify (signature, dates, CA
+    constraints) with that CA as the only trust anchor. Otherwise the request
+    is refused before it is queued (`pair-reject REASON=kept-cert-invalid`).
+    The operator sees both fingerprints and the code before approving.
+  - B, after approval: nothing is signed. The CA is pinned in that agent's
+    registry entry, and B's TLS client verifies that agent against that CA
+    alone - not B's own CA, not a shared bundle - so a certificate from any
+    other CA, B's own included, is refused for that agent, and the pinned CA
+    vouches for no other agent. Agents without a pin are verified against B's
+    `ca` as before. B does not renew a pinned agent's certificate. If the
+    pinned CA is B's own, nothing is pinned.
+  - The agent: B's acknowledgement must confirm it keeps the certificate, and
+    its approval must carry no certificate; otherwise the agent stores
+    nothing (a dispatcher before 0.14 would sign a new certificate, which
+    would replace the one the other dispatchers verify). With
+    `--dispatcher-fingerprint`, the CA delivered at approval must be that CA
+    and only it. It then appends B's CA to its bundle and B to its map;
+    `agent.crt` and `agent.key` are untouched. Its listener takes the new
+    bundle without a restart.
+
+  Pinning the CA rather than the certificate keeps renewal by the issuing
+  dispatcher working for B. The cost: B accepts, at that agent's address, any
+  certificate the pinned CA issued - the same property an agent paired
+  normally has under its dispatcher's CA. `--rekey` makes a new key and a
+  certificate from the dispatcher pairing, as an unpaired agent does; the
+  other dispatchers then refuse the agent until re-paired.
 
 Pairing code versions
 : The agent states the code version it computed in its pairing request.
@@ -1006,9 +1051,10 @@ Recommended practices:
   after `setup-ca`
 - Restrict access to the dispatcher host itself; the CA key should not be
   accessible over the network
-- For redundant ctrl-exec deployments, transfer the CA key over an encrypted
-  channel with host key verification (`scp` with known_hosts, not
-  `StrictHostKeyChecking=no`)
+- For redundant instances of one dispatcher (HA), transfer the CA key over an
+  encrypted channel with host key verification (`scp` with known_hosts, not
+  `StrictHostKeyChecking=no`). A second, distinct dispatcher never needs it:
+  it has its own CA, and agents pair with it as usual (HIGH-AVAILABILITY.md)
 - Audit access to the dispatcher host via system auth logs
 
 

@@ -37,7 +37,7 @@ is_deeply(complete('cea', 'request-pairing', '--dispatcher', 'h', '--b'), ['--ba
 is_deeply(complete('cea', 'request-pairing', '--lookup-by', ''), [qw(hostname ip)], '--lookup-by values');
 is_deeply(complete('cea', '--'),
     [qw(--allowlist --background --config --dispatcher --dispatcher-fingerprint --lookup-by
-        --port --timeout --version)],
+        --port --rekey --timeout --version)],
     'all options');
 is_deeply(complete('cea', 'serve', '--al'), ['--allowlist'], 'serve --allowlist');
 

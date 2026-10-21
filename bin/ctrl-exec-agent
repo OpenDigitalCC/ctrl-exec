@@ -46,6 +46,7 @@ sub main {
         'timeout=i'     => \$opts{timeout},
         'lookup-by=s'   => \$opts{lookup_by},
         'dispatcher-fingerprint=s' => \$opts{dispatcher_fingerprint},
+        'rekey'         => \$opts{rekey},
         'version'       => sub { print "ctrl-exec-agent $VERSION\n"; exit 0; },
     ) or die usage();
 
@@ -210,7 +211,15 @@ sub mode_serve ($opts) {
     my ($config, $allowlist, $skipped, $schemas);
     # What the loaded copies were read from (T-059): checked on every
     # connection, so an edit to either file is picked up without a reload.
-    my $files_sig = Exec::Agent::Server::config_files_signature($CONFIG_PATH, $ALLOWLIST_PATH);
+    # The CA bundle and the trusted-dispatcher map are watched too (T-062): a
+    # pairing appends to both, and takes effect without a restart. Their paths
+    # come from agent.conf, so the signature is taken once it is loaded.
+    my $trusted_path;
+    my $watched = sub {
+        Exec::Agent::Server::config_files_signature($CONFIG_PATH, $ALLOWLIST_PATH,
+            grep { defined } ($config ? $config->{ca} : undef), $trusted_path);
+    };
+    my $files_sig = $watched->();
     eval {
         $config    = Exec::Agent::Config::load_config($CONFIG_PATH);
         # A script naming a profile agent.conf does not define is skipped with
@@ -272,12 +281,18 @@ MSG
     # Loading the map with it upgrades a pre-0.14 map in place.
     my $ca_bundle = Exec::Agent::AgentPairing::load_ca_bundle($config->{ca});
 
-    my $trusted_path = $config->{trusted_dispatchers_path}
-                    // '/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers';
+    $trusted_path = $config->{trusted_dispatchers_path}
+                 // '/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers';
     my $trusted = Exec::Agent::AgentPairing::load_trusted_dispatchers(
         path    => $trusted_path,
         ca_path => $config->{ca},
     );
+    $files_sig = $watched->();
+
+    # The TLS listener's context (set when the listener is made) and the CAs it
+    # trusts, by fingerprint: a reload that finds the bundle changed gives the
+    # listener the new set (Server::set_listener_cas).
+    my ($listener_ctx, $listener_cas);
 
     my %rate_state;
     my $rate_config  = $config->{rate_limit} // {};
@@ -288,7 +303,10 @@ MSG
     # disk since it was last read ('changed', T-059): the executor reads both
     # afresh, so the agent must act on the same files without being told.
     my $reload = sub ($why) {
-        $files_sig = Exec::Agent::Server::config_files_signature($CONFIG_PATH, $ALLOWLIST_PATH);
+        # Taken first, so a change made while this reload reads the files is
+        # seen at the next connection. A path that changes with agent.conf
+        # makes the next check differ once more: one extra, harmless reload.
+        $files_sig = $watched->();
         Exec::Log::log_action('INFO', { ACTION => 'allowlist-reload', REASON => $why });
         warn "Reloading agent.conf, allowlist, schemas, revocation list, and trusted-dispatcher map...\n";
 
@@ -329,10 +347,25 @@ MSG
         };
         warn "Revocation list reload failed: $@\n" if $@;
         # 'ca' is restart-only, but the file it names may have changed (a
-        # pairing appends to it), so the bundle is read again. The TLS listener
-        # keeps the CAs it loaded at startup.
+        # pairing appends to it), so the bundle is read again, and the TLS
+        # listener is given it when its CAs differ (T-062).
         Exec::Agent::AgentPairing::free_ca_bundle($ca_bundle);
         $ca_bundle = Exec::Agent::AgentPairing::load_ca_bundle($config->{ca});
+        my $fprs = join ',', map { $_->{fpr} } @$ca_bundle;
+        if ($listener_ctx && $fprs ne ($listener_cas // '')) {
+            if (@$ca_bundle && Exec::Agent::Server::set_listener_cas($listener_ctx, $ca_bundle)) {
+                $listener_cas = $fprs;
+                Exec::Log::log_action('INFO', {
+                    ACTION => 'ca-bundle-reload', CAS => scalar(@$ca_bundle) });
+            }
+            else {
+                # An empty or unreadable bundle never leaves the listener
+                # trusting nothing by accident: it keeps the CAs it has.
+                Exec::Log::log_action('WARNING', {
+                    ACTION => 'ca-bundle-reload', PATH => $config->{ca},
+                    REASON => 'no readable CA in the bundle; the listener keeps its CAs' });
+            }
+        }
         $trusted = eval {
             Exec::Agent::AgentPairing::load_trusted_dispatchers(
                 path => $trusted_path, ca_path => $config->{ca})
@@ -390,8 +423,10 @@ MSG
         # it below (accept_SSL, with a timeout) so a failed or abandoned handshake
         # is attributable to the peer's address.
         SSL_startHandshake => 0,
+        SSL_create_ctx_callback => sub ($ctx) { $listener_ctx = $ctx },
         Exec::TLS::hardening(),
     ) or die "Cannot start server: $IO::Socket::SSL::SSL_ERROR\n";
+    $listener_cas = join ',', map { $_->{fpr} } @$ca_bundle;
 
     Exec::Log::log_action('INFO', {
         ACTION => 'start',
@@ -450,7 +485,7 @@ MSG
         # the files as they now are - the files the executor reads afresh for
         # each run. Two stat() calls per connection; a reload only on change.
         # SIGHUP is held off so its reload cannot interleave with this one.
-        if (Exec::Agent::Server::config_files_signature($CONFIG_PATH, $ALLOWLIST_PATH) ne $files_sig) {
+        if ($watched->() ne $files_sig) {
             my $hup  = POSIX::SigSet->new(POSIX::SIGHUP());
             my $prev = POSIX::SigSet->new;
             POSIX::sigprocmask(POSIX::SIG_BLOCK(), $hup, $prev);
@@ -649,10 +684,37 @@ WARN
     my $pair_port = $opts->{port} // 7444;
     _preflight_dispatcher($ctrl_exec_host, $pair_port);
 
-    print "Generating key and CSR for '$host'...\n" unless $background;
-    my $pair = Exec::Agent::AgentPairing::generate_key_and_csr(
-        hostname => $host,
-    );
+    # An agent already paired with a dispatcher keeps its key and certificate
+    # and presents them to this one (T-062), so the dispatchers it is paired
+    # with keep verifying it. --rekey makes a new key and has this dispatcher
+    # sign it, as an unpaired agent does; the new certificate then replaces the
+    # one the other dispatchers verify, and each of them must be re-paired.
+    my $kept = $opts->{rekey} ? undef
+             : Exec::Agent::AgentPairing::kept_identity(cert_dir => $cert_dir);
+    my $trusted_path = '/var/lib/ctrl-exec-agent/ctrl-exec-dispatchers';
+    my @paired_with  = Exec::Agent::AgentPairing::trusted_dispatcher_ids(
+        $trusted_path, "$cert_dir/ca.crt");
+    my $pair;
+    if ($kept) {
+        print "Already paired: keeping this agent's key and certificate (issued by CA "
+            . Exec::CertInfo::format_sha256_fingerprint($kept->{ca_fpr}) . ").\n"
+            . "  Use --rekey for a new key and a certificate from this dispatcher instead.\n"
+            unless $background;
+        $pair = Exec::Agent::AgentPairing::generate_csr_only(
+            hostname => $host, key_path => $kept->{key_path});
+    }
+    else {
+        if ($opts->{rekey} && @paired_with && !$background) {
+            print "Re-keying: the dispatchers this agent is paired with (@paired_with)\n"
+                . "will not verify the new certificate until each is re-paired with\n"
+                . "  ctrl-exec-agent request-pairing --dispatcher <host>\n"
+                . "(which keeps the new certificate), or removed.\n";
+        }
+        print "Generating key and CSR for '$host'...\n" unless $background;
+        $pair = Exec::Agent::AgentPairing::generate_key_and_csr(
+            hostname => $host,
+        );
+    }
 
     print "Connecting to ctrl-exec at $ctrl_exec_host for pairing...\n"
         unless $background;
@@ -666,6 +728,7 @@ WARN
         lookup_by  => $lookup_by,
         agent_port => $agent_port,
         dispatcher_ca_fpr => $ca_fpr,
+        ($kept ? (agent_cert => $kept->{cert_pem}, agent_ca => $kept->{ca_pem}) : ()),
     );
 
     unless ($submitted->{ok}) {
@@ -677,6 +740,17 @@ WARN
                 EXPECTED   => Exec::CertInfo::format_sha256_fingerprint($ca_fpr),
             });
             die "Pairing refused: $err\n";
+        }
+        if ($submitted->{keep_unsupported}) {
+            Exec::Log::log_action('WARNING', {
+                ACTION          => 'pair-keep-unsupported',
+                DISPATCHER_HOST => $ctrl_exec_host,
+                REQID           => $submitted->{reqid},
+            });
+            die "Pairing not done: $err\n"
+              . "Upgrade that dispatcher to 0.14 or later, or re-run with --rekey to\n"
+              . "replace this agent's key and certificate (the dispatchers it is paired\n"
+              . "with then need re-pairing).\n";
         }
         if ($err =~ /IO::Socket::IP configuration failed|Name or service not known|Temporary failure in name resolution/i) {
             die "Pairing failed: could not resolve ctrl-exec hostname '$ctrl_exec_host'.\n"
@@ -745,12 +819,14 @@ WARN
             sock  => $submitted->{sock},
             nonce => $submitted->{nonce},
             reqid => $reqid,
+            cert_mode         => $submitted->{cert_mode},
+            dispatcher_ca_fpr => $ca_fpr,
         );
         alarm 0;
 
         unless ($result->{ok}) {
             Exec::Log::log_action('WARNING', {
-                ACTION => 'pair-denied',
+                ACTION => ($result->{verify_failed} ? 'pair-verify-failed' : 'pair-denied'),
                 REQID  => $reqid,
                 REASON => $result->{error} // 'denied',
             });
@@ -766,23 +842,40 @@ WARN
         sock  => $submitted->{sock},
         nonce => $submitted->{nonce},
         reqid => $reqid,
+        cert_mode         => $submitted->{cert_mode},
+        dispatcher_ca_fpr => $ca_fpr,
     );
 
     unless ($result->{ok}) {
         my $err = $result->{error} // 'unknown error';
+        if ($result->{verify_failed}) {
+            Exec::Log::log_action('WARNING', {
+                ACTION          => 'pair-verify-failed',
+                DISPATCHER_HOST => $ctrl_exec_host,
+                EXPECTED        => Exec::CertInfo::format_sha256_fingerprint($ca_fpr),
+            });
+            die "Pairing refused: $err\n";
+        }
         die "Pairing failed: $err\n";
     }
 
     _store_pairing_result($result, $pair->{key_pem}, $ctrl_exec_host);
-    print "Pairing complete. Certificates stored.\n";
-    _print_start_instructions();
+    if ($result->{cert_mode} eq 'keep') {
+        print "Pairing complete. This agent kept its key and certificate; dispatcher '"
+            . ($result->{dispatcher_id} // '?') . "' is now trusted.\n";
+    }
+    else {
+        print "Pairing complete. Certificates stored.\n";
+    }
+    _print_start_instructions($result->{cert_mode} eq 'keep');
 }
 
 sub _store_pairing_result ($result, $key_pem, $ctrl_exec_host) {
+    my $keep = ($result->{cert_mode} // '') eq 'keep';
     Exec::Agent::AgentPairing::store_certs(
-        cert_pem          => $result->{cert_pem},
+        ($keep ? (keep_cert => 1)
+               : (cert_pem => $result->{cert_pem}, key_pem => $key_pem)),
         ca_pem            => $result->{ca_pem},
-        key_pem           => $key_pem,
         dispatcher_serial => $result->{dispatcher_serial} // '',
         dispatcher_id     => $result->{dispatcher_id}     // '',
     );
@@ -790,6 +883,7 @@ sub _store_pairing_result ($result, $key_pem, $ctrl_exec_host) {
     Exec::Log::log_action('INFO', {
         ACTION         => 'pair-complete',
         STATUS         => 'approved',
+        CERT_MODE      => ($keep ? 'keep' : 'new'),
         DISPATCHER     => $result->{dispatcher_id} // '',
         DISPATCHER_HOST => $ctrl_exec_host,
     });
@@ -996,7 +1090,7 @@ sub _preflight_dispatcher ($host, $port) {
 # serve until paired). Tell the operator how to bring it up - enabling as well as
 # starting, so it also survives a reboot - rather than leaving them to discover
 # the agent still is not serving.
-sub _print_start_instructions {
+sub _print_start_instructions ($kept = 0) {
     # A running agent loads its certificate and trusted-dispatcher map once, at
     # startup (the map also refreshes on SIGHUP, but the certificate does not).
     # Pairing here just wrote new files on disk; if the agent is already running
@@ -1007,7 +1101,14 @@ sub _print_start_instructions {
     my $running = -d '/run/systemd/system'
         && system('systemctl', 'is-active', '--quiet', 'ctrl-exec-agent') == 0;
 
-    if ($running) {
+    if ($running && $kept) {
+        # Only the CA bundle and the trusted-dispatcher map changed: the running
+        # agent sees both change on disk and reloads them, the listener's CAs
+        # included, at its next connection (T-062).
+        print "\nThe running agent picks up the new dispatcher at its next connection;"
+            . "\nno restart is needed.\n";
+    }
+    elsif ($running) {
         print "\nThis agent is already running. Restart it so the new certificate"
             . " and the\ndispatcher's current serial take effect (a re-pair changes"
             . " both):\n\n";
@@ -1038,8 +1139,10 @@ Usage: ctrl-exec-agent <mode> [options]
 
 Modes:
   serve                          Start the agent server
-  request-pairing --dispatcher <host> [--dispatcher-fingerprint SHA256:<hex>]
-                                 Request pairing with the ctrl-exec dispatcher host
+  request-pairing --dispatcher <host> [--dispatcher-fingerprint SHA256:<hex>] [--rekey]
+                                 Request pairing with the ctrl-exec dispatcher host.
+                                 An agent already paired keeps its key and
+                                 certificate and adds the dispatcher
   pairing-status                 Show pairing/cert status
   self-check                     Validate local config and certs
   self-ping                      Connect to self on port 7443, verify mTLS and pairing
@@ -1056,6 +1159,9 @@ Options:
                                  CSR, a dispatcher whose certificate does not
                                  chain to the CA with this fingerprint (from
                                  'ctrl-exec-dispatcher ca-fingerprint')
+  --rekey                        request-pairing: make a new key and have this
+                                 dispatcher sign it, even when already paired
+                                 (other dispatchers then need re-pairing)
   --background                   Non-interactive pairing: print reqid and wait
                                  for approval (for orchestrated installations)
   --timeout <n>                  Seconds to wait for approval in background

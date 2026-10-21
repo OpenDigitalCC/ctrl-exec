@@ -16,6 +16,21 @@ This document covers what state exists and where, approaches to replicating
 or sharing it, load balancing and failover patterns, and what HA does not
 protect against.
 
+Two arrangements put more than one dispatcher in front of an agent, and they
+are not the same:
+
+HA: one dispatcher, several instances
+: Redundant instances of **one** dispatcher identity: one CA, one dispatcher
+  certificate, one `dispatcher_id`, one registry. The instances share the CA
+  directory, CA key included. Most of this document is about this case.
+
+Several dispatchers, each with its own CA
+: Distinct dispatchers (different operators, sites or trust classes), each
+  with its own CA, certificate and `dispatcher_id`. Nothing is shared and no
+  key leaves its host: an agent paired with one pairs with the next as usual
+  and keeps its certificate (0.14). See *Several Dispatchers, Each With Its
+  Own CA* below. Do not copy a CA key to make a second dispatcher.
+
 For installation and configuration reference, see REFERENCE.md. For CA
 and cert security guidance, see SECURITY.md and SECURITY-OPERATIONS.md.
 
@@ -82,7 +97,8 @@ persistent connections that must be preserved across restarts.
   `rotate-cert` and the internal check loop.
 
 The paths that must be shared or replicated for active/passive or
-active/active operation are:
+active/active operation of one dispatcher are (several distinct dispatchers
+share nothing; see *Several Dispatchers, Each With Its Own CA*):
 
 - `/etc/ctrl-exec-dispatcher/` — all CA and cert material
 - `/var/lib/ctrl-exec/agents/` — agent registry
@@ -303,11 +319,36 @@ place.
 This is the supported mechanism for running multiple operators of differing
 trust classes against one host. Running separate agent instances per operator
 remains possible as optional defence-in-depth, but is no longer the way to
-achieve multi-operator separation. The agent side holds several dispatcher
-CAs; a dispatcher, however, verifies agents against its own `ca` file, so
-until a dispatcher can verify an agent whose cert another dispatcher's CA
-issued, the dispatchers an agent serves share one CA (the shared CA directory
-above).
+achieve multi-operator separation. Each dispatcher keeps its own CA; see the
+next section.
+
+### Several Dispatchers, Each With Its Own CA
+
+From 0.14 an agent already paired with dispatcher A pairs with dispatcher B,
+which has its own CA, exactly as any agent pairs: `ctrl-exec-agent
+request-pairing --dispatcher B` on the agent, `ced approve <reqid>` on B. No
+CA key, CA certificate or agent key is copied between hosts.
+
+- The agent keeps its key and its certificate (issued by A's CA) and presents
+  them, with A's CA certificate, to B. The pairing code covers them, and
+  `list-requests` shows both fingerprints.
+- B signs nothing. It pins A's CA in this agent's registry entry and verifies
+  this agent against that CA alone: never a bundle of CAs shared by all its
+  agents, so one agent's CA cannot vouch for another agent. An agent B paired
+  normally is still verified against B's own `ca`.
+- The agent appends B's CA to its bundle and B to its trusted-dispatcher map;
+  the running agent picks both up at its next connection, without a restart.
+- A goes on renewing the agent's certificate. B pins the CA, not the
+  certificate, so A's renewals do not affect B, and B never renews it.
+
+If A goes away for good, the agent's certificate can no longer be renewed by
+anyone (renewal must come from the issuing CA). Re-key with B before it
+expires (`request-pairing --dispatcher B --rekey`), then re-pair each other
+remaining dispatcher, which pinned A's CA, without `--rekey`. REFERENCE.md,
+*Pairing with another dispatcher*, has the steps.
+
+An agent paired with dispatchers that share one CA (the HA case, or an estate
+that copied the CA directory before 0.14) keeps working unchanged.
 
 Relation to the HA models above
 : Active/passive and active/active concern redundant instances of **one**

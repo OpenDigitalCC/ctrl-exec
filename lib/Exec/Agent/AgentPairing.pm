@@ -72,11 +72,58 @@ sub generate_csr_only (%opts) {
 }
 
 
+# The agent's current identity, for pairing with another dispatcher without a
+# new key (T-062): its certificate, its key and the CA in its bundle that issued
+# the certificate. Returned only when all three files are there, the
+# certificate verifies against that CA today (signature and dates) and its
+# public key is the key's. Otherwise the agent pairs as an unpaired one does
+# (new key, CSR signed by the dispatcher).
+# Returns { cert_pem, ca_pem, ca_fpr, key_path } or undef.
+sub kept_identity (%opts) {
+    my $cert_dir = $opts{cert_dir} // '/etc/ctrl-exec-agent';
+    my ($cert, $key, $ca) = map { "$cert_dir/$_" } qw(agent.crt agent.key ca.crt);
+    return unless -f $cert && -f $key && -f $ca;
+    my $cert_pem = Exec::FileUtil::slurp_maybe($cert) // return;
+    # Sent as openssl writes them: the dispatcher hashes them into the pairing
+    # code and requires exactly that form.
+    ($cert_pem) = pem_certs($cert_pem) or return;
+    $cert_pem = Exec::Digest::canonical_cert($cert_pem) // return;
+
+    my $bundle = load_ca_bundle($ca);
+    my @fprs   = pem_issuers($cert_pem, $bundle);
+    my ($issuer) = grep { $_->{fpr} eq ($fprs[0] // '') } @$bundle;
+    my $ca_pem = $issuer ? Exec::Digest::canonical_cert($issuer->{pem}) : undef;
+    free_ca_bundle($bundle);
+    return unless defined $ca_pem;
+    return if defined Exec::CertInfo::verify_issued_by($cert_pem, $ca_pem);
+
+    my $kpub = `openssl pkey -in \Q$key\E -pubout 2>/dev/null`;
+    my $cpub = Exec::CertInfo::public_key_from_pem($cert_pem);
+    return unless length($kpub // '') && defined $cpub && $kpub eq $cpub;
+
+    return { cert_pem => $cert_pem, ca_pem => $ca_pem, ca_fpr => $fprs[0],
+             key_path => $key };
+}
+
+# The ids in the trusted-dispatcher map at $path, sorted, each once.
+sub trusted_dispatcher_ids ($path, $ca_path = undef) {
+    return () unless defined $path && -f $path;
+    my $trusted = load_trusted_dispatchers(path => $path, ca_path => $ca_path);
+    my %ids = map { $_ => 1 } values %$trusted;
+    my @ids = sort keys %ids;
+    return @ids;
+}
+
 # cert_dir defaults to /etc/ctrl-exec-agent
+#
+# keep_cert => 1 (keep-certificate pairing, T-062): the agent keeps its key and
+# certificate; only the dispatcher's CA joins the bundle and the dispatcher
+# joins the trusted map. cert_pem and key_pem are not taken.
 sub store_certs (%opts) {
-    my $cert_pem          = $opts{cert_pem}          or croak "cert_pem required";
+    my $keep              = $opts{keep_cert} ? 1 : 0;
+    my $cert_pem          = $keep ? undef : ($opts{cert_pem} or croak "cert_pem required");
     my $ca_pem            = $opts{ca_pem}             or croak "ca_pem required";
-    my $key_pem           = $opts{key_pem}            or croak "key_pem required";
+    my $key_pem           = $keep ? undef : ($opts{key_pem}  or croak "key_pem required");
     my $dispatcher_serial = $opts{dispatcher_serial}  // '';
     my $dispatcher_id     = $opts{dispatcher_id}      // '';
     my $cert_dir          = $opts{cert_dir}            // '/etc/ctrl-exec-agent';
@@ -102,8 +149,10 @@ sub store_certs (%opts) {
     load_trusted_dispatchers(path => $trusted_path, ca_path => $ca_path)
         if -f $trusted_path;
 
-    _write_file("$cert_dir/agent.crt", $cert_pem, 0640);
-    _write_file("$cert_dir/agent.key", $key_pem,  0640);
+    unless ($keep) {
+        _write_file("$cert_dir/agent.crt", $cert_pem, 0640);
+        _write_file("$cert_dir/agent.key", $key_pem,  0640);
+    }
 
     # ca.crt is the agent's CA bundle: the dispatcher's CA is appended (once,
     # by fingerprint), not written over the CAs of dispatchers paired before.
@@ -193,6 +242,12 @@ sub submit_pairing_request (%opts) {
     # Seconds allowed for the TCP connect and the TLS handshake. The default is
     # generous for a slow dispatcher host; tests pass a few seconds.
     my $timeout         = $opts{timeout}    // 660;
+    # Keep-certificate form (T-062): the agent's current certificate and the CA
+    # that issued it, sent with a CSR made from the same key.
+    my $agent_cert      = $opts{agent_cert};
+    my $agent_ca        = $opts{agent_ca};
+    croak "agent_cert and agent_ca go together"
+        if (defined $agent_cert) != (defined $agent_ca);
 
     require IO::Socket::SSL;
     require JSON;
@@ -232,7 +287,8 @@ sub submit_pairing_request (%opts) {
     }
 
     my $code = eval {
-        Exec::Digest::pairing_code_for($PAIRING_CODE_VERSION, $csr_pem, $dispatcher_fpr)
+        Exec::Digest::pairing_code_for($PAIRING_CODE_VERSION,
+            Exec::Digest::pairing_input($csr_pem, $agent_cert, $agent_ca), $dispatcher_fpr)
     } // return { ok => 0, error => "cannot compute the pairing code: $@" };
 
     my %request = (
@@ -241,6 +297,7 @@ sub submit_pairing_request (%opts) {
         nonce    => $nonce,
         code_version => $PAIRING_CODE_VERSION,
     );
+    @request{qw(agent_cert agent_ca)} = ($agent_cert, $agent_ca) if defined $agent_cert;
     $request{lookup_by} = $lookup_by  if defined $lookup_by;
     $request{port}      = $agent_port if defined $agent_port;
     # Report our own source address. The dispatcher prefers this over the
@@ -289,6 +346,19 @@ sub submit_pairing_request (%opts) {
         return { ok => 0, error => "unexpected acknowledgement: $body" };
     }
 
+    # A dispatcher before 0.14 ignores the certificate and would sign the CSR,
+    # and the new certificate would replace the one the dispatchers this agent
+    # is already paired with verify. Withdraw instead: nothing is stored.
+    if (defined $agent_cert && ($data->{cert_mode} // '') ne 'keep') {
+        $sock->close(SSL_no_shutdown => 1);
+        return { ok => 0, keep_unsupported => 1, reqid => $data->{reqid},
+            error => "the dispatcher did not accept this agent's existing "
+                   . "certificate: it is probably older than 0.14, and pairing "
+                   . "would replace the certificate the dispatchers this agent is "
+                   . "already paired with verify. Request $data->{reqid} on that "
+                   . "dispatcher can be denied." };
+    }
+
     # Socket stays open - ctrl-exec polls for approval and sends final response
     return {
         ok    => 1,
@@ -299,6 +369,7 @@ sub submit_pairing_request (%opts) {
         code_version   => $PAIRING_CODE_VERSION,
         dispatcher_fpr => $dispatcher_fpr,
         dispatcher_confirms_v2 => (($data->{code_version} // '') eq '2' ? 1 : 0),
+        cert_mode      => (defined $agent_cert ? 'keep' : 'new'),
     };
 }
 
@@ -365,9 +436,16 @@ sub verify_dispatcher_ca ($sock, $want_fpr) {
 # Call after submit_pairing_request succeeds.
 # Returns { ok => 1, cert_pem => '...', ca_pem => '...', dispatcher_serial => '...' }
 #      or { ok => 0, error => '...' }
+#
+# Optional:
+#   cert_mode         => 'keep'   the request kept the agent's certificate: the
+#                                 approval must say so and carry no certificate
+#   dispatcher_ca_fpr => '<hex>'  verified pairing (T-041): the CA delivered at
+#                                 approval must be that CA, and only that CA
 sub await_pairing_result (%opts) {
     my $sock  = $opts{sock}  or croak "sock required";
     my $nonce = $opts{nonce} or croak "nonce required";
+    my $keep  = ($opts{cert_mode} // '') eq 'keep';
 
     my $content_length;
     while (my $line = <$sock>) {
@@ -395,8 +473,17 @@ sub await_pairing_result (%opts) {
         if (($data->{nonce} // '') ne $nonce) {
             return { ok => 0, error => 'nonce mismatch in pairing result' };
         }
+        if ($keep && (($data->{cert_mode} // '') ne 'keep' || defined $data->{cert})) {
+            return { ok => 0, error => 'the dispatcher accepted this agent\'s '
+                . 'certificate but its approval did not keep it; nothing was stored' };
+        }
+        if (defined(my $want = $opts{dispatcher_ca_fpr})) {
+            my $why = check_delivered_ca($data->{ca}, $want);
+            return { ok => 0, verify_failed => 1, error => $why } if defined $why;
+        }
         return {
             ok                => 1,
+            cert_mode         => ($keep ? 'keep' : 'new'),
             cert_pem          => $data->{cert},
             ca_pem            => $data->{ca},
             dispatcher_serial => $data->{dispatcher_serial} // '',
@@ -405,6 +492,22 @@ sub await_pairing_result (%opts) {
     }
 
     return { ok => 0, error => $data->{reason} // 'denied' };
+}
+
+# Verified pairing (T-041) at approval: the CA certificate(s) the dispatcher
+# delivered for the agent's bundle must be exactly the CA whose fingerprint the
+# operator gave - the one the pairing connection was verified against. Returns
+# undef when it is, or the reason it is not.
+sub check_delivered_ca ($ca_pem, $want_fpr) {
+    my @pems = pem_certs($ca_pem // '');
+    my @fprs = map { pem_fingerprint($_) // 'unreadable' } @pems;
+    return if @fprs && !grep { $_ ne lc $want_fpr } @fprs;
+    return "the CA delivered at approval is not the expected CA.\n"
+         . "  expected CA: " . Exec::CertInfo::format_sha256_fingerprint(lc $want_fpr) . "\n"
+         . join('', map { "  delivered:   " . ($_ eq 'unreadable' ? $_
+                : Exec::CertInfo::format_sha256_fingerprint($_)) . "\n" } @fprs)
+         . (@fprs ? '' : "  delivered:   none\n")
+         . "Nothing was stored.";
 }
 
 # Validate a dispatcher identity label - the stable per-dispatcher key used for
