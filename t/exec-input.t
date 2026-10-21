@@ -297,7 +297,11 @@ subtest 'the mode comes from the executor\'s scripts.conf, not the agent' => sub
     # executor has as fields is refused, not run without its context.
     $r = run('ctx', undef);
     is $r->{exit}, -1, 'v1 frame for a fields script refused';
-    like $r->{stderr}, qr/takes input=fields but the agent sent no input/, 'says why';
+    # T-059: the refusal states the mismatch and the fix, and does not blame
+    # an agent version the frame cannot prove.
+    like $r->{stderr}, qr/scripts\.conf declares 'ctx' input=fields, but the request carried no input; if scripts\.conf changed, run 'systemctl reload ctrl-exec-agent'/,
+        'says what differs and how to fix it';
+    unlike $r->{stderr}, qr/older than this executor/, 'does not blame the agent version';
     write_file($scripts_conf, $orig);
     is leftovers(), 0, 'nothing left';
 };

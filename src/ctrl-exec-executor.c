@@ -1789,9 +1789,14 @@ static void handle_conn(int cfd, config_t *cfg, const char *scripts_conf,
             char why[PATH_MAX + 256] = "";
             if (strcmp(imode, "context") != 0) {
                 if (!v2) {
-                    snprintf(why, sizeof(why), "executor: script '%s' takes input=%s but the "
-                             "agent sent no input (it is older than this executor): upgrade "
-                             "or restart ctrl-exec-agent\n", script, imode);
+                    /* A v1 frame: the agent holds this script as input=context
+                     * (it sends v2 for any other mode), so it and this executor
+                     * read scripts.conf differently - an agent that has not
+                     * picked up an edit, or one that predates input= (the frame
+                     * cannot tell which) (T-059). */
+                    snprintf(why, sizeof(why), "executor: scripts.conf declares '%s' input=%s, "
+                             "but the request carried no input; if scripts.conf changed, "
+                             "run 'systemctl reload ctrl-exec-agent'\n", script, imode);
                 } else if (ctxlen == 0) {
                     snprintf(why, sizeof(why), "executor: malformed input frame\n");
                 } else if (strcmp(imode, "fields") == 0) {
