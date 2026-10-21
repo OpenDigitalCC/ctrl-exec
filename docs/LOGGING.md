@@ -723,6 +723,51 @@ Fields
 ACTION=start PORT=7443
 ```
 
+### allowlist-reload
+
+Emitted when the agent reloads `agent.conf` and `scripts.conf`: on SIGHUP
+(`REASON=signal`), or before handling a connection when either file changed
+on disk since it was last read (`REASON=changed`, once per change). What the
+reload finds is logged as usual (`allowlist-skip`, `reload-fail`,
+`reload-note`).
+
+Priority
+: INFO
+
+Fields
+
+| Field | Type | Description |
+| --- | --- | --- |
+| ACTION | string | `allowlist-reload` |
+| REASON | string | `changed` or `signal` |
+
+```
+ACTION=allowlist-reload REASON=changed
+```
+
+### config-nonascii-space
+
+Emitted once per load of `agent.conf` or `scripts.conf` that held non-ASCII
+spaces (U+00A0, U+2000 to U+200A, U+202F; typically pasted from a terminal or
+chat UI). They are read as ordinary spaces, by the agent and the executor
+alike; nothing else changes. Clean the file to stop the notice.
+
+Priority
+: INFO
+
+Fields
+
+| Field | Type | Description |
+| --- | --- | --- |
+| ACTION | string | `config-nonascii-space` |
+| FILE | string | The file |
+| LINES | integer | How many lines held them |
+| REASON | string | What was done |
+
+```
+ACTION=config-nonascii-space FILE=/etc/ctrl-exec-agent/scripts.conf LINES=1 REASON="non-ASCII spaces (such as U+00A0) read as ordinary spaces"
+```
+
 ### ping (agent-side)
 
 Emitted on each successful `/ping` request received and processed by the
@@ -1194,7 +1239,7 @@ ACTION=pair-timeout REQID=00c9845e0001
 
 ### allowlist-skip
 
-Emitted at agent startup and on each SIGHUP reload, once per `scripts.conf`
+Emitted at agent startup and on each reload (SIGHUP, or a changed file), once per `scripts.conf`
 entry that was skipped, with the reason a run of that name is refused with
 (`script not permitted: <reason>`). Entries with no usable name (malformed
 lines) are reported by `config-warn` only.
@@ -1208,7 +1253,7 @@ Fields
 | --- | --- | --- |
 | ACTION | string | `allowlist-skip` |
 | SCRIPT | string | Script name from `scripts.conf` |
-| REASON | string | Why it was skipped, e.g. path not under `script_dirs`, not absolute, two paths, path or profile name too long, no path |
+| REASON | string | Why it was skipped, e.g. path not under `script_dirs`, not absolute, two paths, path or profile name too long, no path, `profile '<name>' is not defined in agent.conf` |
 
 ```
 ACTION=allowlist-skip REASON="'/srv/scripts/agent-cert-deploy.sh' is not under script_dirs (/opt/ctrl-exec-scripts)" SCRIPT=agent-cert-deploy

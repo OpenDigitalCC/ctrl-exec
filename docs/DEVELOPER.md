@@ -1177,7 +1177,9 @@ Modes:
   child calls `handle_connection()` and exits. The parent closes its copy with
   `SSL_no_shutdown => 1` and reaps children with `waitpid -1, WNOHANG`.
   SIGHUP reloads both config and allowlist without restart; tag changes,
-  `script_dirs` changes, and `auth_hook` changes take effect on reload.
+  `script_dirs` changes, and `auth_hook` changes take effect on reload. The
+  parent also reloads both, before handling a connection, when either file
+  changed on disk (T-059), so the agent acts on the files the executor reads.
 
 `request-pairing`
 : Performs a preflight writability check on `/etc/ctrl-exec-agent` before
@@ -1208,19 +1210,26 @@ sub mode_serve {
     my $trusted   = Exec::Agent::AgentPairing::load_trusted_dispatchers(
                         path => $config->{trusted_dispatchers_path});
 
-    # SIGHUP handler is top-level in mode_serve (not local $SIG{HUP}).
+    # The reload closure is top-level in mode_serve (not local $SIG{HUP}).
     # It closes over $allowlist, $revoked, $trusted and reassigns them.
     # Changes take effect for the next accepted connection.
-    $SIG{HUP} = sub {
+    my $files_sig = Exec::Agent::Server::config_files_signature($CONFIG_PATH, $ALLOWLIST_PATH);
+    my $reload = sub ($why) {          # 'signal' or 'changed'
+        $files_sig = Exec::Agent::Server::config_files_signature(...);
         $allowlist = eval { ... };
         $revoked   = eval { ... };
         $trusted   = eval { ... };
     };
+    $SIG{HUP} = sub { $reload->('signal') };
 
     my $server = IO::Socket::SSL->new(...)
         or die "Cannot start server: $IO::Socket::SSL::SSL_ERROR\n";
 
     while (my $conn = $server->accept) {
+        # agent.conf or scripts.conf edited: reload here, in the parent,
+        # so this and every later child sees it (SIGHUP blocked meanwhile)
+        $reload->('changed')
+            if Exec::Agent::Server::config_files_signature(...) ne $files_sig;
         my $peer        = $conn->peerhost // 'unknown';
         # Peer serial extracted HERE in the parent, before fork.
         # After the parent closes its copy of $conn the SSL object is

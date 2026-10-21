@@ -22,8 +22,11 @@ its configuration (except
 and
 .IR ca ,
 which need a restart), allowlist, revocation list, and trusted-dispatcher map on
-.BR SIGHUP .
-A reload that cannot be applied leaves the previous configuration in force.
+.BR SIGHUP ,
+and reloads its configuration and allowlist by itself at the next connection
+after either file changes on disk.
+A reload that cannot be applied leaves the previous configuration in force;
+a scripts.conf entry naming an undefined profile skips only that script.
 The agent may be paired with more than one dispatcher: each is recorded in the
 trusted-dispatcher map and every request is attributed to the dispatcher that
 made it.

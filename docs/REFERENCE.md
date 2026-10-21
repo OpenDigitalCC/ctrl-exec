@@ -1062,8 +1062,17 @@ Under normal operation this is started and managed by the init system
 (systemd or procd). Run directly for debugging or on systems without
 a supported init system.
 
-The agent reloads `agent.conf`, `scripts.conf`, the revocation list and the
-trusted-dispatcher map on SIGHUP without restarting:
+The agent picks up an edit to `agent.conf` or `scripts.conf` by itself: before
+it handles each connection it checks whether either file changed on disk
+(inode, size, modification or change time) since it last read them, and if so
+reloads both, logs `ACTION=allowlist-reload REASON=changed`, and handles the
+connection with the new files. The executor reads both files afresh for every
+run, so the agent and the executor always act on the same files and no reload
+command is needed after an edit. The check is two `stat` calls per connection;
+the reload happens in the serve loop's parent, so every later connection sees
+it. SIGHUP still reloads on demand (`REASON=signal`), together with the
+revocation list and the trusted-dispatcher map (which are reloaded with every
+reload, but a change to them alone is picked up only on SIGHUP):
 
 ```bash
 # On systemd hosts (preferred)
@@ -1074,10 +1083,12 @@ kill -HUP $(pidof ctrl-exec-agent)
 ```
 
 `agent.conf` is parsed into a new configuration first and swapped in only if it
-parses and every script in `scripts.conf` still names a defined profile. If it
-does not, the previous `agent.conf` and allowlist stay in force and the reason
-is logged (`ACTION=reload-fail`) - a reload never leaves the agent serving a
-half-applied or fail-open configuration. On a successful reload `allowed_ips`,
+parses. If it does not, the previous `agent.conf` and allowlist stay in force
+and the reason is logged once (`ACTION=reload-fail`) - a reload never leaves
+the agent serving a half-applied or fail-open configuration. A `scripts.conf`
+entry naming a profile `agent.conf` does not define skips only that script
+(`script not permitted: profile '<name>' is not defined in agent.conf`); the
+rest loads. On a successful reload `allowed_ips`,
 the rate-limit settings, `max_children`, `auth_hook`, `script_dirs`, `[tags]`,
 `[profile ...]` blocks, `executor_socket` and the other keys apply to
 subsequent connections. `port`, `cert`, `key` and `ca` cannot change without a
@@ -1289,9 +1300,14 @@ first. The executor applies its own limits to what the agent hands it: at most
 32 fields, names as above, and at most 4194304 bytes (4 MiB) of values in
 total, so a `max_input_bytes` above 4 MiB on the agent is refused at the
 executor (`executor: input exceeds the executor's limit of 4194304 bytes`).
-A script the executor reads as `raw` or `fields` is refused if the request came
-from an agent too old to send input (`executor: script '<name>' takes
-input=fields but the agent sent no input ...`). An agent newer than its
+A script the executor reads as `raw` or `fields` is refused when the request
+carried no input: `executor: scripts.conf declares '<name>' input=fields, but
+the request carried no input; if scripts.conf changed, run 'systemctl reload
+ctrl-exec-agent'`. The agent sends a request without input only for a script
+its loaded `scripts.conf` has as `input=context`; since 0.13.2 it reloads an
+edited `scripts.conf` before the next request, so this is seen with an agent
+older than 0.13.2 that has not reloaded an edit, or one that predates
+`input=`. An agent newer than its
 executor refuses a run that needs input with `ctrl-exec-executor does not
 support run input: it is older than this agent. Restart
 ctrl-exec-executor.service ...`; runs without input, of `input=context`
@@ -1678,15 +1694,8 @@ agent-side information. It is installed on every agent host by the
 installer and is disabled in `scripts.conf` by default.
 
 To enable it, uncomment the entry in `/etc/ctrl-exec-agent/scripts.conf`
-on the agent host and reload the allowlist:
-
-```bash
-# On systemd hosts (preferred)
-systemctl reload ctrl-exec-agent
-
-# On systems without systemd
-kill -HUP $(pidof ctrl-exec-agent)
-```
+on the agent host. The agent picks the edit up at the next request; no reload
+is needed.
 
 Then run the script directly on the agent host to see all available
 subcommands and the exact ced invocations that exercise them:

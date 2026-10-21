@@ -5,6 +5,18 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
+## 0.13.2 — scripts.conf edits work without a reload
+
+Upgrading from 0.13.1: nothing to do. An edit to `scripts.conf` or
+`agent.conf` now takes effect at the next request; `systemctl reload
+ctrl-exec-agent` still works but is no longer needed after an edit.
+
+- **Fixed** after `input=fields` was edited into `scripts.conf`, context scripts were refused by the executor as `takes input=fields but the agent sent no input (it is older than this executor)` until the agent was restarted: the executor reads `scripts.conf` and `agent.conf` for every run, the agent only at start-up and on SIGHUP. The agent now checks both files (inode, size, modification and change time) before handling each connection and, when either changed, reloads them exactly as SIGHUP does (`ACTION=allowlist-reload REASON=changed`, once per change), in the serve loop's parent so every later connection sees it. SIGHUP still reloads (`REASON=signal`). `port`, `cert`, `key` and `ca` still need a restart; a change to the revocation list or trusted-dispatcher map alone still needs SIGHUP. (T-059)
+- **Changed** a `scripts.conf` entry naming a profile `agent.conf` does not define is skipped with the reason `profile '<name>' is not defined in agent.conf` (logged as `allowlist-skip`, refused as `script not permitted: <reason>`, listed by self-check as SKIPPED); it used to fail the whole start-up or reload, which on a reload kept the old allowlist while `systemctl reload` reported success. The rest of the file loads. (T-059)
+- **Changed** non-breaking spaces pasted into `scripts.conf` or `agent.conf` (U+00A0, U+2000 to U+200A, U+202F, as a terminal or chat UI inserts them) read as ordinary spaces in the agent and the executor alike, so a pasted line works as typed; the agent logs `ACTION=config-nonascii-space FILE=...` once per load of a file that held any. Before, `profile=cert-deploy<NBSP>input=fields` was read as one undefined profile name. Parity fixtures in t/exec-conformance.t. (T-059)
+- **Changed** the executor's refusal of a run with no input for a script it reads as `input=raw` or `fields` names the mismatch and the fix: `scripts.conf declares '<name>' input=<mode>, but the request carried no input; if scripts.conf changed, run 'systemctl reload ctrl-exec-agent'`. It no longer says the agent is older, which the request cannot show. (T-059)
+- **Added** `tools/upgrade-rig` scenario s5: the reported sequence as root under systemd (a fields script run without and with input, then context scripts), pasted forms of the line, edits with no reload, an undefined profile, SIGHUP. (T-059)
+
 ## 0.13.1 — existing script layouts run again
 
 Upgrading from 0.13.0: nothing to do. Scripts that 0.13.0 refused for their

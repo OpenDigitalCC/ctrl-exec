@@ -964,18 +964,21 @@ registry synchronisation is an operational responsibility.
 
 ## Reloading and Restarting
 
-Agent config and allowlist reload without downtime:
+An edit to `agent.conf` or `scripts.conf` takes effect at the next request
+with no command: the agent notices the changed file and reloads both
+(`ACTION=allowlist-reload REASON=changed` in its log). A reload can also be
+asked for:
 
 ```bash
 sudo systemctl kill --signal=HUP ctrl-exec-agent
 # or on Alpine/non-systemd: kill -HUP <pid>
 ```
 
-Reloads `agent.conf` and `scripts.conf` including `allowed_ips`, the rate-limit
-settings, `max_children`, `script_dirs`, `auth_hook`, `[profile ...]` blocks and
-`[tags]`. Changes take effect for subsequent requests. A broken `agent.conf`
-leaves the previous configuration in force (see the agent log). `port`, `cert`,
-`key` and `ca` need a restart.
+Either way `agent.conf` and `scripts.conf` are reloaded, including
+`allowed_ips`, the rate-limit settings, `max_children`, `script_dirs`,
+`auth_hook`, `[profile ...]` blocks and `[tags]`. A broken `agent.conf` leaves
+the previous configuration in force (see the agent log). `port`, `cert`, `key`
+and `ca` need a restart.
 
 Restart agent (drops in-flight connections):
 

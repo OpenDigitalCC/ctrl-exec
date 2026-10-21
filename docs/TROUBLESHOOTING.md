@@ -227,16 +227,38 @@ sudo ctrl-exec-agent self-check
 ```
 
 This parses both files and reports any error without touching the running
-service. It is the cheapest way to catch an inline comment or an undefined
-profile before it becomes a failed start.
+service. It is the cheapest way to catch an inline comment before it becomes a
+failed start; an entry naming an undefined profile is listed as `SKIPPED`.
 
-`systemctl reload ctrl-exec-agent` (SIGHUP) re-reads `agent.conf` as well as
-`scripts.conf`, so a tightened `allowed_ips`, rate limit or `max_children` takes
-effect without a restart. If the new `agent.conf` does not parse, or
-`scripts.conf` names a profile it does not define, the reload is refused and the
-previous configuration stays in force: look for `reload-fail` in the agent log.
-Only `port`, `cert`, `key` and `ca` need a restart; the log says so
-(`reload-note`) and the running values are kept.
+The running agent re-reads `agent.conf` and `scripts.conf` by itself at the
+next connection after either changes on disk (`allowlist-reload
+REASON=changed` in the agent log), and on `systemctl reload ctrl-exec-agent`
+(SIGHUP), so a tightened `allowed_ips`, rate limit or `max_children` takes
+effect without a restart. If the new `agent.conf` does not parse, the previous
+configuration stays in force: look for `reload-fail` in the agent log. A
+`scripts.conf` entry naming a profile `agent.conf` does not define skips only
+that script. Only `port`, `cert`, `key` and `ca` need a restart; the log says
+so (`reload-note`) and the running values are kept.
+
+### "scripts.conf declares '<name>' input=fields, but the request carried no input"
+
+Symptom
+: A run of a script with no input fails with `executor: scripts.conf declares
+  'agent-service-restart' input=fields, but the request carried no input; if
+  scripts.conf changed, run 'systemctl reload ctrl-exec-agent'` (0.13.0 and
+  0.13.1 said `takes input=fields but the agent sent no input (it is older
+  than this executor)`).
+
+Cause
+: The executor reads `scripts.conf` for every run; the agent sent the request
+  as for an `input=context` script, so it read the file differently. From
+  0.13.2 the agent reloads an edited `scripts.conf` before the next request,
+  so this is an agent older than 0.13.2 that has not been reloaded after an
+  edit, or an agent older than 0.13.0.
+
+Fix
+: Check the line in `scripts.conf` (is `input=` meant to be on it?), then
+  `systemctl reload ctrl-exec-agent`, or upgrade the agent.
 
 
 ### "script not permitted"
@@ -254,7 +276,8 @@ Cause
 
   | Reason | Fix |
   | --- | --- |
-  | `not in scripts.conf` | The name is not listed. Add `<name> = /abs/path` to the agent's `scripts.conf`, then `systemctl reload ctrl-exec-agent` (SIGHUP). Check the spelling of the name. |
+  | `not in scripts.conf` | The name is not listed. Add `<name> = /abs/path` to the agent's `scripts.conf`; the next request picks it up. Check the spelling of the name. |
+  | `profile '<name>' is not defined in agent.conf` | The entry's `profile=` names no `[profile <name>]` block. Add the block to `agent.conf` or correct the name; the rest of `scripts.conf` is unaffected. |
   | `'<path>' is not under script_dirs (<dirs>)` | The most common one. `script_dirs` in `agent.conf` restricts scripts to those directories. Move the script into one, or add its directory to `script_dirs` (colon-separated), then reload. |
   | `'<path>' is not an absolute path` | Write the full path from `/` in `scripts.conf`. |
   | `its scripts.conf entry has more than one path` | One path per line; annotations such as `profile=` are `key=value`. |
@@ -279,8 +302,8 @@ Fix
 : Run `sudo ctrl-exec-agent self-check` on the agent: it lists every skipped
   entry as `Script '<name>': SKIPPED - <reason>`. The agent also logs each one
   when it loads `scripts.conf` (`ACTION=allowlist-skip`). The reasons are
-  recomputed on every reload, so edit the file and reload to clear one. A listed
-  script that is not executable is not refused with this message; the agent
+  recomputed on every reload, and an edit to the file is reloaded at the next
+  request. A listed script that is not executable is not refused with this message; the agent
   does not check that when it loads `scripts.conf`.
 
 ### Script ownership warnings
