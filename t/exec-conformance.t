@@ -67,7 +67,11 @@ sub perl_resolve {
     my $writ  = join(':', @{ $p->{writable} // [] });
     my $input = Exec::Agent::Config::script_input_mode($name, $al);
     my $output = Exec::Agent::Config::script_output_mode($name, $al);
-    return "OK path=$path|profile=$prof|run_as=$runas|nnp=$nnp|caps=$caps|writable=$writ|input=$input|output=$output";
+    # script_ownership (T-054) is part of the line: the two parsers must read
+    # the same mode, or the front end would report a script the executor
+    # refuses (or the reverse).
+    my $own = $config->{script_ownership};
+    return "OK path=$path|profile=$prof|run_as=$runas|nnp=$nnp|caps=$caps|writable=$writ|input=$input|output=$output|ownership=$own";
 }
 
 # --- fixtures: each names the scripts to resolve against one config pair -------
@@ -525,6 +529,33 @@ push @fixtures, (
         scripts => "s = /opt/s.sh profile=p\n",
         names   => [qw(s)],
     },
+);
+
+# --- script_ownership (T-054): warn (default) or strict; anything else is a
+# config error in both parsers. The last value wins in both.
+push @fixtures, (
+    (map { my ($lbl, $body, $want) = @$_; +{
+        label   => "script_ownership: $lbl",
+        agent   => $REQUIRED . $body . "[profile default]\nrun_as = nobody\n",
+        scripts => "s = /opt/s.sh\n",
+        names   => [qw(s)],
+        ($want ? (expect => { s => $want }) : ()),
+    } } (
+        ['absent => warn',              "",                                    'OK path=/opt/s.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn'],
+        ['warn',                        "script_ownership = warn\n",           'OK path=/opt/s.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn'],
+        ['strict',                      "script_ownership = strict\n",         'OK path=/opt/s.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=strict'],
+        ['strict, padded',              "  script_ownership   =   strict  \n", 'OK path=/opt/s.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=strict'],
+        ['last value wins (bad, strict)', "script_ownership = bogus\nscript_ownership = strict\n", 'OK path=/opt/s.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=strict'],
+        ['last value wins (strict, warn)', "script_ownership = strict\nscript_ownership = warn\n", 'OK path=/opt/s.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn'],
+        ['in [tags] is a tag, not the setting', "[tags]\nscript_ownership = strict\n", 'OK path=/opt/s.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn'],
+        ['bad value',                   "script_ownership = off\n",            'CONFIG-ERROR'],
+        ['upper case',                  "script_ownership = STRICT\n",         'CONFIG-ERROR'],
+        ['inline comment',              "script_ownership = strict # later\n", 'CONFIG-ERROR'],
+        ['whitespace-only value',       "script_ownership =  \n",              'CONFIG-ERROR'],
+        ['last value bad',              "script_ownership = strict\nscript_ownership = no\n", 'CONFIG-ERROR'],
+        ['very long value',             "script_ownership = " . ('s' x 5000) . "\n", 'CONFIG-ERROR'],
+        ['127-char value',              "script_ownership = " . ('s' x 127) . "\n", 'CONFIG-ERROR'],
+    )),
 );
 
 # --- malformed lines and unusual bytes ----------------------------------------

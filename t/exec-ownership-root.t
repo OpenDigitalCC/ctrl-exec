@@ -1,9 +1,9 @@
 #!/usr/bin/perl
-# t/exec-ownership-root.t  (T-045)
+# t/exec-ownership-root.t  (T-045, T-054)
 #
-# End to end through the root executor: a script is run only when it and every
-# directory on its path are owned by root and writable by neither group nor
-# other. Each refusal is exit 126 with "executor: script not permitted: <path>
+# End to end through the root executor, with script_ownership = strict: a
+# script is run only when it and every directory on its path are owned by root
+# and writable by neither group nor other. Each refusal is exit 126 with "executor: script not permitted: <path>
 # <rule>" and the script does not run. A '#!' bash script and a '#!' perl script
 # still run, and see their own path as $0 (the executor execs by path, not by
 # fd, so a script that finds its files from $0 keeps working).
@@ -12,6 +12,10 @@
 # between the ownership check and the exec; the test then points the
 # allowlisted symlink at another root-owned script. The executor must notice
 # that the path no longer names the file it checked and run neither.
+#
+# With script_ownership = warn (T-054, the default) each of those scripts runs,
+# and the run's stdout and stderr are exactly the script's: nothing about the
+# rule is written into them, and the executor's own log has no per-run line.
 #
 # Root only (skipped otherwise); run in the wedge rig (tools/wedge-rig), e.g.
 #   docker exec ce-wedge-rig sh -c 'cd /opt/ctrl-exec && prove -Ilib t/exec-ownership-root.t'
@@ -73,8 +77,11 @@ script("$S/evil.sh", 0755, sh('evil'));
 symlink "$S/good.sh", "$S/link.sh";
 
 my $agent_conf = "$T/agent.conf";
-script($agent_conf, 0644, "port = 7443\ncert = /x\nkey = /y\nca = /z\n"
+script($agent_conf, 0644, "port = 7443\ncert = /x\nkey = /y\nca = /z\nscript_ownership = strict\n"
                         . "[profile default]\nno_new_privileges = yes\n");
+my $warn_conf = "$T/agent-warn.conf";
+script($warn_conf, 0644, "port = 7443\ncert = /x\nkey = /y\nca = /z\n"
+                       . "[profile default]\nno_new_privileges = yes\n");
 my $scripts_conf = "$T/scripts.conf";
 script($scripts_conf, 0644, join '', map { "$_\n" }
     "ok    = $S/ok.sh",
@@ -89,13 +96,14 @@ script($scripts_conf, 0644, join '', map { "$_\n" }
 # Start an executor, run one script through it, stop it.
 sub run_via {
     my ($bin, $name, %env) = @_;
+    my $conf = delete $env{conf} // $agent_conf;
     my $sock = "$T/exec.sock";
     unlink $sock;
     my $pid = ChildGuard::guarded_fork() // die "fork: $!";
     if ($pid == 0) {
         $ENV{$_} = $env{$_} for keys %env;
         open STDERR, '>>', "$T/serve.err";
-        exec($bin, 'serve', $sock, $agent_conf, $scripts_conf, 'root') or POSIX::_exit(127);
+        exec($bin, 'serve', $sock, $conf, $scripts_conf, 'root') or POSIX::_exit(127);
     }
     my $ready = 0;
     for (1 .. 100) { if (-S $sock) { $ready = 1; last } select undef, undef, undef, 0.05 }
@@ -136,6 +144,23 @@ for my $name (sort keys %refused) {
         is $r->{exit}, 126, 'exit 126';
         is $r->{stderr}, "executor: script not permitted: $refused{$name}\n", 'names the path and the rule';
         is ran(), '', 'the script did not run';
+    };
+}
+
+# script_ownership = warn: the same scripts run, and the run's output is the
+# script's own.
+for my $name (sort keys %refused) {
+    subtest "warn: runs despite: $refused{$name}" => sub {
+        unlink $marker;
+        my $before = -s "$T/serve.err" // 0;
+        my $r = run_via($BIN, $name, conf => $warn_conf);
+        my $path = { gw => "$S/gw.sh", other => "$S/other.sh",
+                     ww => "$T/ww/x.sh", odir => "$T/odir/x.sh" }->{$name};
+        is $r->{exit},   0,         'exit 0' or diag explain $r;
+        is $r->{stdout}, "$path\n", 'stdout is the script\'s ($0)';
+        is $r->{stderr}, '',        'stderr is empty: no warning in the run';
+        is ran(), "$name\n",        'the script ran';
+        is( (-s "$T/serve.err" // 0), $before, 'the executor logged nothing for the run');
     };
 }
 

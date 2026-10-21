@@ -803,6 +803,31 @@ Key settings:
   script_dirs = /opt/ctrl-exec-scripts:/usr/local/lib/ctrl-exec-scripts
   ```
 
+`script_ownership`
+: `warn` (the default) or `strict`; any other value is a configuration error
+  (the agent and the executor both refuse to start). What happens to a script
+  that breaks the ownership rule - the script and every directory from `/`
+  down to it owned by root and not group- or other-writable (SECURITY.md,
+  "Script ownership").
+
+  - `warn`: the script stays allowlisted and runs. The reason is logged once
+    each time `scripts.conf` is loaded (start and reload) as
+    `ACTION=script-ownership REASON=... SCRIPT=...` at WARNING, and
+    `ctrl-exec-agent self-check` shows it next to the script
+    (`[warning: '/srv/scripts' is group-writable]`). Nothing is added to a
+    run's output.
+  - `strict`: the script is refused. The agent skips it at load
+    (`script not permitted: <reason>`, listed by self-check as SKIPPED) and
+    checks again before each run; the executor refuses it with exit 126.
+
+  `warn` accepts that a user who can write the script or a directory on its
+  path can change what a profile runs. Set `strict` once self-check shows no
+  warnings.
+
+  ```
+  script_ownership = strict
+  ```
+
 `auth_hook`
 : Path to an executable called before every `run` request on the agent,
   after allowlist validation. Enables independent downstream token validation
@@ -1450,7 +1475,10 @@ Checks performed:
 - `agent.conf` parses without error and required keys are present
 - `scripts.conf` allowlist loads and all listed scripts are executable;
   entries that were skipped (path outside `script_dirs`, relative, two paths,
-  over-long) are listed as `SKIPPED` with the reason
+  over-long, and with `script_ownership = strict` the ownership rule) are
+  listed as `SKIPPED` with the reason
+- The `script_ownership` mode; with `warn`, a script that breaks the
+  ownership rule is listed with `[warning: <reason>]`
 - Pairing certificates are present and not expired
 - If `script_dirs` is configured, all scripts in `scripts.conf` fall under
   one of the permitted directories

@@ -48,6 +48,21 @@ ca   = /etc/ctrl-exec-agent/ca.crt
 #
 # script_dirs = /opt/ctrl-exec-scripts:/usr/local/lib/ctrl-exec-scripts
 
+# Script ownership: warn (the default) or strict.
+# A script is checked for being owned by root and not group- or other-writable,
+# and so is every directory from / down to it (see SECURITY.md, "Script
+# ownership"). With warn, a script that breaks the rule still runs: the agent
+# logs the reason (ACTION=script-ownership) when it loads scripts.conf and
+# `ctrl-exec-agent self-check` shows it next to the script. With strict, such a
+# script is refused (by the agent and by the executor). Any other value is a
+# configuration error.
+#
+# warn accepts that anyone who can write the script, or a directory on its
+# path (e.g. a group-writable /srv/scripts), can change what a profile runs.
+# Recommended: once self-check shows no warnings, set strict.
+#
+# script_ownership = strict
+
 # Privilege separation (optional, recommended).
 # When set, the agent hands each synchronous run to the privileged executor
 # (ctrl-exec-executor.service) over this unix socket; the executor re-derives the

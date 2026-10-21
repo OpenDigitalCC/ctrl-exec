@@ -315,12 +315,16 @@ mode 750 works with `run_as = prosody`; see the run_as note in `agent.conf`).
 A run_as user that cannot execute the script gets `'<path>' is not executable by the profile's
 run_as user`.
 
-Scripts must be owned by root and not writable by group or other, and so must
-every directory above them (`/opt` and `/opt/ctrl-exec-scripts` are, as
-installed). This is enforced: an entry that breaks it is skipped with a reason
-(`script not permitted: '<path>' is group-writable`, `... is owned by uid 1000,
-not root`) that `sudo ctrl-exec-agent self-check` lists, and the executor
-refuses it at run time. It applies whatever the script's profile. `install`
+Scripts should be owned by root and not writable by group or other, and so
+should every directory above them (`/opt` and `/opt/ctrl-exec-scripts` are, as
+installed). The agent checks this. By default (`script_ownership = warn` in
+`agent.conf`) a script that breaks it still runs, and the reason is logged and
+shown by `sudo ctrl-exec-agent self-check` next to the script (`[warning:
+'<path>' is group-writable]`). With `script_ownership = strict` such an entry
+is skipped with the reason (`script not permitted: '<path>' is group-writable`,
+`... is owned by uid 1000, not root`) and the executor refuses it at run time;
+set `strict` once self-check shows no warnings. It applies whatever the
+script's profile. `install`
 sets owner, group and mode in one step and does not depend on your umask; see
 SECURITY.md, "Script ownership", and TROUBLESHOOTING.md, "script not permitted".
 
@@ -840,7 +844,7 @@ check-disk    = /opt/ctrl-exec-scripts/check-disk.sh
 ## Adding Scripts to an Agent
 
 ```bash
-# root-owned, not group- or other-writable (enforced), readable and
+# root-owned, not group- or other-writable (checked), readable and
 # executable by the profile's run_as user (default profile: nobody)
 sudo install -o root -g root -m 755 check-disk.sh /opt/ctrl-exec-scripts/
 

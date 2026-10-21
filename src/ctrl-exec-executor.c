@@ -104,6 +104,8 @@ typedef struct {
     int       ndirs;
     int       dirs_restrict;       /* script_dirs set non-empty, even if it
                                       yields no directories: deny all */
+    int       ownership_strict;    /* script_ownership = strict (T-054);
+                                      0 = warn, the default */
 } config_t;
 
 /* ---- small helpers ---------------------------------------------------- */
@@ -297,6 +299,10 @@ static int parse_agent_conf(const char *path, config_t *c) {
     int toplevel = 1;          /* before the first [section] header */
     profile_t *cur = NULL;
     int rc = 0;
+    /* script_ownership: the last value wins and is validated after the loop,
+     * as the Perl parser keeps the last value and validates it at the end. */
+    char own[NAMELEN] = "warn";
+    int own_long = 0;
 
     while ((len = getline(&line, &cap, f)) != -1) {
         if (len && line[len - 1] == '\n') line[--len] = '\0';
@@ -352,12 +358,25 @@ static int parse_agent_conf(const char *path, config_t *c) {
                 if (split_into(v, ":", (char *)c->script_dirs, sizeof(c->script_dirs[0]), MAX_DIRS, &c->ndirs) != 0) {
                     fprintf(stderr, "Too many script_dirs, or one too long, in '%s'\n", path); rc = -1; break;
                 }
+            } else if (strcmp(k, "script_ownership") == 0) {
+                own_long = strlen(v) >= sizeof(own);
+                snprintf(own, sizeof(own), "%s", v);
             }
         }
         /* keys in any other section are ignored, as in the Perl parser */
     }
     free(line);
     fclose(f);
+    if (rc == 0) {
+        /* KEEP IN SYNC WITH Exec::Agent::Config::_validate_config: warn or
+         * strict, anything else is a config error. */
+        if (!own_long && strcmp(own, "strict") == 0) c->ownership_strict = 1;
+        else if (own_long || strcmp(own, "warn") != 0) {
+            fprintf(stderr, "Invalid script_ownership '%s%s' in '%s' (expected warn or strict)\n",
+                    own, own_long ? "..." : "", path);
+            rc = -1;
+        }
+    }
     return rc;
 }
 
@@ -745,8 +764,10 @@ static int cmd_resolve(const char *agent_conf, const char *scripts_conf,
         strncat(writ, p->writable[i], sizeof(writ) - strlen(writ) - 1);
     }
 
-    printf("OK path=%s|profile=%s|run_as=%s|nnp=%d|caps=%s|writable=%s|input=%s|output=%s\n",
-           spath, pname, p->run_as, p->nnp, caps, writ, imode, omode);
+    printf("OK path=%s|profile=%s|run_as=%s|nnp=%d|caps=%s|writable=%s|input=%s|output=%s"
+           "|ownership=%s\n",
+           spath, pname, p->run_as, p->nnp, caps, writ, imode, omode,
+           c->ownership_strict ? "strict" : "warn");
     free(c);
     return 0;
 }
@@ -1417,10 +1438,12 @@ static void close_inherited_fds(void) {
 }
 
 /* Run path/argv under profile p, feeding `indata` to stdin, capturing stdout and
- * stderr concurrently (select, to avoid pipe-buffer deadlock). */
+ * stderr concurrently (select, to avoid pipe-buffer deadlock). ownership_strict
+ * is agent.conf script_ownership (T-054): 1 refuses a script that breaks the
+ * ownership rule, 0 (warn) runs it. */
 static int run_with_profile(const profile_t *p, const char *path, char *const argv[],
                             const char *indata, size_t inlen, int allow_unpriv,
-                            const run_input_t *ri,
+                            int ownership_strict, const run_input_t *ri,
                             int *exit_out, buf_t *out, buf_t *err) {
     int o[2], e[2], in[2];
     if (pipe(o) || pipe(e) || pipe(in)) return -1;
@@ -1439,11 +1462,21 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
         /* Ownership rule (T-045): the script and every directory on its path
          * owned by root and not group/other-writable. Checked here, after the
          * profile is applied, so it sees the mount namespace and identity the
-         * exec will use. */
+         * exec will use.
+         *
+         * With script_ownership = strict a script that breaks the rule (DENY)
+         * or cannot be checked (UNKNOWN) is refused. With warn (T-054, the
+         * default) both run: the front end logged the reason when it loaded
+         * the allowlist, and self-check / check-path show it. Nothing is
+         * written here in warn mode: fd 2 is already the action's stderr pipe,
+         * so a line here would reach the caller as the script's own stderr.
+         * UNKNOWN runs too in warn mode: it means the walk could not open a
+         * component (missing, or not searchable by the run_as user), and the
+         * access()/stat()/execve() below then fail with the real error. */
         char why[PATH_MAX + 256];
         struct stat fst;
         int tc = script_trust_check(path, why, sizeof(why), &fst);
-        if (tc == 1) {
+        if (tc == 1 && ownership_strict) {
             dprintf(2, "executor: script not permitted: %s\n", why);
             _exit(126);
         }
@@ -1457,9 +1490,23 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
                     path, strerror(errno));
             _exit(126);
         }
-        if (tc != 0) {
+        if (tc != 0 && ownership_strict) {
             dprintf(2, "executor: script not permitted: cannot check %s\n", why);
             _exit(126);
+        }
+        if (tc != 0) {
+            /* warn mode, the rule not met: fst was not filled by the walk (it
+             * stopped before the script), so bind the exec below to what the
+             * path names now. The dev/ino re-check then still holds the exec
+             * to this file, but the file itself is no longer protected: a user
+             * who can write the script or a directory on its path can change
+             * it before this stat, or swap it between this stat and execve's
+             * own lookup - the trade-off script_ownership = warn accepts
+             * (docs/SECURITY.md). */
+            if (stat(path, &fst) != 0) {
+                dprintf(2, "executor: cannot stat '%s': %s\n", path, strerror(errno));
+                _exit(126);
+            }
         }
 #ifdef CE_TEST_SEAM
         /* Test build only: block between the check and the exec until the test
@@ -1473,9 +1520,11 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
 #endif
         /* Exec by path, bound to the file just checked. The checked file is the
          * one the walk opened (fstat on its fd); the path must still name that
-         * same file (dev/ino) or nothing runs. Between this stat and execve only
-         * root can change what the path names: every directory on it has just
-         * been shown to be root-owned and not group/other-writable.
+         * same file (dev/ino) or nothing runs. When the rule passed, between
+         * this stat and execve only root can change what the path names: every
+         * directory on it has just been shown to be root-owned and not
+         * group/other-writable. (In warn mode with the rule not met, see the
+         * stat above: that guarantee is what warn gives up.)
          *
          * Not fexecve/execveat(AT_EMPTY_PATH): for a '#!' script the kernel then
          * hands the interpreter "/dev/fd/N" as the script name instead of the
@@ -1711,7 +1760,10 @@ static void handle_conn(int cfd, config_t *cfg, const char *scripts_conf,
          * (realpath) below and the later execve is not reachable by a non-root
          * user: before the exec, run_with_profile checks that the script and
          * every directory on its path are root-owned and not group/other-
-         * writable (T-045), and that the path still names the file it checked. */
+         * writable (T-045), and that the path still names the file it checked.
+         * With script_ownership = warn (T-054) a script that breaks that rule
+         * runs anyway, and then a user who can write it or a directory on its
+         * path can change what runs - the documented trade-off of warn. */
         char spath[VALLEN], pname[NAMELEN], imode[INPUT_MODE_LEN];
         profile_t *p = NULL;
         /* The output mode is not needed here (see output_mode_ok): NULL. */
@@ -1791,6 +1843,7 @@ static void handle_conn(int cfd, config_t *cfg, const char *scripts_conf,
             } else {
                 argv[0] = spath;                      /* argv[0] = resolved path */
                 run_with_profile(p, spath, argv, feed, feedlen, allow_unpriv,
+                                 cfg->ownership_strict,
                                  (ri.env[0] || ri.dir) ? &ri : NULL, &ecode, &out, &err);
             }
             /* The action has been reaped (or never started): the directory goes

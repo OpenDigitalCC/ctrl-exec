@@ -255,9 +255,9 @@ Script directory restriction
   approved directory is rejected on the real, canonical path. When `script_dirs`
   is not set, any absolute path is accepted.
 
-Script ownership (enforced)
-: An allowlisted script runs only if it, and every directory from `/` down to
-  it, is owned by root (uid 0) and writable by neither group nor other, and the
+Script ownership (checked; enforced with `script_ownership = strict`)
+: The rule: an allowlisted script, and every directory from `/` down to it, is
+  owned by root (uid 0) and writable by neither group nor other, and the
   script is a regular file. Otherwise anyone able to write the script, or any
   directory on its path, could change what root (or a profile's `run_as` user)
   runs. Group-writable is refused too, including the sticky world-writable
@@ -268,7 +268,21 @@ Script ownership (enforced)
   whatever the profile's `run_as`: `scripts.conf` is root's policy, so its
   scripts are root's files.
 
-  The **executor** enforces it before every run (it is the authority). In the
+  What a breaking script does is set by `script_ownership` in `agent.conf`
+  (REFERENCE.md):
+
+  - `warn` (the default): the script runs. The agent logs the reason each time
+    it loads `scripts.conf` (`ACTION=script-ownership`, WARNING) and
+    `cea self-check` shows it next to the script; nothing is added to a run's
+    output. This is the trade-off: `warn` accepts that a user who can write the
+    script, or a directory on its path (a group-writable `/srv/scripts`, say),
+    can change what a profile runs - as root, for a root profile. It exists so
+    that an existing layout keeps working on upgrade.
+  - `strict`: the script is refused, as described below. Recommended once
+    `self-check` shows no ownership warnings: fix the layout (`chown root`,
+    `chmod go-w`), then set `script_ownership = strict` and reload.
+
+  With `strict`, the **executor** enforces it before every run (it is the authority). In the
   action's own process, after the profile is applied, it walks the path with
   `openat(O_PATH|O_NOFOLLOW)` from each checked directory, checks each component
   with `fstat`, and refuses with exit 126 and `executor: script not permitted:
@@ -283,9 +297,13 @@ Script ownership (enforced)
   would give the interpreter `/dev/fd/N` as the script's name, so `$0`,
   `dirname "$0"` and `FindBin` would stop finding the script's own files.
   `ctrl-exec-executor check-path <path>` prints the verdict for one path.
+  With `warn` the executor still runs the check but runs the script whatever
+  the verdict, binding the exec to the file the path names at that moment
+  (the same device and inode check); it writes nothing into the run.
 
   The **front end** applies the same rule (the parity is tested) at allowlist
-  load and again before each run. A breaking entry is skipped with the reason,
+  load and, with `strict`, again before each run. With `strict` a breaking
+  entry is skipped with the reason,
   so a run answers `script not permitted: <reason>`, the reason is logged
   (`ACTION=allowlist-skip`) and `cea self-check` lists it before any run.
   Without an executor (direct mode) the front end is the enforcement. A script

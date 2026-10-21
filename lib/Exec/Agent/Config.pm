@@ -137,6 +137,16 @@ sub _validate_config ($config, $path) {
         delete $config->{script_dirs};   # absent = no restriction
     }
 
+    # script_ownership (T-054): what a script that breaks the ownership rule
+    # (script_owner_check) does. 'warn' (the default): it stays allowlisted and
+    # runs, and the reason is logged at load and shown by self-check. 'strict':
+    # it is refused, by the front end and by the executor. Anything else is a
+    # config error. KEEP IN SYNC WITH src/ctrl-exec-executor.c parse_agent_conf.
+    $config->{script_ownership} //= 'warn';
+    croak "Invalid script_ownership '$config->{script_ownership}' in '$path'"
+        . " (expected warn or strict)"
+        unless $config->{script_ownership} =~ /\A(?:warn|strict)\z/;
+
     # KEEP IN SYNC WITH src/ctrl-exec-executor.c (set_profile_field / parse_agent_conf).
     # The executor re-derives the same security decision from this same config; if
     # the two parsers diverge, the executor applies a different privilege than this
@@ -300,20 +310,27 @@ sub _validate_config ($config, $path) {
 # Returns hashref: { script_name => { path, profile, input, output } }
 # Dies on parse errors; unknown/bad entries are skipped with a warning
 #
-# Optional opts:
-#   script_dirs => \@dirs   (arrayref of approved directories; undef = no restriction)
-sub load_allowlist ($path = undef, $script_dirs = undef) {
-    my ($allowlist) = load_allowlist_full($path, $script_dirs);
+# Optional:
+#   $script_dirs  arrayref of approved directories; undef = no restriction
+#   $ownership    agent.conf script_ownership: 'warn' (default) or 'strict'
+sub load_allowlist ($path = undef, $script_dirs = undef, $ownership = 'warn') {
+    my ($allowlist) = load_allowlist_full($path, $script_dirs, $ownership);
     return $allowlist;
 }
 
 # As load_allowlist, but also returns the entries that were skipped and why:
-#   ($allowlist, $skipped) = load_allowlist_full($path, $script_dirs)
+#   ($allowlist, $skipped) = load_allowlist_full($path, $script_dirs, $ownership)
 # $skipped is { script_name => "reason" }, the text a refused run reports as
 # "script not permitted: <reason>" (T-044). A line with no usable name (NUL
 # byte, malformed) cannot be keyed by name and is only warned about.
-sub load_allowlist_full ($path = undef, $script_dirs = undef) {
-    $path //= '/etc/ctrl-exec-agent/scripts.conf';
+#
+# A script that breaks the ownership rule (T-045) is skipped when $ownership is
+# 'strict'. With 'warn' (T-054, the default) it stays allowlisted and its entry
+# carries the reason as ownership_warning, which log_ownership_warnings logs
+# and self-check shows.
+sub load_allowlist_full ($path = undef, $script_dirs = undef, $ownership = 'warn') {
+    $path      //= '/etc/ctrl-exec-agent/scripts.conf';
+    $ownership //= 'warn';
 
     open my $fh, '<', $path
         or croak "Cannot open allowlist '$path': $!";
@@ -405,16 +422,20 @@ sub load_allowlist_full ($path = undef, $script_dirs = undef) {
                 warn "Allowlist: skipping '$name' - path not in approved script_dirs: $script_path\n";
                 next;
             }
-            if (defined(my $why = script_owner_problem($script_path))) {
-                $skipped{$name} = $why;
-                warn "Allowlist: skipping '$name' - $why\n";
+            my $owner_why = script_owner_problem($script_path);
+            if (defined $owner_why && $ownership eq 'strict') {
+                $skipped{$name} = $owner_why;
+                warn "Allowlist: skipping '$name' - $owner_why\n";
                 next;
             }
+            warn "Allowlist: '$name' - $owner_why; running anyway (script_ownership = warn)\n"
+                if defined $owner_why;
             $allowlist{$name} = {
                 path    => $script_path,
                 profile => ($annot{profile} // 'default'),
                 input   => $input_mode,
                 output  => $output_mode,
+                (defined $owner_why ? (ownership_warning => $owner_why) : ()),
             };
         }
         else {
@@ -456,8 +477,12 @@ sub not_in_dirs_reason ($path, $dirs) {
 # Why a run of $name is refused, for "script not permitted: <reason>":
 # the recorded skip reason, an execution-time script_dirs rejection, or
 # 'not in scripts.conf' for a name the allowlist has never heard of.
-sub not_permitted_reason ($name, $allowlist, $skipped = undef, $script_dirs = undef) {
+# The ownership rule is a reason only when $ownership is 'strict'; with 'warn' a
+# script that breaks it is not refused.
+sub not_permitted_reason ($name, $allowlist, $skipped = undef, $script_dirs = undef,
+                          $ownership = 'warn') {
     return 'not in scripts.conf' unless defined $name && $name =~ /^[\w-]+$/;
+    $ownership //= 'warn';
     return $skipped->{$name} if $skipped && defined $skipped->{$name};
     my $entry = $allowlist->{$name};
     return 'not in scripts.conf' unless defined $entry;
@@ -465,7 +490,8 @@ sub not_permitted_reason ($name, $allowlist, $skipped = undef, $script_dirs = un
     if (defined $path && $script_dirs && !_path_in_dirs($path, $script_dirs)) {
         return not_in_dirs_reason($path, $script_dirs);
     }
-    if (defined $path && defined(my $why = script_owner_problem($path))) {
+    if (defined $path && $ownership eq 'strict'
+        && defined(my $why = script_owner_problem($path))) {
         return $why;
     }
     return 'not in scripts.conf';
@@ -619,6 +645,29 @@ sub log_skipped ($skipped) {
     }
 }
 
+# Log each allowlisted script that breaks the ownership rule but runs anyway
+# (script_ownership = warn, T-054). Called once per load, like log_skipped -
+# never per run.
+sub log_ownership_warnings ($allowlist) {
+    for my $name (sort keys %{ $allowlist // {} }) {
+        my $e = $allowlist->{$name};
+        next unless ref $e eq 'HASH' && defined $e->{ownership_warning};
+        Exec::Log::log_action('WARNING', {
+            ACTION => 'script-ownership',
+            SCRIPT => $name,
+            REASON => $e->{ownership_warning},
+            MODE   => 'warn',
+        });
+    }
+}
+
+# The ownership warning recorded for a script at load (script_ownership =
+# warn), or undef.
+sub script_ownership_warning ($name, $allowlist) {
+    my $e = $allowlist->{$name};
+    return ref $e eq 'HASH' ? $e->{ownership_warning} : undef;
+}
+
 # Check whether a script name is permitted
 # Returns the script path if permitted, undef otherwise
 #
@@ -700,7 +749,9 @@ sub reload_plan ($config_path, $allowlist_path, $old_config, $old_allowlist, $ol
     my $config = load_config($config_path);   # dies on parse/validation error
     my @notes;
 
-    my ($allowlist, $skipped) = eval { load_allowlist_full($allowlist_path, $config->{script_dirs}) };
+    my ($allowlist, $skipped) = eval {
+        load_allowlist_full($allowlist_path, $config->{script_dirs}, $config->{script_ownership})
+    };
     unless ($allowlist) {
         my $err = $@ || 'unknown error'; chomp $err;
         push @notes, "allowlist reload failed, keeping the previous allowlist: $err";

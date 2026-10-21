@@ -265,19 +265,23 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
     my $script_path = Exec::Agent::Config::validate_script(
         $name, $allowlist, $config->{script_dirs}
     );
-    # Re-apply the ownership rule at run time (T-045): the script or a directory
-    # on its path may have changed since the allowlist was loaded. Without an
-    # executor this is the enforcement; with one, the executor enforces the
-    # same rule and this only refuses early, with the same reason.
+    # Re-apply the ownership rule at run time (T-045) when script_ownership is
+    # strict: the script or a directory on its path may have changed since the
+    # allowlist was loaded. Without an executor this is the enforcement; with
+    # one, the executor enforces the same rule and this only refuses early, with
+    # the same reason. With 'warn' (T-054, the default) a script that breaks the
+    # rule runs; the reason was logged when the allowlist was loaded, and is not
+    # logged again on each run.
+    my $ownership = $config->{script_ownership} // 'warn';
     $script_path = undef
-        if $script_path
+        if $script_path && $ownership eq 'strict'
         && defined Exec::Agent::Config::script_owner_problem($script_path);
 
     unless ($script_path) {
         # Say why (T-044): the reason a scripts.conf entry was skipped, or that
         # the name is not in scripts.conf at all.
         my $why = Exec::Agent::Config::not_permitted_reason(
-            $name, $allowlist, $skipped, $config->{script_dirs}
+            $name, $allowlist, $skipped, $config->{script_dirs}, $ownership
         );
         Exec::Log::log_action('WARNING', {
             ACTION => 'deny',

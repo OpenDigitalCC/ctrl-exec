@@ -1570,8 +1570,17 @@ script ownership (T-045)
   `script_trust_check` apply the same rule: the script and every directory from
   `/` down to it owned by root and not group/other-writable, the script a
   regular file, symlinks followed only out of checked directories. The front end
-  uses it at load (a skip reason) and in `handle_run`; the executor in the
-  action's child before `execve`, which then re-checks dev/ino by path. Keep the
+  uses it at load and in `handle_run`; the executor in the action's child
+  before `execve`, which then re-checks dev/ino by path. What a failure does is
+  `script_ownership` in `agent.conf` (T-054), parsed identically by both
+  (`t/exec-conformance.t`, the `ownership=` field of `resolve`): `strict`
+  refuses (a skip reason at load, the `handle_run` re-check, exit 126 in the
+  executor); `warn`, the default, keeps the entry with `ownership_warning` set
+  (logged by `log_ownership_warnings` once per load, shown by self-check), skips
+  the `handle_run` re-check, and in the executor runs the script, re-stat'ing
+  the path to bind the exec when the walk did not fill the stat. In warn mode
+  the executor writes nothing at that point: fd 2 is already the action's
+  stderr. `load_allowlist_full($path, $dirs, $ownership)` defaults to `warn`. Keep the
   walk, the check order and the reason texts identical:
   `t/exec-ownership-parity.t` compares them over a corpus (`ctrl-exec-executor
   check-path`). Test seams, never set in production: in Perl,

@@ -209,7 +209,7 @@ sub mode_serve ($opts) {
     eval {
         $config    = Exec::Agent::Config::load_config($CONFIG_PATH);
         ($allowlist, $skipped) = Exec::Agent::Config::load_allowlist_full(
-            $ALLOWLIST_PATH, $config->{script_dirs});
+            $ALLOWLIST_PATH, $config->{script_dirs}, $config->{script_ownership});
         $schemas   = Exec::Agent::Schema::load_for_allowlist($allowlist);
 
         # Fail-closed: every allowlisted script must reference a defined profile
@@ -245,6 +245,7 @@ MSG
     };
 
     Exec::Agent::Config::log_skipped($skipped);
+    Exec::Agent::Config::log_ownership_warnings($allowlist);
 
     # Profiles are enforced only by the executor. If scripts declare non-default
     # profiles but executor_socket is not set, those profiles are NOT applied -
@@ -297,6 +298,7 @@ MSG
             $allowlist    = $plan->{allowlist};
             $skipped      = $plan->{skipped};
             Exec::Agent::Config::log_skipped($skipped);
+            Exec::Agent::Config::log_ownership_warnings($allowlist);
             $rate_config  = $config->{rate_limit} // {};
             $max_children = $config->{max_children} // 256;
             $revoked_path = $config->{revoked_serials}
@@ -766,10 +768,15 @@ sub mode_self_check {
     }
 
     my ($allowlist, $skipped) = eval {
-        Exec::Agent::Config::load_allowlist_full($ALLOWLIST_PATH, $config->{script_dirs})
+        Exec::Agent::Config::load_allowlist_full($ALLOWLIST_PATH, $config->{script_dirs},
+                                                 $config->{script_ownership})
     };
     if ($@) { print "Allowlist error: $@\n"; exit 1; }
     printf "  Allowlist OK (%d scripts)\n", scalar keys %$allowlist;
+    print "  Script ownership: $config->{script_ownership}"
+        . ($config->{script_ownership} eq 'strict'
+            ? " (scripts that break the ownership rule are refused)\n"
+            : " (scripts that break the ownership rule run, with a warning)\n");
     for my $name (sort keys %$skipped) {
         print "  Script '$name': SKIPPED - $skipped->{$name}\n";
     }
@@ -786,7 +793,11 @@ sub mode_self_check {
         my $path    = Exec::Agent::Config::validate_script($name, $allowlist);
         my $profile = Exec::Agent::Config::script_profile($name, $allowlist);
         my $ok      = (defined $path && -x $path) ? 'ok' : 'NOT EXECUTABLE';
-        print "  Script '$name': $path  (profile: $profile) [$ok]\n";
+        # script_ownership = warn (T-054): a script that breaks the ownership
+        # rule runs; say why it would be refused under strict.
+        my $owner   = Exec::Agent::Config::script_ownership_warning($name, $allowlist);
+        my $warn    = defined $owner ? " [warning: $owner]" : '';
+        print "  Script '$name': $path  (profile: $profile) [$ok]$warn\n";
     }
 
     # Fail-closed: a script referencing an undefined profile is a config error.

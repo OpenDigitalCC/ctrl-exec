@@ -267,10 +267,13 @@ Cause
   | `'<path>' is not a regular file` / `'<path>' is not a directory` | The path names a directory, device or fifo, or a file sits where a directory should be. Correct the path in `scripts.conf`. |
   | `'<path>' has too many levels of symbolic links` | A symlink loop on the path. |
 
-  The ownership reasons (T-045) apply whatever the script's profile and
-  `run_as`; see SECURITY.md, "Script ownership". They are checked when
-  `scripts.conf` is loaded and again before each run, so a `chmod` that makes a
-  loaded script group-writable takes effect at once; a fix needs a reload.
+  The ownership reasons (T-045) refuse a run only with `script_ownership =
+  strict` in `agent.conf`; with `warn` (the default) the script runs and the
+  reason is a warning (see "Script ownership warnings" below). They apply
+  whatever the script's profile and `run_as`; see SECURITY.md, "Script
+  ownership". With `strict` they are checked when `scripts.conf` is loaded and
+  again before each run, so a `chmod` that makes a loaded script group-writable
+  takes effect at once; a fix needs a reload.
 
 Fix
 : Run `sudo ctrl-exec-agent self-check` on the agent: it lists every skipped
@@ -280,10 +283,33 @@ Fix
   script that is not executable is not refused with this message; the agent
   does not check that when it loads `scripts.conf`.
 
+### Script ownership warnings
+
+Symptom
+: `sudo ctrl-exec-agent self-check` shows a script with
+  `[warning: '/srv/scripts' is group-writable]` (or `is owned by uid N, not
+  root`, `is world-writable`), and the agent logs
+  `ACTION=script-ownership REASON=... SCRIPT=...` at WARNING when it loads
+  `scripts.conf`. The script runs.
+
+Cause
+: `script_ownership = warn` (the default): the script, or the directory named,
+  breaks the ownership rule, so a user who can write it can change what runs.
+  The script is not refused; the warning says what `strict` would refuse.
+
+Fix
+: Use the fixes in the table above (`chown root`, `chmod go-w`, or move the
+  script under root-owned directories), reload, and check self-check again.
+  When it shows no warnings, set `script_ownership = strict` in `agent.conf`
+  and reload, so a later change to the layout is refused instead of warned
+  about. To keep the current layout, leave `warn`, and accept that the group
+  (or user) named can change what the profile runs.
+
 ### Exit 126 with "executor: script not permitted"
 
 Symptom
-: With the executor enabled, a run returns exit 126 and stderr such as:
+: With the executor enabled and `script_ownership = strict`, a run returns
+  exit 126 and stderr such as:
 
   ```
   executor: script not permitted: '/opt/ctrl-exec-scripts' is group-writable
@@ -292,8 +318,9 @@ Symptom
   ```
 
 Cause
-: The executor checks the ownership rule itself before every run (it is the
-  authority, and it runs as root). The reasons are the ones in the table above.
+: With `script_ownership = strict` the executor checks the ownership rule
+  itself before every run (it is the authority, and it runs as root). The
+  reasons are the ones in the table above.
   The front end normally refuses first with the same reason; the executor's
   message appears when the front end could not see the script (a directory the
   agent user cannot search, e.g. a `0700` script directory for a root profile)
@@ -304,7 +331,8 @@ Cause
 Fix
 : As in the table above. To check one path the way the executor does:
   `sudo ctrl-exec-executor check-path /opt/ctrl-exec-scripts/x.sh` prints `OK` or
-  `DENY <reason>`.
+  `DENY <reason>`. If the layout cannot be fixed yet, `script_ownership = warn`
+  (the default) runs the script and reports the reason instead.
 
 ### Agent exits 78 with "script(s) reference an undefined profile"
 

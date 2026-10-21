@@ -1186,9 +1186,10 @@ by an earlier release keeps the old mode 750 `root:ctrl-exec-agent`, which
 To restrict a script, give it a profile whose `run_as` user can reach it, for
 example a group the user is in. Give the script a profile whose `run_as` user can reach it, for
 example a group the user is in (see the run_as note in `agent.conf`). Either
-way the script and every directory above it must be owned by root and not
-writable by group or other, or the agent skips it and the executor refuses it
-(see `INSTALL.md`). A run_as user that cannot execute the script gets the error
+way the script and every directory above it should be owned by root and not
+writable by group or other: the agent warns about one that is not, and with
+`script_ownership = strict` skips it and the executor refuses it (see
+`INSTALL.md`). A run_as user that cannot execute the script gets the error
 `'<path>' is not executable by the profile's run_as user`.
 
 ### Reloading the agent

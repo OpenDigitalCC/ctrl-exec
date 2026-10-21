@@ -4,14 +4,16 @@
 # One entry per line:
 #   <name> = <absolute-path> [profile=<name>] [input=<mode>] [output=<mode>]
 # The name is what the ctrl-exec passes as the script argument.
-# The path must be executable and owned by root. This is enforced: the script
-# and every directory from / down to it must be owned by root and not writable
-# by group or other (install them with e.g. install -o root -g ctrl-exec-agent
-# -m 750). An entry that breaks the rule is skipped at load ("script not
-# permitted: '<path>' is group-writable", "... is owned by uid 1000, not root",
-# "... is world-writable") and listed by `cea self-check`; the executor refuses
-# such a script at run time too (exit 126). This applies whatever the profile's
-# run_as. Scripts under /tmp, /var/tmp or a user's home directory are refused.
+# The path must be executable and should be owned by root: the script and
+# every directory from / down to it owned by root and not writable by group or
+# other (install them with e.g. install -o root -g root -m 755). This is
+# checked. With script_ownership = warn in agent.conf (the default) an entry
+# that breaks the rule still runs; the reason is logged at load and shown by
+# `cea self-check` next to the script. With script_ownership = strict it is
+# skipped at load ("script not permitted: '<path>' is group-writable", "... is
+# owned by uid 1000, not root", "... is world-writable"), listed by
+# `cea self-check`, and refused by the executor at run time (exit 126). This
+# applies whatever the profile's run_as.
 #
 # The optional 'profile=<name>' pins the security context the script runs under
 # (run_as, capabilities, writable paths). It is order-independent (either side of
