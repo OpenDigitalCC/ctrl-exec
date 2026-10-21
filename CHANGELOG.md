@@ -5,10 +5,37 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
-## 0.13.0 — (unreleased)
+## 0.13.0 — confidential run input and output; executor hardening; API socket
 
-The backlog line: every open task in todo/ lands here, one branch per task or
-task group, each adding its bullets to this entry.
+Headlines: a script can receive secrets as named input fields that never
+appear in arguments, environment, logs or stores (`input=`), and declare that
+its output is returned but never stored (`output=confidential`); the API can
+listen on a unix socket or with TLS; the executor checks script ownership,
+hands the action only stdin, stdout and stderr, and runs in the agent
+container; a fresh dispatcher install denies API requests until an auth hook
+is enabled.
+
+Upgrading from 0.12 - check these before or during the upgrade:
+
+- The dispatcher's configuration lives in `/etc/ctrl-exec-dispatcher/`. The
+  packages and `install.sh` move it; a container that mounts its own config
+  must change the mount and the paths inside `ctrl-exec.conf`. A real
+  `/etc/ctrl-exec` directory makes `ced` and `ctrl-exec-api` refuse to start
+  (exit 78). (T-008, T-047)
+- Allowlisted scripts must be root-owned and not group- or other-writable,
+  down from `/`; a script that is not is refused with the reason. (T-045)
+- A fresh install no longer enables the example auth hook (which allows
+  everything). An existing `ctrl-exec.conf` is kept: if it names the seeded
+  `auth-hook` that ends `exit 0`, the API is still allow-all - check it. (T-046)
+- The API TLS settings are `api_tls_cert` / `api_tls_key`; the old
+  `api_cert` / `api_key` stop the API from starting, naming the new key, and
+  half a TLS pair is refused instead of serving plain HTTP. (T-013)
+- The executor is now `ctrl-exec-executor` (was `ctrl-exec-exec`); upgrades
+  switch over. An agent container needs `SYS_ADMIN`, `SETPCAP` and
+  `apparmor=unconfined` for the executor (see docs/DOCKER.md). (T-008, T-048)
+- Confidential input and output need 0.13 on both ends: upgrade agents first,
+  then switch callers to `--input-fields` (the cert-deploy plugin: agents with
+  `input=fields` and `output=confidential`, then the job). (T-013, T-053)
 
 - **Fixed** docs/SECURITY.md claimed the agent enforces "schema validation (constrained arguments)" and that the surface is "argument-constrained"; core never validates argument values (the schema sidecar is advertised data only). SECURITY.md now says so everywhere and points to the auth hooks (dispatcher hook and the agent's `auth_hook`, both given `ENVEXEC_ARGS_JSON`) as the place to constrain arguments. (T-010)
 - **Fixed** docs/TROUBLESHOOTING.md answered "profiles are optional?" with "Yes"; only the per-script `profile=` is optional, `[profile default]` in agent.conf is mandatory (an undefined profile exits 78). The answer is corrected and a troubleshooting entry added for "script(s) reference an undefined profile" with the `[profile default]` fix. (T-015)
