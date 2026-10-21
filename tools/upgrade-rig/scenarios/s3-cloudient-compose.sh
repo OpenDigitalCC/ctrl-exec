@@ -80,7 +80,7 @@ set_dispatcher "$RIG_DEBS_FROM" entrypoint-0.12.sh from
 compose compose-0.12.yml create > /dev/null 2>&1 || die_setup "compose create failed"
 # The operator's auth hook, in the data volume before first start (the
 # entrypoint names it in the config it seeds).
-docker run --rm --label "$RIG_LABEL" --entrypoint /bin/sh \
+docker run -i --rm --label "$RIG_LABEL" --entrypoint /bin/sh \
     --mount type=volume,src="$PROJ-dispatcher-data",dst=/d "$RIG_IMG" \
     -c 'cat > /d/auth-hook && chmod 755 /d/auth-hook' <<< "$AUTH_HOOK" \
     || die_setup "seeding the auth hook failed"
