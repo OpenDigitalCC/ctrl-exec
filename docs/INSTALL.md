@@ -160,22 +160,37 @@ their version in the `.deb` itself.
 ### Upgrading: the dispatcher config directory
 
 Before 0.13 the dispatcher's config directory was `/etc/ctrl-exec`. From 0.13
-it is `/etc/ctrl-exec-dispatcher`. The packages and `install.sh` move an
-existing directory, rewrite the paths inside `ctrl-exec.conf` (keeping the old
-file as `ctrl-exec.conf.pre-0.13`) and leave `/etc/ctrl-exec` as a symlink to the
-new directory (removed in 0.14).
+it is `/etc/ctrl-exec-dispatcher`. Upgrading needs no manual step.
 
-A real directory still at `/etc/ctrl-exec` is never used silently. `ced` and
-`ctrl-exec-api` refuse to run, exit 78, print both paths on stderr and log
-`ACTION=config-dir RESULT=refused`. This is the case when both directories
-exist (the installer leaves them alone and says so) or when a mount or backup
-restore recreated the old one. To fix it: stop `ctrl-exec-api`, move the
-directory (`mv /etc/ctrl-exec /etc/ctrl-exec-dispatcher`, or merge what you
-need into the existing new directory and remove the old one), and change the
-paths inside `/etc/ctrl-exec-dispatcher/ctrl-exec.conf` (`cert`, `key`, `ca`,
-`auth_hook`, ...) from `/etc/ctrl-exec/` to `/etc/ctrl-exec-dispatcher/`. In a
-container, change the volume mount to `/etc/ctrl-exec-dispatcher` instead; see
-`DOCKER.md`.
+Which directory holds the real config is decided by its content: `ctrl-exec.conf`
+and the CA key `ca.key`. The packages and the container image seed
+`/etc/ctrl-exec-dispatcher` with an example config and no CA.
+
+- **The packages and `install.sh` move a real `/etc/ctrl-exec`** when
+  `/etc/ctrl-exec-dispatcher` is absent or only the seeded example: one rename
+  (a seeded directory is kept as `/etc/ctrl-exec-dispatcher.seeded`), the paths
+  inside `ctrl-exec.conf` pointed at the new directory (the old file kept as
+  `ctrl-exec.conf.pre-0.13`), `/etc/ctrl-exec` left as a symlink to the new
+  directory, and `ACTION=config-migrated` logged. If the move fails, nothing is
+  changed.
+- **Where it is not moved** - `/etc/ctrl-exec` is a mount point (a container
+  volume, a network mount), or the host has not been through the package
+  upgrade - `ced` and `ctrl-exec-api` use it in place, paths unchanged, and log
+  `ACTION=config-dir RESULT=in-place` (`MOUNT=1` for a mount point). It can be
+  moved or remounted at `/etc/ctrl-exec-dispatcher` at leisure.
+- **A fresh or already migrated host** (no `/etc/ctrl-exec`, or the symlink)
+  sees no change.
+
+Anything else with a real `/etc/ctrl-exec` is refused, never guessed: both
+directories holding a CA, an old directory with no CA, or `/etc/ctrl-exec` a
+symlink to somewhere other than the new directory. `ced` and `ctrl-exec-api`
+then exit 78, print both paths on stderr and log
+`ACTION=config-dir RESULT=refused`. To fix it: stop `ctrl-exec-api`, keep the
+directory whose CA your agents trust, merge what you need from the other into
+`/etc/ctrl-exec-dispatcher`, remove `/etc/ctrl-exec` (or replace it with a
+symlink to the new directory), and make the paths inside
+`/etc/ctrl-exec-dispatcher/ctrl-exec.conf` (`cert`, `key`, `ca`, `auth_hook`,
+...) begin `/etc/ctrl-exec-dispatcher/`. See `DOCKER.md` for containers.
 
 ### ctrl-exec group
 

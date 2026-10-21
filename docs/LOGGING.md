@@ -587,6 +587,62 @@ Fields
 ACTION=unpair AGENT=db-01 EXPIRY="Mar 13 12:00:00 2026 GMT"
 ```
 
+### config-dir
+
+Emitted by `ced` and `ctrl-exec-api` at start when `/etc/ctrl-exec` (the
+pre-0.13 config directory) is present and is not the symlink to
+`/etc/ctrl-exec-dispatcher`. Not emitted on a fresh or migrated host.
+
+`RESULT=in-place`: the real config (`ctrl-exec.conf` and `ca.key`) is still at
+`/etc/ctrl-exec` and `/etc/ctrl-exec-dispatcher` is absent or only the seeded
+example. It is used where it is. INFO when `/etc/ctrl-exec` is a mount point
+(a container volume: remount it at the new path at leisure), WARNING otherwise
+(the package upgrade or `install.sh` would have moved it).
+
+`RESULT=refused`: the two directories are ambiguous (both hold a CA, the old
+one holds none, or it is a symlink elsewhere). The process prints both paths on
+stderr and exits 78.
+
+Priority
+: INFO or WARNING (`in-place`), ERR (`refused`)
+
+Fields
+
+| Field | Type | Description |
+| --- | --- | --- |
+| ACTION | string | `config-dir` |
+| RESULT | string | `in-place` or `refused` |
+| OLD | string | The old directory |
+| NEW | string | The new directory |
+| MOUNT | integer | `in-place` only: 1 when the old directory is a mount point |
+| REASON | string | `in-place` only: what to do about it |
+
+```
+ACTION=config-dir MOUNT=1 NEW=/etc/ctrl-exec-dispatcher OLD=/etc/ctrl-exec REASON="config is a mount at /etc/ctrl-exec; it works there, and can be mounted at /etc/ctrl-exec-dispatcher at leisure" RESULT=in-place
+```
+
+### config-migrated
+
+Emitted once, by the package postinst or `install.sh`, when it moved a real
+`/etc/ctrl-exec` to `/etc/ctrl-exec-dispatcher` (leaving a symlink at the old
+name and pointing the paths in `ctrl-exec.conf` at the new directory).
+
+Priority
+: INFO
+
+Fields
+
+| Field | Type | Description |
+| --- | --- | --- |
+| ACTION | string | `config-migrated` |
+| OLD | string | The old directory |
+| NEW | string | The new directory |
+| SEEDED | string | Present when a seeded new directory was kept aside: where |
+
+```
+ACTION=config-migrated NEW=/etc/ctrl-exec-dispatcher OLD=/etc/ctrl-exec SEEDED=/etc/ctrl-exec-dispatcher.seeded
+```
+
 
 ## API-Side Actions
 

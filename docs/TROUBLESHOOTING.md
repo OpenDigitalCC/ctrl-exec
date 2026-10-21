@@ -426,19 +426,22 @@ existing install; no manual steps are needed.
   `/etc/ctrl-exec-dispatcher/`, matching `/etc/ctrl-exec-agent/`. An existing
   directory is moved, the paths inside `ctrl-exec.conf` are updated (the old file
   is kept as `ctrl-exec.conf.pre-0.13`), and `/etc/ctrl-exec` is left as a symlink
-  to the new directory for this release. **The symlink is removed in 0.14**, so
-  update any script, mount or backup job that names `/etc/ctrl-exec`.
+  to the new directory. A config that cannot be moved (a container volume or
+  other mount at `/etc/ctrl-exec`) is used in place and logged as
+  `ACTION=config-dir RESULT=in-place`; see INSTALL.md, *Upgrading: the
+  dispatcher config directory*.
 
 If `ced` or `ctrl-exec-api` exits 78 with `refusing to start: the old config
 directory /etc/ctrl-exec exists and is not a symlink to
-/etc/ctrl-exec-dispatcher`, a real `/etc/ctrl-exec` is still on this host (the
-move has not happened, both directories exist, or a mount or restore recreated
-it). It is refused rather than used so that the dispatcher never runs on the
-wrong config or creates a second CA. Move the directory to
-`/etc/ctrl-exec-dispatcher` (or merge it into the existing one and remove it),
-and change the paths inside `ctrl-exec.conf` from `/etc/ctrl-exec/` to
-`/etc/ctrl-exec-dispatcher/`. In a container, change the mount. The refusal is
-logged as `ACTION=config-dir RESULT=refused`.
+/etc/ctrl-exec-dispatcher`, the host has a real `/etc/ctrl-exec` that is not
+the old layout an upgrade moves (`ctrl-exec.conf` and `ca.key` there, the new
+directory absent or without a CA): both directories hold a CA, the old one has
+no CA, or it is a symlink elsewhere. It is refused rather than guessed so that
+the dispatcher never runs on the wrong config or creates a second CA. Keep the
+directory whose CA your agents trust, merge it into
+`/etc/ctrl-exec-dispatcher`, remove `/etc/ctrl-exec`, and change the paths
+inside `ctrl-exec.conf` from `/etc/ctrl-exec/` to `/etc/ctrl-exec-dispatcher/`.
+The refusal is logged as `ACTION=config-dir RESULT=refused`.
 
 
 ### "Failed to stop ... Unit not loaded" during install

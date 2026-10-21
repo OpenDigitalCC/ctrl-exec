@@ -60,7 +60,8 @@ When set, denied requests return a generic 403 without the specific reason.
 Configuration refused: no listener, an incomplete or unreadable TLS pair, an
 unknown socket group, or an old
 .I /etc/ctrl-exec
-directory.
+directory that cannot be used in place (both it and the new directory hold a
+CA, or it holds none).
 .PP
 Confidential run input should only be sent over the unix socket or TLS.
 .SH SEE ALSO
