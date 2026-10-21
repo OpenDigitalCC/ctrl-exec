@@ -5,6 +5,8 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
+## 0.14.0 — (unreleased)
+
 ## 0.13.2 — scripts.conf edits work without a reload
 
 Upgrading from 0.13.1: nothing to do. An edit to `scripts.conf` or
