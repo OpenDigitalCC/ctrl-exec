@@ -475,6 +475,36 @@ sub load_allowlist_full ($path = undef, $script_dirs = undef, $ownership = 'warn
     return (\%allowlist, \%skipped);
 }
 
+# Skip the entries whose profile agent.conf does not define (T-059): each is
+# removed from $allowlist and given its reason in $skipped, like any other
+# skipped entry, so one bad line never fails the whole load or reload. Every
+# profile, 'default' included, must be defined (no built-in fallback). Returns
+# the names skipped. The executor refuses the same scripts ("undefined
+# profile").
+sub skip_undefined_profiles ($allowlist, $skipped, $config) {
+    my %defined = %{ $config->{profiles} // {} };
+    my @gone;
+    for my $name (sort keys %$allowlist) {
+        my $p = script_profile($name, $allowlist) // 'default';
+        next if exists $defined{$p};
+        delete $allowlist->{$name};
+        $skipped->{$name} = "profile '$p' is not defined in agent.conf";
+        warn "Allowlist: skipping '$name' - profile '$p' is not defined in agent.conf\n";
+        push @gone, $name;
+    }
+    return @gone;
+}
+
+# scripts.conf as the agent uses it: load_allowlist_full, then the entries
+# naming a profile agent.conf lacks are skipped. Dies only when the file
+# cannot be read. Used at start-up, on every reload and by self-check.
+sub load_scripts ($path, $config) {
+    my ($allowlist, $skipped) = load_allowlist_full($path, $config->{script_dirs},
+                                                    $config->{script_ownership});
+    skip_undefined_profiles($allowlist, $skipped, $config);
+    return ($allowlist, $skipped);
+}
+
 # Why an 'input=' value in scripts.conf is not usable, or undef when it is:
 # context, raw, raw:<name> (name as for an input field) or fields.
 sub input_mode_problem ($value) {
@@ -761,34 +791,34 @@ sub validate_profiles ($allowlist, $config) {
 # 'cert', 'key' and 'ca'. A reload keeps the running value of these and says so.
 use constant RESTART_ONLY_KEYS => qw(port cert key ca);
 
-# Plan a SIGHUP reload of agent.conf (and the allowlist it must agree with).
-# Nothing is applied here: the caller swaps the result in only when this returns.
+# Plan a reload of agent.conf and scripts.conf (SIGHUP, or either file changed
+# on disk, T-059). Nothing is applied here: the caller swaps the result in only
+# when this returns.
 #
 #   reload_plan($config_path, $allowlist_path, $old_config, $old_allowlist, $old_skipped)
 #     -> { config => \%new, allowlist => \%allow, skipped => \%why, notes => [ ... ] }
 #
 # Dies, leaving the caller's old config in force, when agent.conf cannot be
-# parsed or validated, or when the allowlist that would be in force names a
-# profile the new agent.conf does not define (fail-closed, as at startup). A
-# scripts.conf that cannot be read does not by itself block the reload: the
-# previous allowlist stays and the plan says so in notes. Restart-only settings
-# that changed keep their running value in the returned config and add a note.
+# parsed or validated. A scripts.conf entry naming a profile the new agent.conf
+# does not define is skipped with that reason (T-059; it used to fail the whole
+# reload). A scripts.conf that cannot be read does not by itself block the
+# reload: the previous allowlist stays, held to the new profiles, and the plan
+# says so in notes. Restart-only settings that changed keep their running value
+# in the returned config and add a note.
 sub reload_plan ($config_path, $allowlist_path, $old_config, $old_allowlist, $old_skipped = undef) {
     my $config = load_config($config_path);   # dies on parse/validation error
     my @notes;
 
-    my ($allowlist, $skipped) = eval {
-        load_allowlist_full($allowlist_path, $config->{script_dirs}, $config->{script_ownership})
-    };
+    my ($allowlist, $skipped) = eval { load_scripts($allowlist_path, $config) };
     unless ($allowlist) {
         my $err = $@ || 'unknown error'; chomp $err;
         push @notes, "allowlist reload failed, keeping the previous allowlist: $err";
-        $allowlist = $old_allowlist;
-        $skipped   = $old_skipped // {};
-    }
-
-    if (my @bad = validate_profiles($allowlist, $config)) {
-        die "script(s) reference an undefined profile: " . join(', ', @bad) . "\n";
+        # Copies: the running allowlist must not change under the caller.
+        $allowlist = { %$old_allowlist };
+        $skipped   = { %{ $old_skipped // {} } };
+        # The previous allowlist is held to the new agent.conf: a script whose
+        # profile it no longer defines is skipped, never run without one.
+        skip_undefined_profiles($allowlist, $skipped, $config);
     }
 
     for my $k (RESTART_ONLY_KEYS) {

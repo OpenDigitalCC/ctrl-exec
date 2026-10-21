@@ -63,16 +63,20 @@ subtest 'broken agent.conf dies, so the caller keeps the old config' => sub {
     like $@, qr/Malformed config line/, 'error names the fault';
 };
 
-subtest 'a scripts.conf naming an undefined profile fails the whole reload' => sub {
+# T-059: one bad line skips only that script; it used to fail the whole reload.
+subtest 'a scripts.conf entry naming an undefined profile is skipped, the rest loads' => sub {
     write_file($conf, conf_text());
-    write_file($allow, "hello = /bin/true profile=ghost\n");
-    my $plan = eval { Exec::Agent::Config::reload_plan($conf, $allow, $old_cfg, $old_allow) };
-    ok !$plan, 'no plan';
-    like $@, qr/undefined profile.*hello -> ghost/s, 'names the script and profile';
+    write_file($allow, "hello = /bin/true profile=ghost\nother = /bin/true\n");
+    my $plan = eval { local $SIG{__WARN__} = sub {};
+                      Exec::Agent::Config::reload_plan($conf, $allow, $old_cfg, $old_allow) };
+    ok $plan, 'plan made' or diag $@;
+    ok !exists $plan->{allowlist}{hello}, 'the entry is not allowlisted';
+    is $plan->{skipped}{hello}, "profile 'ghost' is not defined in agent.conf", 'skipped with the reason';
+    ok exists $plan->{allowlist}{other}, 'the other entry loads';
     write_file($allow, "hello = /bin/true\n");
 };
 
-subtest 'a profile removed from agent.conf that the running allowlist uses fails' => sub {
+subtest 'a profile removed from agent.conf skips the scripts that use it' => sub {
     write_file($conf, conf_text(profiles => "caps = CAP_KILL\n"));
     write_file($allow, "hello = /bin/true\n");
     my $cfg = Exec::Agent::Config::load_config($conf);
@@ -81,9 +85,12 @@ subtest 'a profile removed from agent.conf that the running allowlist uses fails
     # scripts.conf unreadable: previous allowlist (profile 'default') stays and
     # must still be satisfied by the new agent.conf, which no longer defines it
     unlink $allow;
-    my $plan = eval { Exec::Agent::Config::reload_plan($conf, $allow, $cfg, $old_allow) };
-    ok !$plan, 'no plan';
-    like $@, qr/undefined profile/, 'previous allowlist re-checked against new config';
+    my $plan = eval { local $SIG{__WARN__} = sub {};
+                      Exec::Agent::Config::reload_plan($conf, $allow, $cfg, $old_allow) };
+    ok $plan, 'plan made' or diag $@;
+    is $plan->{skipped}{hello}, "profile 'default' is not defined in agent.conf",
+        'previous allowlist re-checked against the new config: skipped';
+    ok exists $old_allow->{hello}, 'the running allowlist is not changed';
     write_file($allow, "hello = /bin/true\n");
 };
 
@@ -92,7 +99,7 @@ subtest 'unreadable scripts.conf keeps the previous allowlist and notes it' => s
     unlink $allow;
     my $plan = eval { Exec::Agent::Config::reload_plan($conf, $allow, $old_cfg, $old_allow) };
     ok $plan, 'plan made' or diag $@;
-    is $plan->{allowlist}, $old_allow, 'previous allowlist kept';
+    is_deeply $plan->{allowlist}, $old_allow, 'previous allowlist kept';
     like $plan->{notes}[0], qr/allowlist reload failed/, 'noted';
     write_file($allow, "hello = /bin/true\n");
 };

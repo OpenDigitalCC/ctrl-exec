@@ -208,18 +208,11 @@ sub mode_serve ($opts) {
     my ($config, $allowlist, $skipped, $schemas);
     eval {
         $config    = Exec::Agent::Config::load_config($CONFIG_PATH);
-        ($allowlist, $skipped) = Exec::Agent::Config::load_allowlist_full(
-            $ALLOWLIST_PATH, $config->{script_dirs}, $config->{script_ownership});
+        # A script naming a profile agent.conf does not define is skipped with
+        # that reason (fail-closed for that script, never run with another
+        # profile); the rest of scripts.conf loads (T-059).
+        ($allowlist, $skipped) = Exec::Agent::Config::load_scripts($ALLOWLIST_PATH, $config);
         $schemas   = Exec::Agent::Schema::load_for_allowlist($allowlist);
-
-        # Fail-closed: every allowlisted script must reference a defined profile
-        # (or the implicit 'default'). A typo'd or undefined profile must not
-        # silently run with default privileges.
-        if (my @bad = Exec::Agent::Config::validate_profiles($allowlist, $config)) {
-            die "script(s) reference an undefined profile: " . join(', ', @bad)
-              . "\nDefine the profile(s) in agent.conf ([profile <name>]) or "
-              . "correct the profile= in scripts.conf.\n";
-        }
         1;
     } or do {
         my $err = $@ || 'unknown configuration error';
@@ -767,9 +760,10 @@ sub mode_self_check {
         }
     }
 
+    # As the agent loads it: an entry naming an undefined profile is listed as
+    # SKIPPED with that reason, like any other skipped entry (T-059).
     my ($allowlist, $skipped) = eval {
-        Exec::Agent::Config::load_allowlist_full($ALLOWLIST_PATH, $config->{script_dirs},
-                                                 $config->{script_ownership})
+        Exec::Agent::Config::load_scripts($ALLOWLIST_PATH, $config)
     };
     if ($@) { print "Allowlist error: $@\n"; exit 1; }
     printf "  Allowlist OK (%d scripts)\n", scalar keys %$allowlist;
@@ -798,13 +792,6 @@ sub mode_self_check {
         my $owner   = Exec::Agent::Config::script_ownership_warning($name, $allowlist);
         my $warn    = defined $owner ? " [warning: $owner]" : '';
         print "  Script '$name': $path  (profile: $profile) [$ok]$warn\n";
-    }
-
-    # Fail-closed: a script referencing an undefined profile is a config error.
-    my @bad = Exec::Agent::Config::validate_profiles($allowlist, $config);
-    if (@bad) {
-        print "  Profile error: undefined profile(s) referenced: ",
-              join(', ', @bad), "\n";
     }
 
     # With executor_socket set every run goes through the executor; if it is

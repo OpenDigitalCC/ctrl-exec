@@ -41,10 +41,14 @@ subtest 'invalid capability -> exit 78 with a clear message, not a loop' => sub 
     like $out, qr/\Q$dir\E/,             'names the offending config file';
 };
 
-subtest 'undefined profile -> exit 78' => sub {
+# T-059: an undefined profile skips only that script; it is not a
+# configuration error (serve then stops only because the rig is not paired).
+subtest 'undefined profile -> that script is skipped, not a configuration error' => sub {
     my ($code, $out) = run_serve($base, "s = /srv/x.sh profile=ghost\n");
-    is $code, 78, 'exits EX_CONFIG (78)';
-    like $out, qr/undefined profile/, 'names the undefined profile';
+    unlike $out, qr/configuration error/i, 'not a configuration error';
+    like $out, qr/skipping 's' - profile 'ghost' is not defined in agent\.conf/,
+        'the entry is skipped with the reason';
+    like $out, qr/not been paired/, 'start-up goes on to the next check';
 };
 
 done_testing;
