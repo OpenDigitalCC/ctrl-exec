@@ -705,7 +705,11 @@ sub mode_ca_fingerprint ($opts, @) {
 
 sub mode_setup_ca {
     print "Setting up dispatcher CA...\n";
-    my $result = Exec::CA::generate_ca(ca_dir => Exec::DispatcherConfig::conf_dir());
+    # The CA's subject carries this dispatcher's id and a random suffix, so it
+    # never shares a name with another dispatcher's CA in an agent's bundle.
+    my $config = eval { _load_config() } // {};
+    my $result = Exec::CA::generate_ca(ca_dir => Exec::DispatcherConfig::conf_dir(),
+        id => _resolve_dispatcher_id($config));
     print "CA created:\n";
     print "  Key:  $result->{ca_key}\n";
     print "  Cert: $result->{ca_cert}\n";

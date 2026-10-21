@@ -18,10 +18,17 @@ sub _default_ca_dir () { return Exec::DispatcherConfig::conf_dir() }
 
 # One-time CA setup - generates ca.key and ca.crt
 # Dies if CA already exists unless force => 1
+#
+# Without an explicit cn the subject is "ctrl-exec CA [<id> ]<8 hex>": the
+# dispatcher id when given (opts id) and a random suffix. Every CA made with
+# the defaults before 0.14 is called "ctrl-exec CA"; an agent that trusts
+# several dispatchers holds their CAs in one bundle, and OpenSSL picks a
+# chain's issuer by subject name first, so two same-named CAs are a trap
+# (T-062). Existing CAs are not regenerated.
 sub generate_ca (%opts) {
     my $days  = $opts{days}  // 3650;
     my $bits  = $opts{bits}  // 4096;
-    my $cn    = $opts{cn}    // 'ctrl-exec CA';
+    my $cn    = $opts{cn}    // default_ca_cn($opts{id});
     my $force = $opts{force} // 0;
     my $ca_dir = $opts{ca_dir} // _default_ca_dir();
 
@@ -58,6 +65,29 @@ sub generate_ca (%opts) {
     _write_serial("$ca_dir/ca.serial", '01');
 
     return { ca_key => $ca_key, ca_cert => $ca_cert };
+}
+
+# The default CA subject CN: "ctrl-exec CA", the dispatcher id when it is a
+# usable token, and 8 random hex digits, so no two dispatcher CAs share a name.
+sub default_ca_cn ($id = undef) {
+    my $cn = 'ctrl-exec CA';
+    $cn .= " $id" if defined $id && $id =~ /\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/;
+    return "$cn " . hex_bytes(4);
+}
+
+# Extensions for every certificate the CA issues (agent and dispatcher):
+# a non-CA leaf with Subject and Authority Key Identifiers. The Authority Key
+# Identifier names the issuing key, so a verifier holding several CAs with the
+# same subject (dispatcher CAs made before 0.14 are all "ctrl-exec CA") picks
+# the right one. OpenSSL 3 adds the identifiers by default; 1.1 adds none and
+# issues a v1 certificate without -extfile.
+sub _leaf_extfile () {
+    my $tmp = File::Temp->new(SUFFIX => '.ext', TMPDIR => 1, UNLINK => 1);
+    print $tmp "basicConstraints=CA:FALSE\n"
+             . "subjectKeyIdentifier=hash\n"
+             . "authorityKeyIdentifier=keyid,issuer\n";
+    close $tmp;
+    return $tmp;
 }
 
 # Generate the ctrl-exec's own key and cert, signed by the CA.
@@ -114,6 +144,7 @@ sub generate_dispatcher_cert (%opts) {
         '-subj', '/CN=ctrl-exec-dispatcher',
     );
 
+    my $ext = _leaf_extfile();
     _run_or_die(
         'openssl', 'x509', '-req',
         '-in',           $disp_csr,
@@ -122,6 +153,7 @@ sub generate_dispatcher_cert (%opts) {
         '-set_serial',   '0x' . random_serial(),
         '-out',          $disp_crt,
         '-days',         $days,
+        '-extfile',      $ext->filename,
     );
 
     unlink $disp_csr;
@@ -181,6 +213,7 @@ sub sign_csr (%opts) {
     my $cert_path = $cert_tmp->filename;
     close $cert_tmp;
 
+    my $ext = _leaf_extfile();
     _run_or_die(
         'openssl', 'x509', '-req',
         '-in',        $csr_path,
@@ -189,6 +222,7 @@ sub sign_csr (%opts) {
         '-set_serial', '0x' . random_serial(),
         '-out',       $cert_path,
         '-days',      $days,
+        '-extfile',   $ext->filename,
     );
 
     my $cert_pem = slurp($cert_path);

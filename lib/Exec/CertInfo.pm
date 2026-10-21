@@ -59,6 +59,77 @@ sub fingerprint_from_path ($path) {
     return $hex;
 }
 
+# As fingerprint_from_path, for a certificate held in a PEM string.
+sub fingerprint_from_pem ($pem) {
+    my $path = _pem_tempfile($pem);
+    return fingerprint_from_path($path);
+}
+
+# The subject of a certificate held in a PEM string, in RFC 2253 form
+# ("CN=ctrl-exec CA d1 1a2b3c4d"), or undef.
+sub subject_from_pem ($pem) {
+    my $path = _pem_tempfile($pem);
+    my $out = `openssl x509 -noout -subject -nameopt RFC2253 -in \Q$path\E 2>/dev/null`;
+    return unless defined $out && $out =~ /^subject=\s*(.*?)\s*$/m;
+    return $1;
+}
+
+# The public key (PEM) of a certificate ('x509') or a certificate request
+# ('req') held in a PEM string, or undef. Two values are compared to tell
+# whether a certificate and a CSR carry the same key.
+sub public_key_from_pem ($pem, $kind = 'x509') {
+    my $path = _pem_tempfile($pem);
+    my $cmd  = $kind eq 'req' ? 'req' : 'x509';
+    my $out = `openssl $cmd -noout -pubkey -in \Q$path\E 2>/dev/null`;
+    return unless $? == 0 && defined $out && $out =~ /-----BEGIN PUBLIC KEY-----/;
+    return $out;
+}
+
+# Whether the certificate $leaf_pem was issued by the CA certificate $ca_pem,
+# with that CA as the only trust anchor (nothing from a system store): full
+# X.509 verification - signature, validity dates, the CA's constraints.
+# Returns undef when it verifies, or the reason it does not.
+sub verify_issued_by ($leaf_pem, $ca_pem) {
+    require IO::Socket::SSL;   # loads and initialises Net::SSLeay
+    my ($leaf, $ca) = map { _x509($_) } $leaf_pem, $ca_pem;
+    unless ($leaf && $ca) {
+        Net::SSLeay::X509_free($_) for grep { $_ } $leaf, $ca;
+        return 'not a readable certificate';
+    }
+    my $store = Net::SSLeay::X509_STORE_new();
+    my $ctx   = Net::SSLeay::X509_STORE_CTX_new();
+    my ($ok, $err);
+    Net::SSLeay::X509_STORE_add_cert($store, $ca);
+    Net::SSLeay::X509_STORE_set_flags($store, Net::SSLeay::X509_V_FLAG_PARTIAL_CHAIN());
+    if (Net::SSLeay::X509_STORE_CTX_init($ctx, $store, $leaf)) {
+        $ok  = Net::SSLeay::X509_verify_cert($ctx) == 1;
+        $err = Net::SSLeay::X509_verify_cert_error_string(
+            Net::SSLeay::X509_STORE_CTX_get_error($ctx));
+    }
+    Net::SSLeay::X509_STORE_CTX_free($ctx);
+    Net::SSLeay::X509_STORE_free($store);
+    Net::SSLeay::X509_free($_) for $leaf, $ca;
+    Net::SSLeay::ERR_clear_error();
+    return if $ok;
+    return $err // 'verification could not run';
+}
+
+sub _x509 ($pem) {
+    my $bio = Net::SSLeay::BIO_new(Net::SSLeay::BIO_s_mem()) or return;
+    Net::SSLeay::BIO_write($bio, $pem // '');
+    my $x509 = Net::SSLeay::PEM_read_bio_X509($bio);
+    Net::SSLeay::BIO_free($bio);
+    return $x509 || undef;
+}
+
+# A private temp file holding $pem (removed at exit), for the openssl CLI.
+sub _pem_tempfile ($pem) {
+    my ($fh, $path) = tempfile(SUFFIX => '.pem', UNLINK => 1);
+    print $fh $pem // '';
+    close $fh;
+    return $path;
+}
+
 # Parse a SHA-256 certificate fingerprint as an operator types or pastes it:
 # "SHA256:" then 64 hex digits, with or without colons between the bytes, in
 # either case. The prefix may be left off, so the colon form openssl prints
