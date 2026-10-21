@@ -576,6 +576,55 @@ The output ends with `Maintenance FAILED in phase(s): ...`, and the cause is
 logged at ERR (`ACTION=maintain PHASE=<phase>`). A failing `ping` or `rotate`
 phase means certificate renewal is stalled - fix it before certs expire.
 
+## A second dispatcher is refused: "predates 0.14"
+
+An agent paired with two dispatchers whose CAs were both made before 0.14
+holds two CAs named `ctrl-exec CA` in `ca.crt`. A dispatcher certificate
+issued before 0.14 on an OpenSSL 1.1 host has no Authority Key Identifier, so
+the agent can find its issuer only by name; it checks the certificate against
+the first CA of that name and refuses it when the other one issued it. Every
+request from that dispatcher fails at the TLS handshake. The refusal is
+correct and stays: the dispatcher is not compatible until its certificate is
+replaced. Upgrading it to 0.14 does not replace the certificate.
+
+What each side shows:
+
+Agent log
+: `ACTION=tls-failure PEER=... REASON="... certificate verify failed - the
+  dispatcher certificate (serial ...) predates 0.14: it has no Authority Key
+  Identifier and its CA has the same name (CN=ctrl-exec CA) as another CA this
+  agent trusts, so it is not compatible. ..."`. `ctrl-exec-agent doctor`
+  notes the CAs with one name (`ca-same-name`).
+
+Dispatcher (0.14 or later)
+: the error for that agent (CLI and API result) ends with "this dispatcher's
+  certificate predates 0.14 (it has no Authority Key Identifier): an agent
+  that trusts another CA with the same name as this dispatcher's CA refuses
+  it; run 'ctrl-exec-dispatcher rotate-cert', then pair that agent again".
+  The dispatcher cannot see the agent's CAs, so it says this whenever its own
+  certificate has no identifier and a connection fails as a refused handshake
+  does. `ctrl-exec-dispatcher doctor` notes the certificate
+  (`dispatcher-cert-no-aki`).
+
+The fix, in this order:
+
+1. On the refused dispatcher, upgrade to 0.14 or later.
+2. On it, run `sudo ctrl-exec-dispatcher rotate-cert`. The new certificate
+   carries the Authority Key Identifier, and the agent's handshake accepts it:
+   the agent already trusts that dispatcher's CA. The rotation broadcast does
+   not reach this agent, which refuses the old certificate, so the agent does
+   not know the new serial yet and answers `forbidden: serial mismatch`.
+3. Pair the agent with that dispatcher again: `sudo ctrl-exec-agent
+   request-pairing --dispatcher <that-dispatcher>` on the agent, `approve` on
+   the dispatcher. The agent keeps its certificate and records the new serial.
+
+Before pairing an agent with a second dispatcher whose CA has the pre-0.14
+name, do steps 1 and 2 on that dispatcher first; the pairing then records the
+new certificate and nothing is refused. The other dispatcher (the first CA of
+the name in `ca.crt`) is not affected either way, and its own pre-0.14
+certificate goes on working; rotating it as well removes the dependence on the
+order of the CAs in `ca.crt`.
+
 ## Certificate rotation with executor-mode agents
 
 Rotating the dispatcher certificate does **not** require re-pairing executor-mode

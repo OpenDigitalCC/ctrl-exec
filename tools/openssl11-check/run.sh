@@ -45,6 +45,7 @@ DEFAULT_TESTS=(
     t/pairing-csr.t t/pairing-timeout.t t/pairing-queue-limit.t
     t/pairing-code-binding.t t/pairing-serial-source.t t/renewal.t
     t/rotation.t t/serial-normalisation.t
+    t/engine-old-cert-hint.t t/agent-doctor.t t/dispatcher-doctor.t
 )
 
 usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; }

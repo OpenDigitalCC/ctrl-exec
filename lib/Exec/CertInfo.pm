@@ -165,6 +165,40 @@ sub x509_role ($x509) {
     return;
 }
 
+# Authority Key Identifier (T-068). Every certificate Exec::CA issues from 0.14
+# carries one; one issued before 0.14 on an OpenSSL 1.1 host has none. Without
+# it OpenSSL picks the issuer of a certificate by name alone, so when a trust
+# store holds two CAs with one name (every dispatcher CA made before 0.14 is
+# called "ctrl-exec CA") the certificate is checked against the first of them
+# and refused when the other issued it.
+my $AKI_OID = '2.5.29.35';
+
+# 1 when the certificate (a Net::SSLeay X509 handle, not freed) carries an
+# Authority Key Identifier, else 0.
+sub x509_has_aki ($x509) {
+    my $n = Net::SSLeay::X509_get_ext_count($x509) // 0;
+    for my $i (0 .. $n - 1) {
+        my $ext = Net::SSLeay::X509_get_ext($x509, $i) or next;
+        my $oid = Net::SSLeay::OBJ_obj2txt(Net::SSLeay::X509_EXTENSION_get_object($ext), 1);
+        return 1 if defined $oid && $oid eq $AKI_OID;
+    }
+    return 0;
+}
+
+# As x509_has_aki, for the first certificate in the file at $path: 1, 0, or
+# undef when the file is unreadable or holds no certificate.
+sub has_aki_path ($path) {
+    require IO::Socket::SSL;   # loads and initialises Net::SSLeay
+    return unless defined $path && -r $path;
+    open my $fh, '<', $path or return;
+    my $pem = do { local $/; <$fh> };
+    close $fh;
+    my $x509 = _x509($pem) or do { Net::SSLeay::ERR_clear_error(); return };
+    my $has  = x509_has_aki($x509);
+    Net::SSLeay::X509_free($x509);
+    return $has;
+}
+
 # Net::SSLeay::X509_STORE_CTX_init, true when the context was initialised.
 # Net::SSLeay before 1.92 (1.88 in Debian 11, with OpenSSL 1.1) returns nothing
 # from it although the context is initialised; testing that empty return as

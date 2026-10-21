@@ -337,7 +337,31 @@ sub trust_checks (%o) {
             . ' dispatcher without --rekey');
     }
 
+    push @f, _same_name_checks($ca);
     push @f, _revocation_checks($o{revoked_path}, scalar @bundle);
+    return @f;
+}
+
+# T-068: CAs in the bundle with one subject name (two dispatcher CAs made before
+# 0.14 are both "ctrl-exec CA"). A dispatcher certificate from one of them that
+# has no Authority Key Identifier (issued before 0.14 on an OpenSSL 1.1 host) is
+# checked against the first CA of the name and refused when the other issued
+# it. Certificates issued from 0.14 carry the identifier and are unaffected, so
+# this is a note: the agent cannot see the dispatchers' certificates, and its
+# log says when one is refused for this reason.
+sub _same_name_checks ($ca) {
+    my $bundle = Exec::Agent::AgentPairing::load_ca_bundle($ca);
+    my @f;
+    for my $group (Exec::Agent::AgentPairing::same_name_cas($bundle)) {
+        push @f, Exec::Doctor::note('ca-same-name', scalar(@$group) . " CAs in $ca have the same name ("
+            . Exec::Agent::AgentPairing::ca_name($group->[0]) . '): ' . join(', ', map { _fpr($_->{fpr}) } @$group)
+            . '. A dispatcher certificate one of them issued before 0.14 (with no Authority Key Identifier)'
+            . ' is refused at the TLS handshake unless the first of them issued it; the log then shows'
+            . ' ACTION=tls-failure with "predates 0.14".',
+            "on such a dispatcher, upgrade to 0.14 or later and run 'sudo ctrl-exec-dispatcher rotate-cert',"
+            . " then pair this agent with it again: sudo ctrl-exec-agent request-pairing --dispatcher $DISPATCHER");
+    }
+    Exec::Agent::AgentPairing::free_ca_bundle($bundle);
     return @f;
 }
 

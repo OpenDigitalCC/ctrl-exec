@@ -566,7 +566,11 @@ ced rotate-cert
 ```
 
 The new certificate is marked with the dispatcher role (0.14; see `setup-ca`),
-so rotating a certificate issued before 0.14 is what marks it.
+so rotating a certificate issued before 0.14 is what marks it. It also carries
+an Authority Key Identifier, which a certificate issued before 0.14 on an
+OpenSSL 1.1 host lacks; upgrading keeps the old certificate until the next
+rotation. An agent that trusts two CAs with one name needs it (see *Two CAs
+with one name* under `request-pairing`).
 
 Agents that were unreachable during the broadcast are retried automatically
 by the internal check loop. Agents that remain unreachable after
@@ -662,7 +666,7 @@ Checks (the `check` id in `--json` in brackets):
 |---|---|
 | Config directory | `ced` and `ctrl-exec-api` refuse to start: `/etc/ctrl-exec` beside `/etc/ctrl-exec-dispatcher` (problem, `config-dir`); a config still at `/etc/ctrl-exec`, or a mount there, used in place (note, `config-dir-in-place`, with the command that moves it). `doctor` runs in both cases; the other modes refuse the first |
 | `ctrl-exec.conf` | cannot be loaded (problem, `config`) |
-| CA and certificate | a fresh install with neither (note, `not-set-up`); `ca.crt` or the dispatcher certificate missing (problem, `ca-cert`, `dispatcher-cert`); the certificate expired or due and not rotated, within 30 days or `cert_renewal_days` (problem, `dispatcher-cert-expiry`) |
+| CA and certificate | a fresh install with neither (note, `not-set-up`); `ca.crt` or the dispatcher certificate missing (problem, `ca-cert`, `dispatcher-cert`); the certificate expired or due and not rotated, within 30 days or `cert_renewal_days` (problem, `dispatcher-cert-expiry`); the certificate has no Authority Key Identifier (issued before 0.14 on an OpenSSL 1.1 host), so an agent that also trusts another CA with this CA's name refuses it - fix `rotate-cert` (note, `dispatcher-cert-no-aki`; see *Two CAs with one name* under `request-pairing`) |
 | Auth hook | `auth_hook` names a missing or non-executable file, so every request is denied (problem, `auth-hook-missing`, `auth-hook-not-executable`); the hook allows everything - after comments, nothing but `exit 0`, as the shipped example (problem, `auth-hook-allow-all`) |
 | API listener | settings `ctrl-exec-api` refuses (problem, `api-config`, with its reason); `api_socket` absent (note, `api-socket-absent`: the API is not running); the socket wider than 0660, or not in `api_socket_group` (problem, `api-socket-mode`, `api-socket-group`) |
 | Registry | an agent paired keeping a certificate another dispatcher's CA issued (`approve` pinned the CA), expiring within 30 days: this dispatcher never renews it (problem, `agent-cert-pinned-expiry`); any other agent whose certificate has expired (problem, `agent-cert-expired`) |
@@ -1388,6 +1392,27 @@ Re-pairing with the dispatcher that issued the certificate also keeps it: that
 dispatcher registers the agent as its own, pins nothing, and goes on renewing
 it.
 
+Two CAs with one name
+: Before 0.14 every dispatcher CA was named `ctrl-exec CA`, and a dispatcher
+  certificate issued before 0.14 on an OpenSSL 1.1 host has no Authority Key
+  Identifier. An agent trusting two such CAs finds the issuer of that
+  certificate by name alone, checks it against the first CA of the name in
+  `ca.crt`, and refuses it at the TLS handshake when the other CA issued it.
+  The refusal is correct (nothing is accepted that does not verify) and stays.
+  The agent logs it as `ACTION=tls-failure` with a `REASON` ending in "the
+  dispatcher certificate (serial ...) predates 0.14: ... so it is not
+  compatible", and with the fix; the dispatcher's error for that agent says
+  its certificate predates 0.14; `doctor` notes it on both sides
+  (`ca-same-name`, `dispatcher-cert-no-aki`). Upgrading the dispatcher keeps
+  its old certificate. The order that avoids the refusal: on that dispatcher,
+  upgrade to 0.14 or later and run `ctrl-exec-dispatcher rotate-cert` first,
+  then pair the agent with it; the new certificate carries the identifier and
+  the agent accepts it. If the agent is already paired and refusing it, do the
+  same and then pair the agent with that dispatcher again (`request-pairing
+  --dispatcher B`, approve on B): the rotation broadcast cannot reach an agent
+  that refuses the certificate it is sent with, so only pairing records the
+  new serial. See TROUBLESHOOTING.md.
+
 When the issuing dispatcher is gone
 : An agent whose certificate A issued, with A removed (`remove-dispatcher`)
   or decommissioned, can no longer have its certificate renewed: only A's CA
@@ -1986,7 +2011,7 @@ Checks (the `check` id in `--json` in brackets):
 | `scripts.conf` | cannot be read (problem, `scripts-conf`); an entry skipped, with the reason and its fix (problem, `script-skipped`); a script missing or not executable (problem, `script-missing`, `script-not-executable`); the ownership rule broken under `script_ownership = warn` - the script runs, `strict` would refuse it - one note per reason naming the scripts (note, `script-ownership`); an unknown option (note, `script-unknown-option`); a `dispatchers=` id no paired dispatcher has (note, `script-unknown-dispatcher`) |
 | Profiles and executor | a script declares a profile while `executor_socket` is unset, so it is not applied (problem, `profiles-not-applied`); `executor_socket` set but the executor not answering, so every run fails (problem, `executor`) |
 | Pairing | not paired (note, `not-paired`); the agent certificate expired (problem, `agent-cert-expired`); the agent not running (note, `agent-not-running`) |
-| Trust | a trusted-map entry whose CA is not in `ca.crt` - the listener refuses that dispatcher (problem, `trust-ca-missing`); a CA in `ca.crt` no entry uses and that did not issue the agent's certificate (note, `trust-ca-unused`); pre-0.14 map lines not yet upgraded (note, `trust-map-old-format`); no dispatcher trusted (note, `trust-none`); the agent's certificate issued by a dispatcher no longer trusted (`remove-dispatcher`), which nobody can renew - a problem when it expires within 30 days, a note otherwise (`agent-cert-issuer-untrusted`); the certificate issued by no CA in `ca.crt` (problem, `agent-cert-issuer`); `ca.crt` with no readable CA (problem, `ca-bundle`) |
+| Trust | a trusted-map entry whose CA is not in `ca.crt` - the listener refuses that dispatcher (problem, `trust-ca-missing`); a CA in `ca.crt` no entry uses and that did not issue the agent's certificate (note, `trust-ca-unused`); pre-0.14 map lines not yet upgraded (note, `trust-map-old-format`); no dispatcher trusted (note, `trust-none`); the agent's certificate issued by a dispatcher no longer trusted (`remove-dispatcher`), which nobody can renew - a problem when it expires within 30 days, a note otherwise (`agent-cert-issuer-untrusted`); the certificate issued by no CA in `ca.crt` (problem, `agent-cert-issuer`); `ca.crt` with no readable CA (problem, `ca-bundle`); CAs in `ca.crt` with the same name, under which a dispatcher certificate issued before 0.14 is refused (note, `ca-same-name`; see *Two CAs with one name* under `request-pairing`) |
 | Revocations | with several CAs in `ca.crt`, lines of `revoked-serials` that name a serial alone (the pre-0.14 form) and so revoke it under every CA (note, `revoked-any-ca`) |
 
 `--fix` also makes the changes that cannot lose data or widen access, and lists

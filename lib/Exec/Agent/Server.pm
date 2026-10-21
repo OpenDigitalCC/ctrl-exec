@@ -893,6 +893,23 @@ sub peer_issuers ($conn, $bundle) {
     return \@fprs;
 }
 
+# The REASON of a tls-failure log line (T-068): $reason is the handshake's own
+# error; $peer_pem the peer certificate that failed verification, as the
+# listener's verify callback recorded it (undef when none failed). When it was
+# refused for the same-name reason (AgentPairing::same_name_refusal) the cause
+# and the fix are added, since OpenSSL's "certificate verify failed" does not
+# say that the dispatcher is too old. The refusal itself is unchanged.
+sub tls_failure_reason ($reason, $peer_pem, $bundle) {
+    return $reason unless defined $peer_pem;
+    my $why = Exec::Agent::AgentPairing::same_name_refusal($peer_pem, $bundle) or return $reason;
+    return "$reason - the dispatcher certificate (serial $why->{serial}) predates 0.14: it has no"
+         . " Authority Key Identifier and its CA has the same name ($why->{issuer}) as another CA"
+         . ' this agent trusts, so it is not compatible. Upgrade that dispatcher to 0.14 or later'
+         . " and run 'ctrl-exec-dispatcher rotate-cert' there (an upgrade alone keeps the old"
+         . " certificate), then pair this agent with it again: sudo ctrl-exec-agent request-pairing"
+         . ' --dispatcher <that-dispatcher>';
+}
+
 # Give the TLS listener a new set of trusted CAs without a restart (T-062):
 # $ctx is the listener's SSL_CTX (from SSL_create_ctx_callback), $bundle the CA
 # bundle as AgentPairing::load_ca_bundle returns it. A fresh certificate store

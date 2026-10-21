@@ -139,9 +139,74 @@ subtest 'same-named CAs, certificates without an AKI: refused, not accepted' => 
     is $rig->request(as => 'trusted'), 200, 'dispatcher 1 (first CA of the name) runs';
     my $from = $rig->log_len;
     isnt $rig->request(as => 'd2') // 0, 200, 'dispatcher 2 is refused';
-    ok $rig->wait_log(qr/ACTION=tls-failure .*certificate verify failed/, 5, $from),
-        'at the handshake, as a verify failure' or diag substr($rig->log_text, $from);
+    my $line = $rig->wait_log(qr/ACTION=tls-failure .*certificate verify failed/, 5, $from);
+    ok $line, 'at the handshake, as a verify failure' or diag substr($rig->log_text, $from);
+    # T-068: the log line says why and what to do.
+    like $line, qr/REASON="[^"]*certificate verify failed - \Qthe dispatcher certificate (serial 7d2) predates 0.14: it has no Authority Key Identifier and its CA has the same name (CN=ca) as another CA this agent trusts, so it is not compatible. Upgrade that dispatcher to 0.14 or later and run 'ctrl-exec-dispatcher rotate-cert'\E/,
+        'the reason names the cause (a pre-0.14 certificate, a same-named CA) and the fix';
+    like $line, qr/an upgrade alone keeps the old certificate\), then pair this agent with it again/,
+        'and that an upgrade alone is not enough';
     ok $rig->alive, 'agent survived';
+    $rig->stop;
+};
+
+# T-068: the same-name explanation is given only for that cause. A certificate
+# no trusted CA signed - from a stranger's CA with the same name, or from a CA
+# with another name - is refused as before, with OpenSSL's reason alone.
+subtest 'a refusal for any other reason carries no same-name explanation' => sub {
+    my $rig = AgentRig->new(second_ca => 1, aki => 0);
+    my $d   = $rig->{dir};
+    AgentRig::_make_ca($d, 'ca3', 'ca');                     # not in the bundle, same name
+    AgentRig::_make_leaf($d, 'ca3', 'stranger', 3003, aki => 0);
+    $rig->start or BAIL_OUT('rig agent did not start: ' . $rig->log_text);
+    for my $as (qw(stranger rogue)) {
+        my $from = $rig->log_len;
+        isnt $rig->request(as => $as) // 0, 200, "$as is refused";
+        my $line = $rig->wait_log(qr/ACTION=tls-failure .*certificate verify failed/, 5, $from);
+        ok $line, "$as: at the handshake" or diag substr($rig->log_text, $from);
+        unlike $line // '', qr/predates 0\.14/, "$as: no same-name explanation";
+    }
+    is $rig->request(as => 'trusted'), 200, 'dispatcher 1 still runs';
+    $rig->stop;
+};
+
+# T-068: the way out. The refused dispatcher, upgraded, rotates its certificate
+# (rotate-cert issues it with Exec::CA::generate_dispatcher_cert, which adds the
+# key identifiers): the agent's TLS handshake now accepts it, as it already
+# trusts that dispatcher's CA. Its new serial is not in the agent's map - the
+# rotation broadcast could not reach an agent that refused the old certificate
+# - so the agent answers 403 until it is paired with that dispatcher again
+# (pairing records the serial under the CA that issued it, as below). Nothing
+# changes for the first dispatcher.
+subtest 'same-named CAs: after rotate-cert and pairing again, the dispatcher runs' => sub {
+    require Exec::CA;
+    require Exec::Agent::AgentPairing;
+    require Exec::CertInfo;
+    my $rig = AgentRig->new(second_ca => 1, aki => 0);
+    my $d   = $rig->{dir};
+    my $f2  = AgentRig::fingerprint("$d/ca2.crt");
+    $rig->start or BAIL_OUT('rig agent did not start: ' . $rig->log_text);
+    isnt $rig->request(as => 'd2') // 0, 200, 'the pre-0.14 certificate is refused';
+
+    mkdir "$d/ca2dir" or die "mkdir: $!";
+    system("cp $d/ca2.crt $d/ca2dir/ca.crt && cp $d/ca2.key $d/ca2dir/ca.key") == 0 or die;
+    Exec::CA::generate_dispatcher_cert(ca_dir => "$d/ca2dir", cert => "$d/d2new.crt",
+        key => "$d/d2new.key", bits => 2048, days => 2);
+    is has_aki("$d/d2new.crt"), 1, 'the rotated certificate carries an AKI';
+
+    my $from = $rig->log_len;
+    is $rig->request(as => 'd2new'), 403, 'the rotated certificate passes the handshake';
+    ok $rig->wait_log(qr/ACTION=serial-reject /, 5, $from),
+        'and is refused only for its serial, not yet in the map' or diag substr($rig->log_text, $from);
+
+    my $serial = Exec::CertInfo::serial_from_path("$d/d2new.crt");
+    Exec::Agent::AgentPairing::add_trusted_dispatcher(path => "$d/dispatchers",
+        serial => $serial, id => 'd2', issuer => $f2, ca_path => $rig->{ca_file});
+    $from = $rig->log_len;
+    $rig->hup;
+    ok $rig->wait_log(qr/ACTION=allowlist-reload/, 5, $from), 'agent reloaded the map';
+    is $rig->request(as => 'd2new'), 200, 'paired again: the dispatcher runs';
+    is $rig->request(as => 'trusted'), 200, 'dispatcher 1 still runs';
     $rig->stop;
 };
 

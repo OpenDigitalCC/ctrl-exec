@@ -153,6 +153,15 @@ sub _cert_checks ($config) {
             . ': rotation has not renewed it (is ctrl-exec-maintenance.timer running?).',
             'sudo ctrl-exec-dispatcher rotate-cert');
     }
+    # T-068: issued before 0.14 on an OpenSSL 1.1 host. It works with every
+    # agent except one that also trusts another CA with this CA's name.
+    if (defined(my $aki = Exec::CertInfo::has_aki_path($cert))) {
+        push @f, Exec::Doctor::note('dispatcher-cert-no-aki', "The dispatcher certificate $cert"
+            . ' predates 0.14: it has no Authority Key Identifier, so an agent that also trusts'
+            . " another CA with the same name as this dispatcher's CA refuses it at the TLS handshake.",
+            'sudo ctrl-exec-dispatcher rotate-cert (then pair again any agent that refused it)')
+            unless $aki;
+    }
     return @f;
 }
 

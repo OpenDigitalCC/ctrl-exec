@@ -1048,6 +1048,19 @@ Fields
 ACTION=tls-failure PEER=203.0.113.5 REASON="SSL accept attempt failed error:..."
 ```
 
+When the peer's certificate failed verification because it has no Authority
+Key Identifier and two CAs in the agent's bundle have its issuer's name, while
+one of them did sign it (a dispatcher certificate issued before 0.14 on an
+OpenSSL 1.1 host, next to another pre-0.14 CA), `REASON` goes on to say so and
+how to fix it: `... certificate verify failed - the dispatcher certificate
+(serial 7d2) predates 0.14: it has no Authority Key Identifier and its CA has
+the same name (CN=ctrl-exec CA) as another CA this agent trusts, so it is not
+compatible. Upgrade that dispatcher to 0.14 or later and run
+'ctrl-exec-dispatcher rotate-cert' there (an upgrade alone keeps the old
+certificate), then pair this agent with it again: sudo ctrl-exec-agent
+request-pairing --dispatcher <that-dispatcher>`. The handshake is refused
+either way; see TROUBLESHOOTING.md.
+
 TLS failures also update the probe rate counter for the peer IP. If the
 probe threshold is crossed, a `rate-block` is emitted and later connections
 from that IP are answered `429` (a paired dispatcher is exempt). A plain TCP

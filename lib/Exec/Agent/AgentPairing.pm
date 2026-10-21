@@ -655,6 +655,64 @@ sub pem_issuers ($pem, $bundle) {
     return @fprs;
 }
 
+# The CAs in $bundle (load_ca_bundle) whose subject name another CA there also
+# has (T-068): a list of groups, one per shared name, each an arrayref of the
+# bundle entries in file order. Two dispatcher CAs made before 0.14 share the
+# name "ctrl-exec CA". Empty when every name is distinct.
+sub same_name_cas ($bundle) {
+    return () unless ref $bundle eq 'ARRAY';
+    my @cas = grep { $_->{x509} } @$bundle;
+    my (@groups, %grouped);
+    for my $i (0 .. $#cas) {
+        next if $grouped{$i};
+        my $name = Net::SSLeay::X509_get_subject_name($cas[$i]{x509});
+        my @same = grep {
+            !$grouped{$_} && Net::SSLeay::X509_NAME_cmp(
+                $name, Net::SSLeay::X509_get_subject_name($cas[$_]{x509})) == 0
+        } $i + 1 .. $#cas;
+        next unless @same;
+        $grouped{$_} = 1 for $i, @same;
+        push @groups, [ map { $cas[$_] } $i, @same ];
+    }
+    return @groups;
+}
+
+# The subject of a CA bundle entry, "CN=ctrl-exec CA" (OpenSSL's one-line form
+# without the leading slash).
+sub ca_name ($ca) {
+    my $n = Net::SSLeay::X509_NAME_oneline(Net::SSLeay::X509_get_subject_name($ca->{x509})) // '';
+    $n =~ s{\A/}{};
+    return $n;
+}
+
+# Whether the certificate $pem, refused by the TLS handshake, was refused for
+# the same-name reason (T-068): it carries no Authority Key Identifier, its
+# issuer's name is that of two or more CAs in $bundle, and one of those CAs
+# did sign it. OpenSSL then checks it against the first CA of that name and
+# fails it when another issued it. Returns { serial => <hex>, issuer => <name> }
+# when so, else undef. This only explains a refusal: it runs after the
+# handshake has failed and decides nothing.
+sub same_name_refusal ($pem, $bundle) {
+    my $x509 = _x509_from_pem($pem // '') or return;
+    my $hit;
+    if (!Exec::CertInfo::x509_has_aki($x509)) {
+        my $issuer = Net::SSLeay::X509_get_issuer_name($x509);
+        my @named  = grep {
+            $_->{x509} && Net::SSLeay::X509_NAME_cmp(
+                $issuer, Net::SSLeay::X509_get_subject_name($_->{x509})) == 0
+        } @$bundle;
+        if (@named > 1 && cert_issuers($x509, \@named)) {
+            my $serial = eval {
+                Net::SSLeay::P_ASN1_INTEGER_get_hex(Net::SSLeay::X509_get_serialNumber($x509))
+            } // '';
+            $hit = { serial => Exec::CertInfo::serial_to_hex($serial), issuer => ca_name($named[0]) };
+        }
+    }
+    Net::SSLeay::X509_free($x509);
+    Net::SSLeay::ERR_clear_error();
+    return $hit;
+}
+
 # Add the CA certificate(s) in $opts{pem} to the bundle at $opts{path}, each
 # once: a certificate whose fingerprint is already in the bundle is not added
 # again. Existing content is kept as it is and the new certificates are

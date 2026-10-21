@@ -552,7 +552,7 @@ sub _dispatch_one (%opts) {
             my $timeout = $config->{read_timeout} // $config->{timeout} // 60;
             $err = ($raw_err =~ /read timeout/i)
                 ? "read timeout after ${timeout}s"
-                : _transport_error($raw_err, $host, $port);
+                : _transport_error($raw_err, $host, $port, $config);
         }
         Exec::Log::log_action('ERR', {
             ACTION => $async ? 'run-async' : 'run',
@@ -646,7 +646,7 @@ sub _result_one (%opts) {
             };
         }
 
-        my $err = _classify_error($resp, $@, $host, $port);
+        my $err = _classify_error($resp, $@, $host, $port, $config);
         Exec::Log::log_action('ERR', {
             ACTION => 'result',
             TARGET => "$host:$port",
@@ -703,7 +703,7 @@ sub _ping_one (%opts) {
     if ($@ || !$resp || !$resp->is_success) {
         my $err = ($resp && $resp->code == 413)
             ? 'request too large'
-            : _classify_error($resp, $@, $host, $port);
+            : _classify_error($resp, $@, $host, $port, $config);
         Exec::Log::log_action('ERR', {
             ACTION => 'ping',
             TARGET => "$host:$port",
@@ -749,7 +749,7 @@ sub _capabilities_one (%opts) {
 
     if ($@ || !$resp || !$resp->is_success) {
         my $err = _transport_error($@ || ($resp ? $resp->status_line : 'no response'),
-                                   $host, $port);
+                                   $host, $port, $config);
         Exec::Log::log_action('ERR', {
             ACTION => 'capabilities',
             TARGET => "$host:$port",
@@ -783,13 +783,13 @@ sub _capabilities_one (%opts) {
 # endpoint-specific code (a ping's 413, a result's 404) before calling this.
 # $at is the request eval's $@, captured at the call site before the decode
 # below can clobber it.
-sub _classify_error ($resp, $at, $host, $port) {
+sub _classify_error ($resp, $at, $host, $port, $config = undef) {
     if ($resp && $resp->code == 403) {
         my $body = _json_hash($resp->content) // {};
         return 'forbidden: ' . ($body->{error} // $resp->status_line);
     }
     return _transport_error($at || ($resp ? $resp->status_line : 'no response'),
-                            $host, $port);
+                            $host, $port, $config);
 }
 
 # Translate a raw transport failure (LWP status_line or $@) into a concise,
@@ -799,7 +799,10 @@ sub _classify_error ($resp, $at, $host, $port) {
 # status. Rewrite only recognised transport causes; anything else (including a
 # genuine HTTP status such as 403) is returned unchanged, so this never mislabels
 # an authorisation response as a network problem.
-sub _transport_error ($raw, $host, $port) {
+#
+# $config (ctrl-exec.conf) is optional: with it, a handshake failure is followed
+# by the hint of _old_cert_hint when this dispatcher's certificate predates 0.14.
+sub _transport_error ($raw, $host, $port, $config = undef) {
     $raw  //= '';
     $host //= 'host';
 
@@ -820,8 +823,15 @@ sub _transport_error ($raw, $host, $port) {
         if $raw =~ /timed \s out | \btimeout\b/xi;
 
     return "TLS handshake with '$host' failed - certificate or trust mismatch"
+         . _old_cert_hint($config)
         if $raw =~ /ssl \s connect | \bssl\b | \btls\b | certificate | handshake |
                     verify \s failed/xi;
+
+    # Under TLS 1.3 the client's side of the handshake is over before the agent
+    # checks the client certificate, so an agent refusing it reaches LWP as a
+    # connection closed with no reply (T-068).
+    return $raw . _old_cert_hint($config)
+        if $raw =~ /closed \s connection \s without \s sending \s any \s data/xi;
 
     return "agent rate-limited this dispatcher (HTTP 429) - its certificate serial "
          . "is not in the agent's trusted-dispatcher map (pair it), or raise "
@@ -829,6 +839,25 @@ sub _transport_error ($raw, $host, $port) {
         if $raw =~ /^\s*429\b/;
 
     return $raw;   # unrecognised - leave as-is (may be a real HTTP status)
+}
+
+# The text added to a failed handshake with an agent when this dispatcher's own
+# certificate (ctrl-exec.conf 'cert') has no Authority Key Identifier, else ''
+# (T-068). Such a certificate was issued before 0.14 on an OpenSSL 1.1 host. An
+# agent that trusts this dispatcher's CA and another CA with the same name (the
+# pre-0.14 default "ctrl-exec CA") checks it against the first CA of that name
+# and refuses it when that is the other one. The dispatcher cannot see which CAs
+# the agent trusts, so the hint says when it applies; the agent's tls-failure
+# log line says whether it did. rotate-cert issues a certificate with the AKI;
+# the agent then needs pairing again, as the rotation broadcast cannot reach
+# an agent that refuses this certificate.
+sub _old_cert_hint ($config) {
+    return '' unless ref $config eq 'HASH' && defined $config->{cert};
+    my $has = Exec::CertInfo::has_aki_path($config->{cert});
+    return '' unless defined $has && !$has;
+    return " - this dispatcher's certificate predates 0.14 (it has no Authority Key Identifier):"
+         . ' an agent that trusts another CA with the same name as this dispatcher\'s CA refuses it;'
+         . " run 'ctrl-exec-dispatcher rotate-cert', then pair that agent again";
 }
 
 # Broadcast a trusted-serial change to agents during cert rotation. POSTs to the
@@ -881,7 +910,7 @@ sub _rotate_one (%opts) {
     my $rtt = sprintf '%.0fms', (Time::HiRes::time() - $t0) * 1000;
 
     if ($@ || !$resp || !$resp->is_success) {
-        my $err = _classify_error($resp, $@, $host, $port);
+        my $err = _classify_error($resp, $@, $host, $port, $config);
         return { host => $host, status => 'error', exit => -1, error => $err, rtt => $rtt };
     }
 

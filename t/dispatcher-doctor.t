@@ -25,6 +25,7 @@ use Exec::Doctor             qw();
 use Exec::Doctor::Dispatcher qw();
 use Exec::DispatcherConfig   qw();
 use Exec::Log                qw();
+require AgentRig;
 
 {
     no warnings 'redefine';
@@ -37,7 +38,9 @@ sub sh    { system(@_) == 0 or die "failed: @_\n" }
 
 # A dispatcher: <root>/etc/ctrl-exec-dispatcher with a CA, a dispatcher
 # certificate valid for $o{days} (400), ctrl-exec.conf ($o{conf} appended), and
-# a registry. The config directories point into <root>.
+# a registry. The config directories point into <root>. The certificate carries
+# key identifiers, as Exec::CA issues it from 0.14 (on OpenSSL 1.1 too); with
+# aki => 0 it has none, as a 1.1 host issued it before 0.14 (AgentRig::key_id_ext).
 sub dispatcher {
     my (%o) = @_;
     my $r = tempdir(CLEANUP => 1);
@@ -47,7 +50,8 @@ sub dispatcher {
      . " -out $d/ca.crt -subj /CN=ca -days 3650 2>/dev/null");
     sh("openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout $d/dispatcher.key"
      . " -out $d/d.csr -subj /CN=d 2>/dev/null");
-    sh("openssl x509 -req -in $d/d.csr -CA $d/ca.crt -CAkey $d/ca.key -set_serial 7"
+    spew("$d/d.ext", "basicConstraints=CA:FALSE\n" . AgentRig::key_id_ext($o{aki} // 1));
+    sh("openssl x509 -req -in $d/d.csr -CA $d/ca.crt -CAkey $d/ca.key -set_serial 7 -extfile $d/d.ext"
      . " -out $d/dispatcher.crt -days " . ($o{days} // 400) . " 2>/dev/null");
     spew("$d/ctrl-exec.conf", "cert = $d/dispatcher.crt\nkey = $d/dispatcher.key\nca = $d/ca.crt\n"
        . "registry_dir = $r/agents\n" . ($o{conf} // ''));
@@ -157,6 +161,17 @@ subtest 'ctrl-exec.conf, fresh install, CA and certificate' => sub {
 
     $x = dispatcher(days => 10, conf => "cert_renewal_days = 5\n");
     ok !by_check(checks($x), 'dispatcher-cert-expiry'), 'not yet due with cert_renewal_days = 5';
+
+    # T-068: a certificate issued before 0.14 on an OpenSSL 1.1 host.
+    $x = dispatcher(aki => 0);
+    agent_record($x, 'agent-01', expiry_in_days(200));
+    $f = checks($x);
+    is_deeply ids($f), ['dispatcher-cert-no-aki'], 'a certificate without an AKI: one finding';
+    is $f->[0]{severity}, 'note', 'a note: it works with every agent but one case';
+    like $f->[0]{what}, qr/\Qpredates 0.14: it has no Authority Key Identifier, so an agent that\E
+                          \Q also trusts another CA with the same name\E/x, 'says why it matters';
+    like $f->[0]{fix}, qr/\Asudo ctrl-exec-dispatcher rotate-cert\b/, 'fix: rotate';
+    is Exec::Doctor::exit_status($f), 0, 'exit 0';
 };
 
 subtest 'the auth hook' => sub {

@@ -579,6 +579,18 @@ MSG
     require IO::Socket::SSL;
     require Exec::TLS;
 
+    # The peer certificate that failed verification in the current handshake,
+    # recorded by the verify callback below so that a tls-failure can say why
+    # (T-068). The callback returns OpenSSL's own verdict ($ok) unchanged: it
+    # observes and decides nothing, and verification is exactly what it was
+    # without it. It runs in this process, during accept_SSL.
+    my $failed_peer;
+    my $verify_cb = sub ($ok, $store, $certname, $error, $cert, $depth, @rest) {
+        $failed_peer //= eval { Net::SSLeay::PEM_get_string_X509($cert) }
+            if !$ok && defined $depth && $depth == 0 && $cert;
+        return $ok;
+    };
+
     my $server = IO::Socket::SSL->new(
         LocalPort        => $config->{port},
         Listen           => 10,
@@ -587,6 +599,7 @@ MSG
         SSL_key_file     => $config->{key},
         SSL_ca_file      => $config->{ca},
         SSL_verify_mode  => IO::Socket::SSL::SSL_VERIFY_PEER(),
+        SSL_verify_callback => $verify_cb,
         # accept() returns the bare TCP connection; the TLS handshake is run on
         # it below (accept_SSL, with a timeout) so a failed or abandoned handshake
         # is attributable to the peer's address.
@@ -689,6 +702,7 @@ MSG
         my $hup_only = POSIX::SigSet->new(POSIX::SIGHUP());
         my $hup_prev = POSIX::SigSet->new;
         POSIX::sigprocmask(POSIX::SIG_BLOCK(), $hup_only, $hup_prev);
+        undef $failed_peer;
         my $shook = $conn->accept_SSL(Timeout => Exec::Agent::Server::HANDSHAKE_TIMEOUT());
         my $errstr  = "$!";
         my $ssl_err = $IO::Socket::SSL::SSL_ERROR // '';
@@ -702,8 +716,10 @@ MSG
             Exec::Log::log_action('WARNING', {
                 ACTION => 'tls-failure',
                 PEER   => $peer,
-                REASON => ($ssl_err || $errstr),
+                REASON => Exec::Agent::Server::tls_failure_reason(
+                    ($ssl_err || $errstr), $failed_peer, $ca_bundle),
             });
+            undef $failed_peer;
             Exec::RateLimit::check($peer, \%rate_state, $rate_config);
             $conn->close(SSL_no_shutdown => 1);
             next;

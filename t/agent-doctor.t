@@ -63,11 +63,38 @@ sub by_check {
     return grep { $_->{check} eq $check } @$findings;
 }
 
+# The rig's second CA has the first one's name, as two CAs made before 0.14
+# have; that is a note (T-068), and the only finding.
 subtest 'a clean agent: nothing to report' => sub {
     my $rig = rig(second_ca => 1);
     my $f = run_checks($rig);
-    is_deeply [ map { $_->{check} } @$f ], [], 'no findings' or diag explain $f;
+    is_deeply [ map { $_->{check} } @$f ], ['ca-same-name'], 'no findings but the same-name note'
+        or diag explain $f;
     is Exec::Doctor::exit_status($f), 0, 'exit 0';
+};
+
+subtest 'CAs with the same name in the bundle (T-068)' => sub {
+    my $rig = rig(second_ca => 1);
+    my $d   = $rig->{dir};
+    my ($f1, $f2) = map { AgentRig::fingerprint("$d/$_.crt") } qw(ca ca2);
+    my @n = by_check(run_checks($rig), 'ca-same-name');
+    is scalar @n, 1, 'one note for the shared name';
+    is $n[0]{severity}, 'note', 'a note: certificates issued from 0.14 are unaffected';
+    like $n[0]{what}, qr/\A2 CAs in \Q$rig->{ca_file}\E have the same name \(CN=ca\): SHA256:$f1, SHA256:$f2\./,
+        'names the CAs and the name';
+    like $n[0]{what}, qr/\QA dispatcher certificate one of them issued before 0.14 (with no Authority Key\E
+                        \Q Identifier) is refused at the TLS handshake\E/x, 'says what it means';
+    like $n[0]{fix}, qr/\Qupgrade to 0.14 or later and run 'sudo ctrl-exec-dispatcher rotate-cert', then\E
+                       \Q pair this agent with it again: sudo ctrl-exec-agent request-pairing\E/x,
+        'fix: rotate, then pair again';
+
+    # A third CA with another name is not part of it.
+    my $bundle = slurp($rig->{ca_file}) . slurp("$d/rogue-ca.crt");
+    spew($rig->{ca_file}, $bundle);
+    @n = by_check(run_checks($rig), 'ca-same-name');
+    is scalar @n, 1, 'still one note';
+    my $fr = AgentRig::fingerprint("$d/rogue-ca.crt");
+    unlike $n[0]{what}, qr/$fr/, 'the other-named CA is not in it';
 };
 
 subtest 'scripts.conf: skipped, missing, not executable, unknown option and dispatcher, profiles' => sub {
