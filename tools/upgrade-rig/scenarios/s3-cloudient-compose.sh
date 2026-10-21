@@ -14,8 +14,12 @@
 # entrypoint: data mounted at /etc/ctrl-exec-dispatcher, /etc/ctrl-exec/ paths
 # in ctrl-exec.conf rewritten), on the same volumes.
 #
-# RESULT: PASS when phase A works; OPERATOR-STEP when only phase B works; FAIL
-# when neither does.
+# After a phase A that works, doctor (T-055) notes the config mounted in place
+# with the remount as its fix, and phase B is run as that fix: doctor then has
+# nothing to say about the directory.
+#
+# RESULT: PASS when phase A works (and phase B, doctor's fix, works too);
+# OPERATOR-STEP when only phase B works; FAIL otherwise.
 # shellcheck disable=SC2016  # shell text for `docker exec bash -c` expands in the container
 set -euo pipefail
 HERE=$(readlink -f "$(dirname "$0")/..")
@@ -118,12 +122,20 @@ else
     A_FAIL=1
 fi
 if [ "$A_FAIL" = 0 ]; then
-    { echo "== dispatcher logs"; docker logs "$DISP" 2>&1 | tail -40; } >> "$EV"
-    if [ "$FAILED" = 0 ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
-    exit "$FAILED"
+    { echo "== dispatcher logs (phase A)"; docker logs "$DISP" 2>&1 | tail -40; } >> "$EV"
+    # doctor (T-055): the volume mounted at the old path works in place; doctor
+    # says so, as a note, with the fix - which phase B, run next, applies.
+    out=$(x "$DISP" 'ctrl-exec-dispatcher doctor 2>&1; echo doctor-exit=$?' || true)
+    { echo "== dispatcher doctor (phase A)"; echo "$out"; } >> "$EV"
+    check "phase A doctor: the config mounted at /etc/ctrl-exec is a note, with the remount fix" "$out" \
+        '^note +The dispatcher config is a mount at /etc/ctrl-exec and is used there; it works as it is\. Fix: mount the volume at /etc/ctrl-exec-dispatcher instead'
+    check_not "phase A doctor: no problem" "$out" '^PROBLEM'
+    check "phase A doctor: exit 0" "$out" 'doctor-exit=0'
 fi
 
 # --- phase B: the operator's documented compose change ---------------------------
+# Needed when phase A failed; after a phase A that works, it is the fix doctor
+# names for the config in place, and must work too.
 note "phase B: compose-0.13.yml (data volume at /etc/ctrl-exec-dispatcher) and the 0.13 entrypoint (CONF_DIR, path rewrite)"
 set_dispatcher "$RIG_DEBS_TO" entrypoint-0.13.sh to-compose-0.13
 { echo "== compose build (TO debs, 0.13 entrypoint)"; compose compose-0.13.yml build dispatcher 2>&1; } >> "$EV" || die_setup "compose build (phase B) failed"
@@ -139,11 +151,19 @@ out=$(x "$DISP" 'ctrl-exec-dispatcher list-agents 2>&1; grep -E "^[[:space:]]*(c
 { echo "== phase B: list-agents and config"; echo "$out"; } >> "$EV"
 check "phase B: ced list-agents still lists the paired agent" "$out" '^agent '
 check "phase B: config paths point at /etc/ctrl-exec-dispatcher" "$out" 'auth_hook = /etc/ctrl-exec-dispatcher/auth-hook'
+out=$(x "$DISP" 'ctrl-exec-dispatcher doctor 2>&1; echo doctor-exit=$?' || true)
+{ echo "== dispatcher doctor (phase B)"; echo "$out"; } >> "$EV"
+check_not "phase B doctor: nothing about the config directory" "$out" '/etc/ctrl-exec '
+check_not "phase B doctor: no problem" "$out" '^PROBLEM'
 { echo "== dispatcher logs"; docker logs "$DISP" 2>&1 | tail -40; } >> "$EV"
 
-if [ "$FAILED" = 0 ]; then
-    echo "RESULT: OPERATOR-STEP (swapping the debs alone fails; works after the compose change)"
-else
+if [ "$FAILED" != 0 ]; then
     echo "RESULT: FAIL"
+    exit 1
 fi
+if [ "$A_FAIL" = 0 ]; then
+    echo "RESULT: PASS"
+    exit 0
+fi
+echo "RESULT: OPERATOR-STEP (swapping the debs alone fails; works after the compose change)"
 exit 1

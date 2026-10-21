@@ -12,7 +12,8 @@
 # agents, as the upgrade notes say). After the agent's upgrade: the services
 # are running, self-check lists every script, the API's discovery lists every
 # script and each one runs under its profile, with no ownership warning text
-# in the run output.
+# in the run output. doctor (T-055), run by the upgrade, reports the layout as a
+# note (what strict would refuse), and its fixes, applied as it says, work.
 # shellcheck disable=SC2016  # shell text for `docker exec bash -c` expands in the container
 set -euo pipefail
 HERE=$(readlink -f "$(dirname "$0")/..")
@@ -65,7 +66,8 @@ check "FROM baseline: agent-cert-check runs as nobody" "$out" 'user=nobody'
 
 # --- upgrade: debs only, nothing else ------------------------------------------
 { echo "== dispatcher dpkg -i (TO)"; install_debs "$DISP" to common dispatcher 2>&1; } >> "$EV" || nok "dispatcher dpkg -i of TO exited non-zero"
-{ echo "== agent dpkg -i (TO)"; install_debs "$AGENT" to common agent 2>&1; } >> "$EV" || nok "agent dpkg -i of TO exited non-zero"
+agent_up=$(install_debs "$AGENT" to common agent 2>&1) || nok "agent dpkg -i of TO exited non-zero"
+{ echo "== agent dpkg -i (TO)"; echo "$agent_up"; } >> "$EV"
 note "TO: dispatcher $(pkg_version "$DISP" dispatcher), agent $(pkg_version "$AGENT" agent)"
 wait_api "$DISP" || true
 wait_agent "$AGENT" || true
@@ -108,6 +110,43 @@ out=$(cli "$DISP" to run agent --script agent-cert-check -- -p 443)
 { echo "== run agent-cert-check (TO)"; echo "$out"; } >> "$EV"
 check "run agent-cert-check: runs as nobody under the default profile" "$out" 'user=nobody args=-p 443'
 check_not "run agent-cert-check: no ownership warning text" "$out" "$OWNERSHIP_TEXT"
+
+# --- doctor (T-055) ---------------------------------------------------------------
+# The upgrade printed doctor's report; the layout that breaks the ownership rule
+# is a note saying what script_ownership = strict would do - never a problem, and
+# the scripts run.
+check "the upgrade ran doctor and printed its summary" "$agent_up" '^ctrl-exec-agent doctor: '
+out=$(x "$AGENT" 'ctrl-exec-agent doctor 2>&1; echo doctor-exit=$?' || true)
+{ echo "== agent doctor (TO)"; echo "$out"; } >> "$EV"
+check "doctor: the group-writable directory is a note naming the 3 scripts and what strict would do" "$out" \
+    "^note +'/srv(/scripts)?' is group-writable: 3 scripts run \(.*\) with a warning \(script_ownership = warn\); script_ownership = strict would refuse them\. Fix: sudo chmod g-w /srv"
+check_not "doctor: no problem" "$out" '^PROBLEM'
+check "doctor: exit 0" "$out" 'doctor-exit=0'
+
+# doctor's fix works: apply each ownership fix as it says (the directory first,
+# then what the next run names) until none is left; the scripts still run, with
+# no warning left in self-check.
+x "$AGENT" 'cat > /tmp/ownership-fixes.pl' <<'PL'
+use JSON::PP;
+local $/;
+for my $f (@{ decode_json(<STDIN>)->{findings} }) {
+    next unless $f->{check} eq 'script-ownership';
+    print "$1\n" if $f->{fix} =~ /^sudo ((?:chmod [go]-w|chown root) [^\s,]+)/;
+}
+PL
+for _ in 1 2 3 4 5 6; do
+    fixes=$(x "$AGENT" 'ctrl-exec-agent doctor --json 2>/dev/null | perl /tmp/ownership-fixes.pl' || true)
+    [ -n "$fixes" ] || break
+    { echo "== applying doctor's fixes"; echo "$fixes"; } >> "$EV"
+    while IFS= read -r cmd; do x "$AGENT" "$cmd" < /dev/null >> "$EV" 2>&1 || nok "doctor's fix failed: $cmd"; done <<< "$fixes"
+done
+out=$(x "$AGENT" 'ctrl-exec-agent doctor 2>&1; ctrl-exec-agent self-check 2>&1' || true)
+{ echo "== agent doctor and self-check after its fixes"; echo "$out"; } >> "$EV"
+check_not "after doctor's fixes: no ownership note left" "$out" 'script_ownership = strict would refuse'
+check_not "after doctor's fixes: self-check shows no ownership warning" "$out" '\[warning: '
+out=$(cli "$DISP" to run agent --script agent-cert-check -- after-fix)
+{ echo "== run agent-cert-check after doctor's fixes"; echo "$out"; } >> "$EV"
+check "after doctor's fixes: agent-cert-check still runs as nobody" "$out" 'user=nobody args=after-fix'
 
 { echo "== agent journal"; journal "$AGENT" 150; echo "== dispatcher journal"; journal "$DISP" 60; } >> "$EV"
 

@@ -5,7 +5,8 @@
 # paired and stays on FROM (dispatchers are upgraded first). Only the
 # dispatcher is upgraded. After it: ced works, ctrl-exec-api is running and
 # serves, the auth hook still decides (a good token runs, a bad one is denied),
-# and the maintenance unit runs.
+# and the maintenance unit runs; doctor, which the upgrade runs, has nothing to
+# report.
 # shellcheck disable=SC2016  # shell text for `docker exec bash -c` expands in the container
 set -euo pipefail
 HERE=$(readlink -f "$(dirname "$0")/..")
@@ -39,7 +40,8 @@ check "FROM baseline: ced run with the token" "$out" 'rig-hello user=nobody'
 [ "$FAILED" = 0 ] || { echo "RESULT: ERROR (the estate does not work on FROM)"; exit 2; }
 
 # --- upgrade the dispatcher: debs only ------------------------------------------
-{ echo "== dispatcher dpkg -i (TO)"; install_debs "$DISP" to common dispatcher 2>&1; } >> "$EV" || nok "dispatcher dpkg -i of TO exited non-zero"
+disp_up=$(install_debs "$DISP" to common dispatcher 2>&1) || nok "dispatcher dpkg -i of TO exited non-zero"
+{ echo "== dispatcher dpkg -i (TO)"; echo "$disp_up"; } >> "$EV"
 note "TO: dispatcher $(pkg_version "$DISP" dispatcher); agent $(pkg_version "$AGENT" agent)"
 wait_api "$DISP" || true
 
@@ -73,6 +75,18 @@ check_not "API run with a wrong token does not run the script" "$out" 'rig-hello
 out=$(x "$DISP" 'systemctl start ctrl-exec-maintenance.service 2>&1; echo start-exit=$?; systemctl is-failed ctrl-exec-maintenance.service' || true)
 { echo "== maintenance unit (TO)"; echo "$out"; } >> "$EV"
 check "the maintenance unit runs" "$out" 'start-exit=0'
+
+# doctor (T-055): the upgrade ran it; the old /etc/ctrl-exec was moved, so it
+# reports nothing about the config directory, and nothing to fix on this estate
+# (the token hook is not the allow-all example).
+check "the upgrade ran doctor and printed its summary" "$disp_up" '^ctrl-exec-dispatcher doctor: '
+out=$(x "$DISP" 'ctrl-exec-dispatcher doctor 2>&1; echo doctor-exit=$?' || true)
+{ echo "== dispatcher doctor (TO)"; echo "$out"; } >> "$EV"
+check "doctor: no problems" "$out" '^ctrl-exec-dispatcher doctor: no problems'
+check_not "doctor: nothing about the config directory (it was moved)" "$out" '/etc/ctrl-exec '
+check "doctor: exit 0" "$out" 'doctor-exit=0'
+out=$(x "$DISP" 'ctrl-exec-dispatcher doctor --json' || true)
+check "doctor --json: one object with ok true" "$out" '^\{.*"ok":true.*"program":"ctrl-exec-dispatcher".*\}$'
 
 { echo "== dispatcher journal"; journal "$DISP" 120; } >> "$EV"
 
