@@ -759,17 +759,20 @@ sub mode_setup_dispatcher {
 
     if (-f $disp_crt) {
         # Replacing the dispatcher cert changes its serial. Every paired agent
-        # stores the dispatcher serial at pairing time and uses it to restrict
-        # /capabilities. After re-keying, agents will reject /capabilities
-        # from the new dispatcher cert until re-paired.
+        # trusts this dispatcher by the serial it stored at pairing time, for
+        # run, ping and capabilities alike, so after a replacement each agent
+        # refuses this dispatcher until it is paired again. rotate-cert is the
+        # way to change the cert without that: it hands agents the new serial
+        # first (T-069).
         my $agents = eval { Exec::Registry::list_agents() } // [];
         my $count  = scalar @$agents;
         if ($count > 0) {
             print "WARNING: Existing dispatcher cert found.\n";
             printf "  %d registered agent%s will require re-pairing after this operation.\n",
                 $count, ($count == 1 ? '' : 's');
-            print "  Operations (run/ping) continue to work until agent certs expire.\n";
-            print "  /capabilities will be rejected by agents until re-paired.\n";
+            print "  Each of them refuses this dispatcher (run, ping, capabilities) until it is\n";
+            print "  paired again. To change the certificate without re-pairing, answer N and run\n";
+            print "  'ctrl-exec-dispatcher rotate-cert' instead.\n";
             print "\nProceed? [y/N]: ";
             my $answer = <STDIN>;
             chomp $answer;
