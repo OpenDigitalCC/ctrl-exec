@@ -264,8 +264,10 @@ subtest 'the registry: agents another dispatcher\'s CA issued, expired agents' =
 
 sub ced {
     my ($x, @args) = @_;
-    my @cmd = ($^X, "-I$Bin/../lib", "-I$Bin/lib", '-MNoSyslog', "$Bin/../bin/ctrl-exec-dispatcher",
-               '--config', $x->{conf}, @args);
+    # -MDispatcherRoot: the config directories are the fixture's, not the host's.
+    local $ENV{CE_TEST_DISPATCHER_ROOT} = $x->{root};
+    my @cmd = ($^X, "-I$Bin/../lib", "-I$Bin/lib", '-MNoSyslog', '-MDispatcherRoot',
+               "$Bin/../bin/ctrl-exec-dispatcher", '--config', $x->{conf}, @args);
     open my $p, '-|', "@cmd 2>/dev/null" or die "run: $!";
     local $/;
     my $out = <$p> // '';

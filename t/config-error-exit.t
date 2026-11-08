@@ -17,9 +17,10 @@ plan skip_all => "$bin not found" unless -e $bin;
 
 my $dir = tempdir(CLEANUP => 1);
 
-# A base agent.conf with valid syntax; cert/key/ca need not exist - config
-# loading/validation runs before the not-paired (cert-present) check.
-my $base = "port = 7443\ncert = /tmp/x\nkey = /tmp/x\nca = /tmp/x\n";
+# A base agent.conf with valid syntax; cert/key/ca must not exist - config
+# loading/validation runs before the not-paired (cert-present) check. They are
+# under the test's own directory, so nothing on the host can supply them.
+my $base = "port = 7443\ncert = $dir/missing\nkey = $dir/missing\nca = $dir/missing\n";
 
 sub run_serve {
     my ($agent_conf, $scripts_conf) = @_;
