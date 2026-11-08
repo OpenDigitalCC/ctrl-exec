@@ -495,8 +495,13 @@ The action's environment under the executor
   context JSON, without input and without the caller's token, in
   `CTRL_EXEC_CONTEXT`, and for `fields` the input directory's path in
   `CTRL_EXEC_INPUT` (see "Confidential input at the executor"). The
-  action gets a fixed `PATH`
-  (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`). Under a
+  action gets `PATH` from `script_path` in the root-owned `agent.conf`, or,
+  when that is unset or invalid, the fixed default
+  (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`). `PATH` is
+  operator configuration: never taken from the request or from the
+  executor's or agent's inherited environment, and a direct run gets the same
+  value. The `PATH` directories are not put through the script ownership walk;
+  `doctor` notes one that is not root-owned or is writable by others. Under a
   profile with `run_as`, it also gets `HOME`, `USER` and `LOGNAME` from the
   agent host's own passwd entry for that user (`pw_dir`, `pw_name`), as `su -`
   and systemd's `User=` set them, so the user's tools (docker, git, ssh) find

@@ -40,6 +40,14 @@ use constant {
     VALLEN       => 4096,   # a path must be shorter than this
 };
 
+# script_path (T-074): the PATH a script gets. Unset, or invalid, it is this
+# fixed default (the PATH of every release before 0.14.1). The executor builds
+# "PATH=<value>" in a VALLEN buffer, so the value is at most VALLEN less
+# "PATH=" and the NUL: 4090 bytes. KEEP IN SYNC WITH src/ctrl-exec-executor.c
+# (DEFAULT_PATH, SCRIPT_PATH_MAX, script_path_problem).
+use constant DEFAULT_SCRIPT_PATH => '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+use constant SCRIPT_PATH_MAX     => VALLEN - length('PATH=') - 1;
+
 # Pasted non-ASCII spaces (T-059): U+00A0, U+2000-U+200A (U+2007 among them)
 # and U+202F, UTF-8 encoded, each become one ASCII space before a scripts.conf
 # or agent.conf line is parsed, so a line copied from a terminal or chat UI
@@ -172,6 +180,19 @@ sub _validate_config ($config, $path) {
     croak "Invalid script_ownership '$config->{script_ownership}' in '$path'"
         . " (expected warn or strict)"
         unless $config->{script_ownership} =~ /\A(?:warn|strict)\z/;
+
+    # script_path (T-074): an invalid value does not stop the agent. It is
+    # reported (here, by doctor and self-check) and scripts get the default
+    # PATH; the executor does the same with its own copy of this file. The raw
+    # value stays in the config; script_path() gives the PATH in force.
+    if (defined $config->{script_path}
+        && defined(my $why = script_path_problem($config->{script_path}))) {
+        Exec::Log::log_action('WARNING', {
+            ACTION => 'config-warn',
+            KEY    => 'script_path',
+            MSG    => "invalid script_path ($why) - using the default PATH",
+        });
+    }
 
     # KEEP IN SYNC WITH src/ctrl-exec-executor.c (set_profile_field / parse_agent_conf).
     # The executor re-derives the same security decision from this same config; if
@@ -567,6 +588,36 @@ sub dispatchers_problem ($value) {
     my $shown = length $value > 40 ? substr($value, 0, 40) . '...' : $value;
     return "its dispatchers= value '$shown' is not a comma-separated list of dispatcher ids"
          . ' (each: a letter or digit, then letters, digits, . _ -, at most 64 characters)';
+}
+
+# Why a script_path value (T-074) is not used, or undef when it is valid: a
+# colon-separated list of directories, at most SCRIPT_PATH_MAX bytes, each
+# entry non-empty, made only of A-Z a-z 0-9 / . _ + -, absolute, and with no
+# '.' or '..' component. The first broken rule is the reason; it names the
+# entry by position, never its bytes (it is logged). The executor applies the
+# same rule with the same words (script_path_problem in
+# src/ctrl-exec-executor.c; t/exec-conformance.t). Whether a directory exists
+# or who owns it is not part of it: doctor reports that.
+sub script_path_problem ($value) {
+    return 'longer than ' . SCRIPT_PATH_MAX . ' bytes' if length $value > SCRIPT_PATH_MAX;
+    my @entries = length $value ? split(/:/, $value, -1) : ('');
+    for my $i (0 .. $#entries) {
+        my ($n, $e) = ($i + 1, $entries[$i]);
+        return "entry $n is empty" unless length $e;
+        return "entry $n has a character outside A-Z a-z 0-9 / . _ + -" if $e =~ m{[^A-Za-z0-9/._+-]};
+        return "entry $n is not an absolute path" unless substr($e, 0, 1) eq '/';
+        return "entry $n has a . or .. component" if grep { $_ eq '.' || $_ eq '..' } split m{/}, $e;
+    }
+    return;
+}
+
+# The PATH a script gets under $config (T-074): script_path when it is set and
+# valid, else DEFAULT_SCRIPT_PATH. Operator config only: nothing from a request
+# or the agent's own environment.
+sub script_path ($config) {
+    my $v = $config->{script_path};
+    return DEFAULT_SCRIPT_PATH unless defined $v && !defined script_path_problem($v);
+    return $v;
 }
 
 # The reason text for a path outside script_dirs, shared by the load-time skip

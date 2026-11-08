@@ -14,6 +14,7 @@ use POSIX  qw(WIFEXITED WEXITSTATUS EINTR EAGAIN EPIPE);
 use Fcntl  qw(F_GETFL F_SETFL O_NONBLOCK);
 use Exec::Log qw();   # _write_stdin logs a stdin-timeout; load it directly rather
                       # than relying on a caller having pulled it in first.
+use Exec::Agent::Config qw();   # DEFAULT_SCRIPT_PATH
 
 
 # Execute a script with no shell, capture stdout/stderr/exit.
@@ -40,12 +41,16 @@ use Exec::Log qw();   # _write_stdin logs a stdin-timeout; load it directly rath
 #                   per-run directory named by CTRL_EXEC_INPUT (CTRL_EXEC_CONTEXT
 #                   as for raw), removed once the script has been reaped
 #                   whatever way it ended. Input values go nowhere else.
+#   $path         - the script's PATH (T-074): Exec::Agent::Config::script_path
+#                   of the agent's config; default DEFAULT_SCRIPT_PATH, the
+#                   fixed PATH. Never taken from the request.
 #
 # Returns hashref: { stdout => '', stderr => '', exit => N }
 #   exit  0+    script exit code
 #   exit  126   killed by signal or exec failed
 #   exit  -1    fork or pipe failure (error in stderr)
-sub run_script ($script_path, $args = undef, $context = undef, $timeout = undef, $in = undef) {
+sub run_script ($script_path, $args = undef, $context = undef, $timeout = undef, $in = undef,
+                $path = undef) {
     $args    //= [];
     $timeout //= 10;
 
@@ -84,14 +89,15 @@ sub run_script ($script_path, $args = undef, $context = undef, $timeout = undef,
         }
     }
 
-    my $result = _run_forked($script_path, $args, $stdin_data, \%extra_env, $timeout);
+    my $result = _run_forked($script_path, $args, $stdin_data, \%extra_env, $timeout,
+                             $path // Exec::Agent::Config::DEFAULT_SCRIPT_PATH);
     # The directory goes whether the script exited, was killed by a signal or
     # failed to start.
     remove_tree($fields_dir) if defined $fields_dir;
     return $result;
 }
 
-sub _run_forked ($script_path, $args, $stdin_data, $extra_env, $timeout) {
+sub _run_forked ($script_path, $args, $stdin_data, $extra_env, $timeout, $path) {
 
     # Pipes for stdin (JSON context), stdout, and stderr
     pipe my $stdin_r,  my $stdin_w  or return _error("pipe(stdin): $!");
@@ -113,7 +119,7 @@ sub _run_forked ($script_path, $args, $stdin_data, $extra_env, $timeout) {
         close $stdout_w;
         close $stderr_w;
 
-        _sanitise_env();
+        _sanitise_env($path);
         $ENV{$_} = $extra_env->{$_} for keys %$extra_env;
 
         # An ignored SIGPIPE survives exec. If the agent was started with it
@@ -251,14 +257,16 @@ sub _error ($msg) {
 # surface. Request context reaches the script on stdin (JSON), never via env.
 # A small whitelist is preserved from the agent's own (operator-controlled,
 # systemd-supplied) environment; everything else, including the dangerous
-# loader/shell variables, is dropped.
-sub _sanitise_env {
+# loader/shell variables, is dropped. PATH is $path: the operator's
+# script_path from root-owned agent.conf, or the fixed default (T-074) - never
+# the agent's own PATH.
+sub _sanitise_env ($path) {
     my %keep;
     for my $k (qw(HOME LANG LC_ALL TZ TERM USER LOGNAME)) {
         $keep{$k} = $ENV{$k} if exists $ENV{$k};
     }
     %ENV = (
-        PATH => '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+        PATH => $path,
         %keep,
     );
 }

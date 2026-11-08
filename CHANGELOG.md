@@ -7,6 +7,8 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 
 ## 0.14.1 — (unreleased)
 
+- **Added** `script_path` in agent.conf: the PATH scripts get, run directly, async or through the executor (both read the same value from the same file and follow a reload), so a host such as NixOS, whose standard directories are almost empty, can name its own (`/run/wrappers/bin:/run/current-system/sw/bin`). Unset, the fixed PATH of earlier releases is used, so existing hosts are unchanged. An invalid value never stops the agent or the executor: both log the reason and use the default; `self-check` shows the PATH in force and `doctor` reports an invalid value, and notes an entry that is missing or whose directory is not root-owned or is writable by others. The PATH never comes from a request or an inherited environment. (T-074)
+
 ## 0.14.0 — (unreleased)
 
 - **Changed** the agent's `ca.crt` is a bundle of dispatcher CAs: pairing appends the dispatcher's CA (once per SHA-256 fingerprint) instead of replacing it, so pairing a dispatcher that has its own CA no longer cuts off the dispatchers already paired; an existing single-CA `ca.crt` is a bundle of one and is used as it is. A renewed agent certificate must come from the CA that issued the current one. (T-061)

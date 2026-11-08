@@ -59,6 +59,8 @@ my $DEFAULT_TTL      = 86400;   # seconds; results older than this are purged
 #   input_tmpdir => $path     (parent of the per-run 'fields' directory)
 #   runs_dir    => $path      (default /var/lib/ctrl-exec-agent/runs)
 #   stdin_timeout => $sec     (passed to Runner::run_script)
+#   path        => $PATH      (the script's PATH, T-074: Config::script_path of
+#                              the agent's config; default the fixed PATH)
 #
 # Returns a hashref:
 #   { ok => 1 }                       job spawned and recorded 'running'
@@ -117,6 +119,7 @@ sub submit (%opts) {
         my $result = Exec::Agent::Runner::run_script(
             $script_path, $args, $context, $timeout,
             { mode => $input_mode, input => $input, tmpdir => $opts{input_tmpdir} },
+            $opts{path},
         );
         _write_record($runs_dir, $owner, $reqid, {
             reqid    => $reqid,

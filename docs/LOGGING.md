@@ -1427,7 +1427,7 @@ Fields
 | ENTRY or KEY | string | The offending entry or config key |
 | MSG | string | Description of the problem |
 
-Two variants:
+Three variants:
 
 `allowed_ips` entry with an unsupported CIDR prefix length:
 
@@ -1439,6 +1439,13 @@ ACTION=config-warn ENTRY=10.0.0.0/20 MSG="unsupported prefix length"
 
 ```
 ACTION=config-warn KEY=rate_limit_volume MSG="invalid format, expected limit/window/block - using defaults"
+```
+
+An invalid `script_path` (T-074); scripts get the default `PATH`, and the
+executor writes the same reason to its stderr:
+
+```
+ACTION=config-warn KEY=script_path MSG="invalid script_path (entry 2 is empty) - using the default PATH"
 ```
 
 ### stdin-timeout

@@ -104,7 +104,10 @@ and why, missing or not executable, the ownership rule under
 .BR "script_ownership = warn" ,
 unknown options,
 .B dispatchers=
-ids no paired control host has), profiles without the executor, the executor
+ids no paired control host has),
+.B script_path
+(invalid, or an entry missing or writable by others), profiles without the
+executor, the executor
 socket, pairing and the certificate, and the trust state (map entries whose CA
 is not in the bundle, CAs no entry uses, an old-format map, a certificate whose
 issuing control host is no longer trusted, revocations under every CA). Each

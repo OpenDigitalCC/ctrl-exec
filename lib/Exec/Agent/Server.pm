@@ -458,6 +458,7 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
             owner         => $dispatcher,
             runs_dir      => _async_runs_dir($config),
             stdin_timeout => $config->{stdin_timeout} // 10,
+            path          => Exec::Agent::Config::script_path($config),
         );
 
         if (!$sub->{ok} && ($sub->{reason} // '') eq 'busy') {
@@ -554,6 +555,7 @@ sub handle_run ($conn, $body, $peer, $allowlist, $config, $trusted, $peer_serial
             $script_path, $args, $context,
             $config->{stdin_timeout} // 10,
             { mode => $input_mode, input => $input, tmpdir => $config->{input_dir} },
+            Exec::Agent::Config::script_path($config),
         );
     }
 

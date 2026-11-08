@@ -66,6 +66,21 @@ ca   = /etc/ctrl-exec-agent/ca.crt
 #
 # script_ownership = strict
 
+# Script PATH (optional): the PATH every script gets, direct or through the
+# executor. Colon-separated absolute directories; each entry made only of
+# A-Z a-z 0-9 / . _ + -, with no empty, . or .. entry; at most 4090 bytes.
+# Unset, scripts get the fixed default
+#   /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# An invalid value does not stop the agent or the executor: both log why
+# (ACTION=config-warn KEY=script_path) and use the default, and
+# `ctrl-exec-agent doctor` reports it. The PATH comes only from this file -
+# never from a request or the agent's own environment. doctor also notes an
+# entry that does not exist, or whose directory (symlinks resolved) is not
+# root-owned or is group- or world-writable.
+#
+# On NixOS, where the default directories are almost empty:
+# script_path = /run/wrappers/bin:/run/current-system/sw/bin
+
 # Privilege separation (optional, recommended).
 # When set, the agent hands each synchronous run to the privileged executor
 # (ctrl-exec-executor.service) over this unix socket; the executor re-derives the
@@ -210,9 +225,10 @@ executor_socket = /run/ctrl-exec-agent/exec.sock
 # e.g. a script owned root:prosody mode 0750 works with run_as=prosody. A run_as
 # user that cannot exec the script gets a clear error (not a silent failure).
 #
-# Environment: the script gets a fixed PATH and, under run_as, HOME, USER and
-# LOGNAME from the run_as user's passwd entry (none of the three for a numeric
-# run_as with no passwd entry). Nothing else from the executor or the request.
+# Environment: the script gets PATH (script_path above, or the default) and,
+# under run_as, HOME, USER and LOGNAME from the run_as user's passwd entry
+# (none of the three for a numeric run_as with no passwd entry). Nothing else
+# from the executor or the request.
 # HOME is not created: give the run_as user a real home if its tools write
 # there, and list that home in writable when the profile sets writable.
 #

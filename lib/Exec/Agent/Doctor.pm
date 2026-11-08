@@ -32,6 +32,7 @@ use Exec::Doctor              qw();
 use Exec::Agent::Config       qw();
 use Exec::Agent::AgentPairing qw();
 use Exec::CertInfo            qw();
+use Cwd                       qw();
 
 # Days before expiry at which a certificate no dispatcher can renew becomes a
 # problem rather than a note.
@@ -102,6 +103,7 @@ sub checks (%o) {
     }
 
     push @f, _script_checks($config, $conf_path, $allow_path);
+    push @f, _script_path_checks($config, $conf_path);
     push @f, _executor_checks($config, $conf_path);
     push @f, _cert_and_trust_checks($config, %o);
     return \@f;
@@ -184,6 +186,53 @@ sub _script_checks ($config, $conf_path, $allow_path) {
             . ' user: ' . join(', ', @p) . '.',
             'set executor_socket = /run/ctrl-exec-agent/exec.sock in agent.conf (sudoedit '
             . _q($conf_path) . ') and run: sudo systemctl enable --now ctrl-exec-executor');
+    }
+    return @f;
+}
+
+# script_path (T-074). An invalid value is a problem: scripts run with the
+# default PATH instead of the one the operator set. For a valid one, each
+# entry's resolved final directory only (the trust walk does not apply: on
+# NixOS /run/current-system/sw/bin resolves into the group-writable
+# /nix/store): a note when it does not exist, or is not root-owned or is
+# group- or world-writable - whoever can write there can put a command on
+# every script's PATH. Notes, because PATH lookups simply skip a missing
+# directory, and tightening a directory can stop whoever writes there.
+sub _script_path_checks ($config, $conf_path) {
+    my $v = $config->{script_path};
+    return () unless defined $v;
+    if (defined(my $why = Exec::Agent::Config::script_path_problem($v))) {
+        return Exec::Doctor::problem('script-path',
+            "script_path in agent.conf is invalid ($why), so scripts run with the default PATH ("
+            . Exec::Agent::Config::DEFAULT_SCRIPT_PATH . ').',
+            'set script_path to absolute directories separated by colons (A-Z a-z 0-9 / . _ + -,'
+            . ' no empty, . or .. entry), or remove it: sudoedit ' . _q($conf_path));
+    }
+    my @f;
+    my %seen;
+    for my $e (split /:/, $v) {
+        next if $seen{$e}++;
+        my $real = Cwd::abs_path($e);
+        unless (defined $real && -d $real) {
+            push @f, Exec::Doctor::note('script-path-entry',
+                "script_path entry '$e' does not exist or is not a directory, so it adds nothing to the scripts' PATH.",
+                "create it, or remove it from script_path: sudoedit " . _q($conf_path));
+            next;
+        }
+        my @st = stat $real or next;
+        my $at = $real eq $e ? "'$e'" : "'$e' (resolves to '$real')";
+        my @why;
+        push @why, "owned by uid $st[4] (not root)" if $st[4] != 0;
+        push @why, 'group-writable' if $st[2] & 020;
+        push @why, 'world-writable' if $st[2] & 002;
+        next unless @why;
+        my @fix;
+        push @fix, 'sudo chown root ' . _q($real) if $st[4] != 0;
+        push @fix, 'sudo chmod go-w ' . _q($real) if $st[2] & 022;
+        push @f, Exec::Doctor::note('script-path-entry',
+            "script_path entry $at is " . join(' and ', @why) . ': whoever can write there can put'
+            . ' a command on every script\'s PATH.',
+            join(', ', @fix) . ', once nobody needs to write there, or remove it from script_path');
     }
     return @f;
 }

@@ -75,7 +75,10 @@ sub perl_resolve {
     # is no limit.
     my $d    = Exec::Agent::Config::script_dispatchers($name, $al);
     my $disp = $d ? join(',', @$d) : '*';
-    return "OK path=$path|profile=$prof|run_as=$runas|nnp=$nnp|caps=$caps|writable=$writ|input=$input|output=$output|ownership=$own|dispatchers=$disp";
+    # script_path (T-074): the PATH the action gets. The two parsers must reach
+    # the same PATH, the default included, for every value valid or not.
+    my $sp = Exec::Agent::Config::script_path($config);
+    return "OK path=$path|profile=$prof|run_as=$runas|nnp=$nnp|caps=$caps|writable=$writ|input=$input|output=$output|ownership=$own|dispatchers=$disp|script_path=$sp";
 }
 
 # --- fixtures: each names the scripts to resolve against one config pair -------
@@ -783,6 +786,79 @@ push @fixtures, (
         ['NBSP before a comment',  "\xc2\xa0# note\n[profile p]\nrun_as = nobody\n", undef],
     )
 );
+
+# --- script_path (T-074): the PATH an action gets. Valid: used. Unset or
+# invalid: the fixed default. An invalid value never stops either parser
+# (report, do not break): both load the file and fall back to the default, and
+# both give the same reason (checked below). The last value wins in both.
+my $SP_DEFAULT = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+my $SP_OK      = 'OK path=/opt/s.sh|profile=default|run_as=nobody|nnp=1|caps=|writable=|input=context|output=stored|ownership=warn|dispatchers=*|script_path=';
+my @SP_CASES = (
+    # label, agent.conf line(s), the PATH both must reach (undef: a config error)
+    ['absent',                       '',                                         $SP_DEFAULT],
+    ['NixOS value',                  "script_path = /run/wrappers/bin:/run/current-system/sw/bin\n",
+                                                                                 '/run/wrappers/bin:/run/current-system/sw/bin'],
+    ['padded',                       "  script_path   =   /usr/bin:/bin   \n",   '/usr/bin:/bin'],
+    ['root only',                    "script_path = /\n",                        '/'],
+    ['all allowed characters',       "script_path = /opt/A-z_0.9+x/bin\n",       '/opt/A-z_0.9+x/bin'],
+    ['double slash, ..x component',  "script_path = /usr//bin:/opt/..x/.y\n",    '/usr//bin:/opt/..x/.y'],
+    ['last value wins (bad, good)',  "script_path = bin\nscript_path = /bin\n",  '/bin'],
+    ['last value wins (good, bad)',  "script_path = /bin\nscript_path = bin\n",  $SP_DEFAULT],
+    ['in [tags] is a tag',           "[tags]\nscript_path = /evil\n",            $SP_DEFAULT],
+    ['in a profile is ignored',      "[profile x]\nscript_path = /evil\n",       $SP_DEFAULT],
+    ['4090 bytes (the bound)',       "script_path = /" . ('a' x 4089) . "\n",    '/' . ('a' x 4089)],
+    ['4091 bytes',                   "script_path = /" . ('a' x 4090) . "\n",    $SP_DEFAULT],
+    ['100000 bytes',                 "script_path = /" . ('a' x 100000) . "\n",  $SP_DEFAULT],
+    ['relative',                     "script_path = usr/bin\n",                  $SP_DEFAULT],
+    ['bare .',                       "script_path = /bin:.\n",                   $SP_DEFAULT],
+    ['leading colon',                "script_path = :/bin\n",                    $SP_DEFAULT],
+    ['trailing colon',               "script_path = /bin:\n",                    $SP_DEFAULT],
+    ['only a colon',                 "script_path = :\n",                        $SP_DEFAULT],
+    ['empty middle entry',           "script_path = /usr/bin::/bin\n",           $SP_DEFAULT],
+    ['. component',                  "script_path = /opt/./bin\n",               $SP_DEFAULT],
+    ['.. component at the end',      "script_path = /opt/bin/..\n",              $SP_DEFAULT],
+    ['space inside',                 "script_path = /usr/my bin\n",              $SP_DEFAULT],
+    ['tab inside',                   "script_path = /usr/bin\t/bin\n",           $SP_DEFAULT],
+    ['whitespace-only value',        "script_path =  \n",                        $SP_DEFAULT],
+    ['tilde',                        "script_path = ~/bin\n",                    $SP_DEFAULT],
+    ['dollar',                       "script_path = /opt/\$HOME/bin\n",          $SP_DEFAULT],
+    ['semicolon',                    "script_path = /bin;/tmp\n",                $SP_DEFAULT],
+    ['UTF-8',                        "script_path = /srv/caf\xc3\xa9\n",         $SP_DEFAULT],
+    ['Latin-1 byte',                 "script_path = /srv/caf\xe9\n",             $SP_DEFAULT],
+    ['pasted NBSP is a space',       "script_path = /usr/bin\xc2\xa0/bin\n",     $SP_DEFAULT],
+    ['CR before the newline',        "script_path = /usr/bin\r\n",               '/usr/bin'],
+    ['inline comment',               "script_path = /usr/bin # tools\n",         $SP_DEFAULT],
+    ['empty value',                  "script_path =\n",                          undef],
+);
+push @fixtures, map { my ($lbl, $body, $want) = @$_; +{
+    label   => "script_path: $lbl",
+    agent   => $REQUIRED . $body . "[profile default]\nrun_as = nobody\n",
+    scripts => "s = /opt/s.sh\n",
+    names   => [qw(s)],
+    expect  => { s => defined $want ? $SP_OK . $want : 'CONFIG-ERROR' },
+} } @SP_CASES;
+
+# The reason for an invalid value, word for word: the executor's stderr and
+# the front end's script_path_problem must agree, so an operator reading
+# either log sees the same thing.
+subtest 'script_path: the same reason from both parsers' => sub {
+    my $s = wf("s = /opt/s.sh\n");
+    for my $c (@SP_CASES) {
+        my ($lbl, $body, $want) = @$c;
+        next unless defined $want && $want eq $SP_DEFAULT && $body =~ /\S/;
+        my $a = wf($REQUIRED . $body . "[profile default]\nrun_as = nobody\n");
+        my $raw;
+        { open my $fh, '<', $a or die; while (<$fh>) {
+            Exec::Agent::Config::_ascii_spaces(\$_);
+            last if /^\[/; $raw = $1 if /^\s*script_path\s*=\s*(.+?)\s*$/ } }
+        next unless defined $raw;          # absent at top level: nothing to explain
+        my $why = Exec::Agent::Config::script_path_problem($raw);
+        next unless defined $why;          # valid, the earlier value was the bad one
+        my $err = `\Q$BIN\E resolve \Q$a\E \Q$s\E s 2>&1 >/dev/null`;
+        like $err, qr/\Qinvalid script_path in '$a' ($why) - using the default PATH\E/,
+            "$lbl: '$why' from both";
+    }
+};
 
 for my $fx (@fixtures) {
     my $a = wf($fx->{agent});

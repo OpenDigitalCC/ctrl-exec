@@ -301,6 +301,42 @@ sub cea {
     return ($out, $? >> 8, slurp($err));
 }
 
+subtest 'script_path (T-074): an invalid value, and entries to look at' => sub {
+    my $rig = rig(second_ca => 1);
+    my $d   = $rig->{dir};
+
+    $rig->set_conf("script_path = /usr/bin::/bin\n");
+    my @p = by_check(run_checks($rig), 'script-path');
+    is scalar @p, 1, 'invalid: one finding';
+    is $p[0]{severity}, 'problem', 'a problem: the PATH the operator set is not used';
+    like $p[0]{what}, qr/\Qscript_path in agent.conf is invalid (entry 2 is empty), so scripts run with the\E
+                        \Q default PATH (\E/x, 'says why and what is used instead';
+    like $p[0]{fix}, qr/or remove it: sudoedit \S+agent\.conf$/, 'fix: edit agent.conf';
+
+    mkdir "$d/own" or die;    chmod 0755, "$d/own";
+    mkdir "$d/gw"  or die;    chmod 0775, "$d/gw";
+    symlink "$d/gw", "$d/gwlink" or die;
+    $rig->set_conf("script_path = /usr/bin:$d/missing:$d/own:$d/gwlink:/tmp:/bin\n");
+    my $f = run_checks($rig);
+    is scalar(by_check($f, 'script-path')), 0, 'valid: no problem';
+    my @n = by_check($f, 'script-path-entry');
+    is_deeply [ map { $_->{severity} } @n ], [ ('note') x 4 ], 'four notes, nothing else'
+        or diag explain \@n;
+    my ($miss, $own, $gw, $tmp) = @n;
+    like $miss->{what}, qr/\Qentry '$d\/missing' does not exist\E/, 'a missing entry';
+    like $own->{what}, qr/\Qentry '$d\/own' is owned by uid $> (not root)\E/, 'not root-owned';
+    is $own->{fix}, "sudo chown root $d/own, once nobody needs to write there, or remove it from script_path",
+        'fix: chown root';
+    like $gw->{what}, qr/\Qentry '$d\/gwlink' (resolves to '$d\/gw') is owned by uid $> (not root) and group-writable\E/,
+        'the resolved final directory is checked, and named';
+    like $gw->{fix}, qr/\Asudo chown root \S+gw, sudo chmod go-w \S+gw,/, 'fix: on the resolved directory';
+    like $tmp->{what}, qr/\Qentry '\/tmp' is group-writable and world-writable\E/, 'a world-writable entry (1777)';
+    is Exec::Doctor::exit_status($f), 0, 'notes only: exit 0';
+
+    $rig->set_conf('');
+    is scalar(grep { $_->{check} =~ /^script-path/ } @{ run_checks($rig) }), 0, 'unset: nothing';
+};
+
 subtest 'CLI: exit status, report, log' => sub {
     my $rig = rig(second_ca => 1);
     my ($out, $rc, $log) = cea($rig, 'doctor');

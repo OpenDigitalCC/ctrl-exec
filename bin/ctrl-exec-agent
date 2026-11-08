@@ -1117,6 +1117,16 @@ sub mode_self_check {
         . ($config->{script_ownership} eq 'strict'
             ? " (scripts that break the ownership rule are refused)\n"
             : " (scripts that break the ownership rule run, with a warning)\n");
+    # The PATH scripts get (T-074): script_path, or the default when it is
+    # unset or invalid (then why; doctor gives the fix).
+    {
+        my $sp  = $config->{script_path};
+        my $why = defined $sp ? Exec::Agent::Config::script_path_problem($sp) : undef;
+        print "  Script PATH: " . Exec::Agent::Config::script_path($config)
+            . (!defined $sp   ? " (the default; script_path unset)\n"
+             : defined $why   ? " (the default; script_path is INVALID - $why)\n"
+             :                  " (script_path)\n");
+    }
     for my $name (sort keys %$skipped) {
         print "  Script '$name': SKIPPED - $skipped->{$name}\n";
     }

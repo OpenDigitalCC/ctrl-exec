@@ -1039,6 +1039,33 @@ Key settings:
   script_ownership = strict
   ```
 
+`script_path`
+: The `PATH` every script gets, run directly or through the executor:
+  colon-separated absolute directories. Unset, it is the fixed default
+  `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, as before
+  0.14.1. Each entry must be non-empty, made only of `A-Z a-z 0-9 / . _ + -`,
+  start with `/` and have no `.` or `..` component; the whole value is at most
+  4090 bytes (the executor holds `PATH=<value>` in a 4096-byte buffer).
+
+  An invalid value does not stop the agent or the executor. Scripts get the
+  default `PATH`; the agent logs
+  `ACTION=config-warn KEY=script_path MSG="invalid script_path (<why>) - using the default PATH"`
+  at WARNING and the executor writes the same reason to its stderr (journal),
+  each time it loads `agent.conf`. `ctrl-exec-agent self-check` shows the
+  `PATH` in force (`Script PATH:`), and `ctrl-exec-agent doctor` reports the
+  invalid value as a problem. The agent and the executor read the same value
+  from the same file, and follow a change on reload like the other keys.
+
+  The directories are not put through the script ownership walk (on NixOS
+  `/run/current-system/sw/bin` resolves into the group-writable `/nix/store`,
+  and the default directories are not checked either). `doctor` notes an
+  entry that does not exist, or whose directory, symlinks resolved, is not
+  root-owned or is group- or world-writable.
+
+  ```
+  script_path = /run/wrappers/bin:/run/current-system/sw/bin
+  ```
+
 `auth_hook`
 : Path to an executable called before every `run` request on the agent,
   after allowlist validation. Enables independent downstream token validation
@@ -1300,7 +1327,7 @@ the agent serving a half-applied or fail-open configuration. A `scripts.conf`
 entry naming a profile `agent.conf` does not define skips only that script
 (`script not permitted: profile '<name>' is not defined in agent.conf`); the
 rest loads. On a successful reload `allowed_ips`,
-the rate-limit settings, `max_children`, `auth_hook`, `script_dirs`, `[tags]`,
+the rate-limit settings, `max_children`, `auth_hook`, `script_dirs`, `script_path`, `[tags]`,
 `[profile ...]` blocks, `executor_socket` and the other keys apply to
 subsequent connections. `port`, `cert`, `key` and `ca` cannot change without a
 restart (the listener is bound and holds that identity): the running values are
@@ -1948,6 +1975,8 @@ Checks performed:
   listed as `SKIPPED` with the reason
 - The `script_ownership` mode; with `warn`, a script that breaks the
   ownership rule is listed with `[warning: <reason>]`
+- The `PATH` scripts get (`Script PATH:`): `script_path`, or the default
+  when it is unset or invalid (with the reason)
 - Pairing certificates are present and not expired
 - The trusted dispatchers (`Dispatchers:` line); `NONE trusted` when the agent
   would refuse every caller
@@ -2043,6 +2072,7 @@ Checks (the `check` id in `--json` in brackets):
 |---|---|
 | `agent.conf` | cannot be loaded, so the agent does not start (problem, `agent-conf`) |
 | `scripts.conf` | cannot be read (problem, `scripts-conf`); an entry skipped, with the reason and its fix (problem, `script-skipped`); a script missing or not executable (problem, `script-missing`, `script-not-executable`); the ownership rule broken under `script_ownership = warn` - the script runs, `strict` would refuse it - one note per reason naming the scripts (note, `script-ownership`); an unknown option (note, `script-unknown-option`); a `dispatchers=` id no paired dispatcher has (note, `script-unknown-dispatcher`) |
+| `script_path` | an invalid value, so scripts run with the default `PATH` (problem, `script-path`); an entry that does not exist, or whose directory (symlinks resolved) is not root-owned or is group- or world-writable (note, `script-path-entry`) |
 | Profiles and executor | a script declares a profile while `executor_socket` is unset, so it is not applied (problem, `profiles-not-applied`); `executor_socket` set but the executor not answering, so every run fails (problem, `executor`) |
 | Pairing | not paired (note, `not-paired`); the agent certificate expired (problem, `agent-cert-expired`); the agent not running (note, `agent-not-running`) |
 | Trust | a trusted-map entry whose CA is not in `ca.crt` - the listener refuses that dispatcher (problem, `trust-ca-missing`); a CA in `ca.crt` no entry uses and that did not issue the agent's certificate (note, `trust-ca-unused`); pre-0.14 map lines not yet upgraded (note, `trust-map-old-format`); no dispatcher trusted (note, `trust-none`); the agent's certificate issued by a dispatcher no longer trusted (`remove-dispatcher`), which nobody can renew - a problem when it expires within 30 days, a note otherwise (`agent-cert-issuer-untrusted`); the certificate issued by no CA in `ca.crt` (problem, `agent-cert-issuer`); `ca.crt` with no readable CA (problem, `ca-bundle`); CAs in `ca.crt` with the same name, under which a dispatcher certificate issued before 0.14 is refused (note, `ca-same-name`; see *Two CAs with one name* under `request-pairing`) |

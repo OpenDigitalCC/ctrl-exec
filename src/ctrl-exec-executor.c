@@ -106,7 +106,18 @@ typedef struct {
                                       yields no directories: deny all */
     int       ownership_strict;    /* script_ownership = strict (T-054);
                                       0 = warn, the default */
+    char      path_env[VALLEN];    /* "PATH=<value>" for the action: script_path
+                                      when valid, else DEFAULT_PATH (T-074) */
 } config_t;
+
+/* script_path (T-074): the action's PATH. Unset or invalid, it is this fixed
+ * default, the PATH of every release before 0.14.1. The value is held as
+ * "PATH=<value>" in path_env[VALLEN], so it is at most VALLEN less "PATH=" and
+ * the NUL: 4090 bytes. KEEP IN SYNC WITH Exec::Agent::Config
+ * (DEFAULT_SCRIPT_PATH, SCRIPT_PATH_MAX, script_path_problem). */
+#define DEFAULT_PATH    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+#define PATH_ENV_PREFIX "PATH="
+#define SCRIPT_PATH_MAX (VALLEN - sizeof(PATH_ENV_PREFIX))
 
 /* ---- small helpers ---------------------------------------------------- */
 
@@ -307,6 +318,50 @@ static int parse_kv(char *l, char **k, char **v) {
     return 1;
 }
 
+/* Why a script_path value is not used, into why[n], or 0 (valid). The rule
+ * and the words are Exec::Agent::Config::script_path_problem's: at most
+ * SCRIPT_PATH_MAX bytes; colon-separated entries, each non-empty, made only of
+ * A-Z a-z 0-9 / . _ + -, absolute, with no "." or ".." component; the first
+ * broken rule is the reason, naming the entry by position. The character test
+ * is explicit ranges, not isalnum, so no locale can widen it. */
+static int sp_char_ok(unsigned char ch) {
+    return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')
+        || ch == '/' || ch == '.' || ch == '_' || ch == '+' || ch == '-';
+}
+
+static int script_path_problem(const char *v, char *why, size_t n) {
+    if (strlen(v) > SCRIPT_PATH_MAX) {
+        snprintf(why, n, "longer than %zu bytes", (size_t)SCRIPT_PATH_MAX);
+        return 1;
+    }
+    int idx = 1;
+    for (const char *e = v; ; idx++) {
+        const char *end = strchr(e, ':');
+        if (!end) end = e + strlen(e);
+        size_t el = (size_t)(end - e);
+        if (el == 0) { snprintf(why, n, "entry %d is empty", idx); return 1; }
+        for (size_t i = 0; i < el; i++)
+            if (!sp_char_ok((unsigned char)e[i])) {
+                snprintf(why, n, "entry %d has a character outside A-Z a-z 0-9 / . _ + -", idx);
+                return 1;
+            }
+        if (e[0] != '/') { snprintf(why, n, "entry %d is not an absolute path", idx); return 1; }
+        for (size_t i = 0; i < el; ) {             /* components between slashes */
+            size_t j = i;
+            while (j < el && e[j] != '/') j++;
+            size_t cl = j - i;
+            if ((cl == 1 && e[i] == '.') || (cl == 2 && e[i] == '.' && e[i + 1] == '.')) {
+                snprintf(why, n, "entry %d has a . or .. component", idx);
+                return 1;
+            }
+            i = j + 1;
+        }
+        if (!*end) break;
+        e = end + 1;
+    }
+    return 0;
+}
+
 static int parse_agent_conf(const char *path, config_t *c) {
     FILE *f = fopen(path, "re");
     if (!f) { fprintf(stderr, "Cannot open config '%s'\n", path); return -1; }
@@ -323,6 +378,12 @@ static int parse_agent_conf(const char *path, config_t *c) {
      * as the Perl parser keeps the last value and validates it at the end. */
     char own[NAMELEN] = "warn";
     int own_long = 0;
+    /* script_path: the last value wins, as in the Perl parser; it is checked
+     * when read (the line buffer is reused), and an invalid one is reported
+     * after the loop. It never makes the file a config error. */
+    int sp_bad = 0;
+    char sp_why[128] = "";
+    snprintf(c->path_env, sizeof(c->path_env), "%s%s", PATH_ENV_PREFIX, DEFAULT_PATH);
 
     while ((len = getline(&line, &cap, f)) != -1) {
         if (len && line[len - 1] == '\n') line[--len] = '\0';
@@ -382,6 +443,11 @@ static int parse_agent_conf(const char *path, config_t *c) {
             } else if (strcmp(k, "script_ownership") == 0) {
                 own_long = strlen(v) >= sizeof(own);
                 snprintf(own, sizeof(own), "%s", v);
+            } else if (strcmp(k, "script_path") == 0) {
+                sp_bad = script_path_problem(v, sp_why, sizeof(sp_why));
+                /* fits: script_path_problem bounds v to SCRIPT_PATH_MAX */
+                snprintf(c->path_env, sizeof(c->path_env), "%s%s", PATH_ENV_PREFIX,
+                         sp_bad ? DEFAULT_PATH : v);
             }
         }
         /* keys in any other section are ignored, as in the Perl parser */
@@ -397,6 +463,10 @@ static int parse_agent_conf(const char *path, config_t *c) {
                     own, own_long ? "..." : "", path);
             rc = -1;
         }
+        /* Reported, never fatal (T-074): the action gets DEFAULT_PATH. */
+        if (rc == 0 && sp_bad)
+            fprintf(stderr, "ctrl-exec-executor: invalid script_path in '%s' (%s) - using the default PATH\n",
+                    path, sp_why);
     }
     return rc;
 }
@@ -844,9 +914,10 @@ static int cmd_resolve(const char *agent_conf, const char *scripts_conf,
 
     /* dispatchers=* : no limit, every trusted dispatcher (T-063). */
     printf("OK path=%s|profile=%s|run_as=%s|nnp=%d|caps=%s|writable=%s|input=%s|output=%s"
-           "|ownership=%s|dispatchers=%s\n",
+           "|ownership=%s|dispatchers=%s|script_path=%s\n",
            spath, pname, p->run_as, p->nnp, caps, writ, imode, omode,
-           c->ownership_strict ? "strict" : "warn", dlist[0] ? dlist : "*");
+           c->ownership_strict ? "strict" : "warn", dlist[0] ? dlist : "*",
+           c->path_env + strlen(PATH_ENV_PREFIX));
     free(c);
     return 0;
 }
@@ -1528,7 +1599,8 @@ static void close_inherited_fds(void) {
  * ownership rule, 0 (warn) runs it. */
 static int run_with_profile(const profile_t *p, const char *path, char *const argv[],
                             const char *indata, size_t inlen, int allow_unpriv,
-                            int ownership_strict, const run_input_t *ri,
+                            int ownership_strict, const char *path_env,
+                            const run_input_t *ri,
                             int *exit_out, buf_t *out, buf_t *err) {
     int o[2], e[2], in[2];
     if (pipe(o) || pipe(e) || pipe(in)) return -1;
@@ -1643,7 +1715,7 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
         }
         /* Sanitised environment: the executor never trusts its own inherited
          * env for the action. The script receives request context on stdin
-         * (not via the environment), so a fixed PATH avoids passing the
+         * (not via the environment), so a set PATH avoids passing the
          * loader and shell variables (LD_PRELOAD, LD_LIBRARY_PATH, BASH_ENV,
          * IFS, PERL5LIB, ...) as attack surface to script interpreters running
          * under the profile. Under a run_as user with a passwd entry, HOME,
@@ -1652,10 +1724,13 @@ static int run_with_profile(const profile_t *p, const char *path, char *const ar
          * enters the environment. For input=raw and input=fields (T-013) the
          * front end's context JSON (no input, no caller token) is added as
          * CTRL_EXEC_CONTEXT, and for fields the directory path as
-         * CTRL_EXEC_INPUT; input values never enter the environment. */
+         * CTRL_EXEC_INPUT; input values never enter the environment. PATH is
+         * path_env: agent.conf script_path, from this process's own root-owned
+         * copy, or DEFAULT_PATH (T-074) - never the request or the executor's
+         * inherited environment. */
         char *clean_env[8];
         int ne = 0;
-        clean_env[ne++] = (char *)"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+        clean_env[ne++] = (char *)path_env;
         if (ue.set) {
             clean_env[ne++] = ue.home;
             clean_env[ne++] = ue.user;
@@ -1949,7 +2024,7 @@ static void handle_conn(int cfd, config_t *cfg, const char *scripts_conf,
             } else {
                 argv[0] = spath;                      /* argv[0] = resolved path */
                 run_with_profile(p, spath, argv, feed, feedlen, allow_unpriv,
-                                 cfg->ownership_strict,
+                                 cfg->ownership_strict, cfg->path_env,
                                  (ri.env[0] || ri.dir) ? &ri : NULL, &ecode, &out, &err);
             }
             /* The action has been reaped (or never started): the directory goes
