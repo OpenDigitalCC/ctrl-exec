@@ -2,8 +2,10 @@
 # a direct run, a run under a profile through the executor, and adoption of a
 # renewed certificate.
 #
-# Scripts use only absolute paths (#!/bin/sh and /run/current-system/sw/bin/...):
-# the test must not depend on script_path being honoured by the agent.
+# hello and whoami use only absolute paths (#!/bin/sh and
+# /run/current-system/sw/bin/...); barecmd calls `id` by bare name, so it runs
+# only when the module's script_path (T-074) reaches the script, directly and
+# through the executor.
 { pkgs, lib, ... }:
 
 let
@@ -12,6 +14,11 @@ let
   hello = pkgs.writeText "hello.sh" ''
     #!/bin/sh
     echo "hello from $(/run/current-system/sw/bin/id -un)"
+  '';
+
+  barecmd = pkgs.writeText "barecmd.sh" ''
+    #!/bin/sh
+    echo "bare-command user=$(id -un) path=$PATH"
   '';
 
   whoami = pkgs.writeText "whoami.sh" ''
@@ -39,6 +46,7 @@ in
       # The copied-out scripts must satisfy the strict ownership check.
       settings.script_ownership = "strict";
       scripts.hello.source = hello;
+      scripts.barecmd.source = barecmd;
     };
 
     users.users.testuser = { isNormalUser = true; };
@@ -117,6 +125,9 @@ in
         out = dispatcher.succeed("ced run agent hello")
         print(out)
         assert "hello from ctrl-exec-agent" in out, out
+        out = dispatcher.succeed("ced run agent barecmd")
+        print(out)
+        assert "bare-command user=ctrl-exec-agent path=/run/wrappers/bin:/run/current-system/sw/bin" in out, out
 
     with subtest("executor and a non-default profile"):
         agent.succeed("/run/booted-system/specialisation/executor/bin/switch-to-configuration test")
@@ -131,6 +142,9 @@ in
         # default profile (run_as nobody) through the executor
         out = dispatcher.succeed("ced run agent hello")
         assert "hello from nobody" in out, out
+        out = dispatcher.succeed("ced run agent barecmd")
+        print(out)
+        assert "bare-command user=nobody path=/run/wrappers/bin:/run/current-system/sw/bin" in out, out
         assert agent.succeed("stat -c '%F %U:%G %a' /opt/ctrl-exec-scripts/whoami").strip() == "regular file root:root 755"
 
     with subtest("adopt a staged renewed certificate"):
