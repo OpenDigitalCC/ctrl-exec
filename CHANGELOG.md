@@ -5,6 +5,8 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
+## 0.14.1 — (unreleased)
+
 ## 0.14.0 — (unreleased)
 
 - **Changed** the agent's `ca.crt` is a bundle of dispatcher CAs: pairing appends the dispatcher's CA (once per SHA-256 fingerprint) instead of replacing it, so pairing a dispatcher that has its own CA no longer cuts off the dispatchers already paired; an existing single-CA `ca.crt` is a bundle of one and is used as it is. A renewed agent certificate must come from the CA that issued the current one. (T-061)
