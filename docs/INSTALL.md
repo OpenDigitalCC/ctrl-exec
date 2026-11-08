@@ -19,6 +19,10 @@ Alpine Linux
 : `apk` package manager. No systemd - services run directly or in Docker.
   See `DOCKER.md` for container deployment.
 
+NixOS
+: The agent and dispatcher are Nix packages and the agent has a NixOS module
+  instead of `install.sh`. See `NIXOS.md`.
+
 The installer detects the platform automatically and uses the correct package
 names and commands. For RPM-based systems (RHEL, Rocky, Alma), install
 dependencies manually and copy files according to the file layout in

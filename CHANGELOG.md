@@ -8,6 +8,7 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 ## 0.14.1 — (unreleased)
 
 - **Added** `script_path` in agent.conf: the PATH scripts get, run directly, async or through the executor (both read the same value from the same file and follow a reload), so a host such as NixOS, whose standard directories are almost empty, can name its own (`/run/wrappers/bin:/run/current-system/sw/bin`). Unset, the fixed PATH of earlier releases is used, so existing hosts are unchanged. An invalid value never stops the agent or the executor: both log the reason and use the default; `self-check` shows the PATH in force and `doctor` reports an invalid value, and notes an entry that is missing or whose directory is not root-owned or is writable by others. The PATH never comes from a request or an inherited environment. (T-074)
+- **Added** Nix flake with `ctrl-exec-agent` and `ctrl-exec-dispatcher` packages, a NixOS module `services.ctrl-exec-agent` (users, directories, units with the shipped hardening, `agent.conf`/`scripts.conf` as real files, scripts copied out of the Nix store as root-owned files, opt-in executor, `script_path`) and a two-node NixOS VM test (pairing, direct run, run under a profile, staged-cert adoption), so the agent runs on NixOS; docs/NIXOS.md. (T-075)
 
 ## 0.14.0 — (unreleased)
 
