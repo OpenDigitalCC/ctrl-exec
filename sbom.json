@@ -1,20 +1,20 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:9d0c28a6-7ef1-4122-aa8b-7ccd3f5e85fb",
+  "serialNumber": "urn:uuid:e72174ef-619a-497d-9654-44be7eae912d",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-11-09T08:24:43Z",
+    "timestamp": "2026-11-09T14:13:29Z",
     "tools": [
       {
         "name": "generate-sbom.py",
-        "version": "0.14.1"
+        "version": "0.14.2"
       }
     ],
     "component": {
       "type": "application",
       "name": "ctrl-exec",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "description": "Perl mTLS remote script execution system",
       "licenses": [
         {
@@ -35,11 +35,11 @@
     {
       "type": "file",
       "name": "ctrl-exec-agent",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "e4bd20c51317c5c13cc4f7da5d62da6610130e8352a9322f8258da8ae50785cf"
+          "content": "51deb642f26c8ec36adeeb2df854648b48ea0f106ce635f82a31b59ebf40e77e"
         }
       ],
       "licenses": [
@@ -49,16 +49,16 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/ctrl-exec-agent@0.14.1"
+      "purl": "pkg:generic/opendigital/ctrl-exec-agent@0.14.2"
     },
     {
       "type": "file",
       "name": "ctrl-exec-api",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "5eda76b5ff662afde5e1e38dece0481d203d149f6cc598616d1325e47296ce23"
+          "content": "9be4c3182a5d2c434d9a2b49bb6de5f982cf696b3b9fb23a2e0066e54b5a2036"
         }
       ],
       "licenses": [
@@ -68,16 +68,16 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/ctrl-exec-api@0.14.1"
+      "purl": "pkg:generic/opendigital/ctrl-exec-api@0.14.2"
     },
     {
       "type": "file",
       "name": "ctrl-exec-dispatcher",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "5f776105f08d051fadd916ee969278d46b4fcd9eeb1a189208f672e77ce592d9"
+          "content": "573cfed9a20307efc6910c63cf09486ddebbf3f51a19317c93a1e9e289030e15"
         }
       ],
       "licenses": [
@@ -87,12 +87,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/ctrl-exec-dispatcher@0.14.1"
+      "purl": "pkg:generic/opendigital/ctrl-exec-dispatcher@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::API",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -106,12 +106,31 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::API@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::API@0.14.2"
+    },
+    {
+      "type": "library",
+      "name": "Exec::APIClient",
+      "version": "0.14.2",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "88f00885cb14f3a3f8d97087d620654e6d0da085edbef4cd4e32263d2f4400c4"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "AGPL-3.0-only"
+          }
+        }
+      ],
+      "purl": "pkg:generic/opendigital/Exec::APIClient@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Auth",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -125,12 +144,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Auth@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Auth@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::CA",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -144,12 +163,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::CA@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::CA@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::CertInfo",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -163,12 +182,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::CertInfo@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::CertInfo@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Cmd",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -182,12 +201,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Cmd@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Cmd@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Digest",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -201,12 +220,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Digest@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Digest@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::DispatcherConfig",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -220,12 +239,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::DispatcherConfig@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::DispatcherConfig@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Doctor",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -239,12 +258,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Doctor@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Doctor@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Engine",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -258,12 +277,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Engine@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Engine@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::FileUtil",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -277,12 +296,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::FileUtil@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::FileUtil@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Http",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -296,12 +315,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Http@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Http@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Input",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -315,12 +334,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Input@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Input@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Lock",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -334,12 +353,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Lock@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Lock@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Log",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -353,16 +372,16 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Log@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Log@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Pairing",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "871a02a4a34714c63ec9374d7665ba648772b58cc967a773ac9aacb27c608d31"
+          "content": "7fc07e765f49a13e60d9b6fe4d6f364e742451a19f7e5b3379e4306fd740e1ae"
         }
       ],
       "licenses": [
@@ -372,12 +391,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Pairing@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Pairing@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Random",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -391,12 +410,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Random@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Random@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::RateLimit",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -410,12 +429,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::RateLimit@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::RateLimit@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Registry",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -429,12 +448,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Registry@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Registry@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Rotation",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -448,12 +467,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Rotation@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Rotation@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::RunStore",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -467,12 +486,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::RunStore@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::RunStore@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::TLS",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -486,12 +505,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::TLS@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::TLS@0.14.2"
     },
     {
       "type": "file",
       "name": "openapi.json",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -505,12 +524,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/openapi.json@0.14.1"
+      "purl": "pkg:generic/opendigital/openapi.json@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Agent::AgentPairing",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -524,12 +543,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Agent::AgentPairing@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Agent::AgentPairing@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Agent::AsyncRunner",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -543,12 +562,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Agent::AsyncRunner@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Agent::AsyncRunner@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Agent::Config",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -562,12 +581,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Agent::Config@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Agent::Config@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Agent::Doctor",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -581,12 +600,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Agent::Doctor@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Agent::Doctor@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Agent::ExecClient",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -600,12 +619,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Agent::ExecClient@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Agent::ExecClient@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Agent::Runner",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -619,12 +638,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Agent::Runner@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Agent::Runner@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Agent::Schema",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -638,12 +657,12 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Agent::Schema@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Agent::Schema@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Agent::Server",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
@@ -657,16 +676,16 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Agent::Server@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Agent::Server@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Doctor::Dispatcher",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "8a5242063f81b8116a81391aadbd9ef08b812491688185e6b428be59c6143c30"
+          "content": "206d1dab160e6975f0774370377fb62d6091934fd53029b7d75ca99c8c96af62"
         }
       ],
       "licenses": [
@@ -676,16 +695,16 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Doctor::Dispatcher@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Doctor::Dispatcher@0.14.2"
     },
     {
       "type": "library",
       "name": "Exec::Pairing::Identity",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "bffd0d2a8cf99dc5d73ad1383f26f7857dce6b6808564197aa47201defabb808"
+          "content": "93863bf1cb8105d943726e75e6df71f31fa016df5cd9e5233ece54d78df37662"
         }
       ],
       "licenses": [
@@ -695,7 +714,7 @@
           }
         }
       ],
-      "purl": "pkg:generic/opendigital/Exec::Pairing::Identity@0.14.1"
+      "purl": "pkg:generic/opendigital/Exec::Pairing::Identity@0.14.2"
     },
     {
       "type": "library",
