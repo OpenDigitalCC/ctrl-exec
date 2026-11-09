@@ -56,6 +56,16 @@ Approve a pending request. Accepts
 and
 .BI \-\-agent-port " n"
 to set how dispatch reaches the agent.
+.B \-\-replace
+also unregisters any other agent whose registered address is the address the
+request came from, once the new agent is registered (logged as
+.B unpair
+with
+.BR REPLACED_BY ).
+.B list-requests
+and
+.B approve
+note such an agent. Without the flag nothing is removed.
 .TP
 .BI "deny " reqid
 Deny a pending request.
@@ -82,7 +92,9 @@ Edit a registered agent without re-pairing:
 .RB "/ " \-\-lookup-by .
 .TP
 .BI "unpair " hostname
-Remove a paired agent from the registry.
+Remove a paired agent from the registry and log
+.BR unpair .
+The agent's certificate stays valid until it expires.
 .TP
 .B setup-ca
 One-time certificate authority initialisation.

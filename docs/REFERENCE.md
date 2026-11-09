@@ -368,6 +368,7 @@ ced approve <reqid>
 ced approve <reqid> --lookup-by ip
 ced approve <reqid> --ip 192.168.1.10
 ced approve <reqid> --agent-port 7450
+ced approve <reqid> --replace
 ```
 
 The request ID is shown by `list-requests` and `pairing-mode`.
@@ -379,6 +380,20 @@ not report one — note that source IP is unreliable when a NAT sits in front of
 the dispatcher (for example the dispatcher running in a Docker container, where
 every agent's connection appears to come from the bridge gateway). Use
 `--ip` to set the address explicitly in that case.
+
+`--replace`
+: Also unregister any other agent whose registered `ip` is the address this
+  request came from (a RAM-booted node that re-pairs under a new name leaves
+  its old registration behind). `list-requests` and `approve` note such an
+  agent: "`<other>` is registered at this address (approve --replace to remove
+  it)"; several matches are all listed and all removed. With the flag, once the
+  new agent is registered, each old record is removed as `unpair` would
+  (see *unpair*), logged `ACTION=unpair` with `REPLACED_BY=<new name>`, and
+  the output names what was removed and warns that the old certificate stays
+  valid until expiry. If `approve` fails nothing is removed; without the flag
+  nothing is removed. The same name is an ordinary re-pair and needs no flag.
+  The interactive `pairing-mode` queue shows the note but has no `--replace`;
+  use `approve <reqid> --replace` or `unpair`.
 
 `--lookup-by <ip|hostname>`
 : How dispatch resolves this agent's connect address (stored in the registry
@@ -445,7 +460,7 @@ or it did not issue the dispatcher's certificate (`cert` in `ctrl-exec.conf`).
 
 ### list-agents
 
-List all registered (paired) agents.
+List all registered (paired) agents. To remove one, see `unpair`.
 
 ```bash
 ced list-agents
@@ -528,6 +543,22 @@ ced edit-agent old-name --rename new-name
 `--json` prints the updated record. The agent's certificate is unaffected;
 renaming or re-addressing does not require the agent to re-pair, since mTLS
 validates the certificate against the CA rather than the connect address.
+
+---
+
+### unpair
+
+Remove an agent's record from the registry.
+
+```bash
+ced unpair <hostname>
+```
+
+Logs `ACTION=unpair` and prints the date the agent's certificate expires. The
+certificate is not revoked: it stays valid until then, so decommission the
+agent promptly or add its serial to the revocation list. Fails if the name is
+not registered. A re-paired node can be replaced in one step with
+`approve --replace`; `list-agents` shows what is registered.
 
 ---
 

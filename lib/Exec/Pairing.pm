@@ -415,6 +415,31 @@ sub list_requests (%opts) {
     return [ sort { $a->{received} cmp $b->{received} } @requests ];
 }
 
+# T-082: names of other registered agents whose registered address is the
+# address this request came from. The same name is an ordinary re-pair (the
+# record is simply replaced), so only another name counts.
+sub agents_at_address ($req, %opts) {
+    my $src = $req->{source_ip};
+    return () unless defined $src && length $src;
+    require Exec::Registry;
+    # An unreadable registry gives no note rather than failing the listing.
+    my $agents = eval { Exec::Registry::list_agents(registry_dir => $opts{registry_dir}) } // [];
+    return sort map { $_->{hostname} }
+        grep { defined $_->{ip} && $_->{ip} eq $src
+               && lc($_->{hostname} // '') ne lc($req->{hostname} // '') } @$agents;
+}
+
+# The note shown beside a request whose address is another agent's registered
+# one (list-requests, the interactive queue, approve). One line, or none.
+sub replace_note_lines ($req, %opts) {
+    my @o = agents_at_address($req, %opts) or return ();
+    my $who = @o == 1 ? "$o[0] is" : join(', ', @o) . ' are';
+    my $it  = @o == 1 ? 'it' : 'them';
+    return $opts{approving}
+        ? "  $who registered at this address; not removed (approve --replace removes $it)."
+        : "$who registered at this address (approve --replace to remove $it)";
+}
+
 # Approve a pending request: sign CSR, deliver cert to waiting agent
 # The agent's connection is held in a response file keyed by reqid
 sub approve_request (%opts) {
@@ -457,6 +482,11 @@ sub approve_request (%opts) {
     my $ip        = $by_ip_default
                   ? _effective_ip($opts{ip}, $req->{source_ip}, $req->{ip})
                   : _effective_ip($opts{ip}, $req->{ip});
+
+    # T-082: other agents registered at this request's source address, found
+    # before the new record is written; removed only with --replace, and only
+    # once the new agent is registered.
+    my @others = agents_at_address($req, registry_dir => $opts{registry_dir});
 
     require Exec::CA;
 
@@ -573,6 +603,27 @@ sub approve_request (%opts) {
             if $req->{reverse_confirmed} && length($req->{reverse_dns} // '')
                && lc $req->{reverse_dns} ne lc $name;
     }
+
+    if (@others && $opts{replace}) {
+        for my $old (@others) {
+            my $rec = eval { Exec::Registry::remove_agent(
+                registry_dir => $opts{registry_dir}, hostname => $old) };
+            if ($@) {
+                chomp(my $err = $@);
+                print "  Could not remove '$old': $err\n";
+                next;
+            }
+            my $exp = $rec->{expiry} // 'unknown';
+            $log_fn->({ ACTION => 'unpair', AGENT => $old, EXPIRY => $exp,
+                        REPLACED_BY => $name });
+            print "  Replaced:    unregistered '$old' (same address, $req->{source_ip}).\n";
+            print "  WARNING: '$old' certificate remains valid until: $exp\n";
+        }
+        print "  Decommission the old agent(s) promptly or add their serials to the revocation list.\n";
+    }
+    elsif (@others) {
+        print "$_\n" for replace_note_lines($req, registry_dir => $opts{registry_dir}, approving => 1);
+    }
 }
 
 # Deny and remove a pending request
@@ -677,6 +728,7 @@ sub _interactive_prompt ($log_fn) {
         printf "  Received: %s\n", $r->{received} // '?';
         print "$_\n" for kept_cert_lines($r);
         print "$_\n" for Exec::Pairing::Identity::identity_lines($r);
+        print "  $_\n" for replace_note_lines($r);
         if (my $rec = Exec::Pairing::Identity::identity_recommendation($r)) {
             print "$rec\n";
         }
@@ -702,6 +754,7 @@ sub _print_queue ($reqs) {
             $r->{received} // '?';
         printf "      lookup: ip (%s does not resolve here)\n", $r->{hostname}
             if Exec::Pairing::Identity::lookup_defaults_to_ip($r);
+        print "      $_\n" for replace_note_lines($r);
     }
 }
 

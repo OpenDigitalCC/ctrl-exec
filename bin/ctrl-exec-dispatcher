@@ -52,6 +52,7 @@ sub main {
         'tags=s'      => \$opts{tags},
         'async'       => \$opts{async},
         'timeout=i'   => \$opts{timeout},
+        'replace'     => \$opts{replace},
         'fix'         => \$opts{fix},
         'brief'       => \$opts{brief},
         'version'     => sub { print "ctrl-exec-dispatcher $VERSION\n"; exit 0; },
@@ -790,6 +791,7 @@ sub mode_list_requests {
             $r->{source_ip} // $r->{ip} // '?',
             $rev,
             Exec::Pairing::code_label($r);
+        print "$_\n" for map { sprintf "%-10s  %s", '', $_ } Exec::Pairing::replace_note_lines($r);
         # An agent already paired elsewhere keeps its certificate (T-062).
         print "$_\n" for Exec::Pairing::kept_cert_lines($r);
         # T-079: approve will register this one by IP (name does not resolve).
@@ -805,7 +807,7 @@ sub mode_list_requests {
 
 sub mode_approve ($opts, $reqid = undef) {
     die "Usage: ctrl-exec-dispatcher approve <reqid> "
-      . "[--lookup-by ip|hostname] [--ip <addr>] [--agent-port <n>]\n" unless $reqid;
+      . "[--lookup-by ip|hostname] [--ip <addr>] [--agent-port <n>] [--replace]\n" unless $reqid;
 
     my $lookup_by = $opts->{lookup_by};
     if (defined $lookup_by && $lookup_by ne 'ip' && $lookup_by ne 'hostname') {
@@ -829,6 +831,7 @@ sub mode_approve ($opts, $reqid = undef) {
         lookup_by       => $lookup_by,
         ip              => $ip,
         port            => $agent_port,
+        replace         => $opts->{replace},
         dispatcher_id   => _resolve_dispatcher_id($config),
         dispatcher_cert => $config->{cert},
         log_fn          => sub ($f) { Exec::Log::log_action('INFO', $f) },
@@ -1297,6 +1300,8 @@ Modes:
                              agent self-reports it; needed when a NAT hides it)
                              [--agent-port <n>] overrides the agent's
                              reported operational port (default: 7443)
+                             [--replace] also unpairs another agent
+                             registered at the request's source address
   deny <reqid>               Deny a pairing request
   ca-fingerprint             Print this dispatcher's CA fingerprint for
                              verified pairing (request-pairing
