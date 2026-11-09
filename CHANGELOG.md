@@ -7,6 +7,8 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 
 ## 0.14.2 — (unreleased)
 
+- **Fixed** the NixOS module left a script given as a path literal (`scripts.<name>.source = ./name.sh;`) out of the built system, so a system built for another machine (a netboot or squashfs image) had an empty `/opt/ctrl-exec-scripts` and activation failed with `install: cannot stat`; on a host that evaluates its own configuration the file happened to be there. A new flake check (`script-closure`) builds a system with such a script and fails unless the script is in its closure. (T-077)
+
 ## 0.14.1 — the agent on NixOS; ced for operators says what it needs
 
 Upgrading from 0.14.0: nothing to do. `script_path` is unset by default, so

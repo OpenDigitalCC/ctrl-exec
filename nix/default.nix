@@ -7,4 +7,5 @@
 (pkgs.callPackages ./package.nix { }) // {
   module = ./module.nix;
   tests.agent = pkgs.testers.runNixOSTest ./tests/agent.nix;
+  tests.script-closure = import ./tests/closure.nix { inherit pkgs; inherit (pkgs) lib; };
 }

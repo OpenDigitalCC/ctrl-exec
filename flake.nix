@@ -24,6 +24,7 @@
 
       checks = forAllSystems (pkgs: {
         agent = pkgs.testers.runNixOSTest ./nix/tests/agent.nix;
+        script-closure = import ./nix/tests/closure.nix { inherit pkgs; inherit (pkgs) lib; };
       });
     };
 }

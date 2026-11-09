@@ -41,7 +41,9 @@ The flake follows the `nixos-26.05` branch of nixpkgs (the revision is pinned in
 
 Without flakes: `imports = [ (import /path/to/ctrl-exec/nix).module ];`.
 `nix build .#ctrl-exec-agent` and `.#ctrl-exec-dispatcher` build the packages.
-`nix build .#checks.x86_64-linux.agent` runs the VM test (needs KVM).
+`nix flake check` runs the VM test (`checks.<system>.agent`, needs KVM) and
+`script-closure`, which builds a system and checks that a script given as a
+path literal is in its closure.
 
 ## Pairing
 

@@ -55,7 +55,7 @@ let
     manifest="$d/.nix-managed"
     ${lib.concatStrings (lib.mapAttrsToList (name: s: ''
       ${pkgs.coreutils}/bin/install -m 0755 -o 0 -g 0 \
-        ${lib.escapeShellArg (toString s.source)} "$d/.${name}.tmp"
+        ${lib.escapeShellArg "${s.source}"} "$d/.${name}.tmp"
       ${pkgs.coreutils}/bin/mv -f "$d/.${name}.tmp" "$d/${name}"
     '') cfg.scripts)}
     if [ -f "$manifest" ]; then
