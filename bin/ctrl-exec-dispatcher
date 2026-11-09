@@ -17,6 +17,7 @@ use Exec::Pairing qw();
 use Exec::CA        qw();
 use Exec::CertInfo  qw();
 use Exec::Registry  qw();
+use Exec::Agent::Config qw();
 use Exec::Rotation  qw();
 use JSON                qw(encode_json decode_json);
 use Getopt::Long        qw(GetOptions :config pass_through);
@@ -102,14 +103,33 @@ sub main {
 # passes through unchanged. Applied after auth/lock so those operate on the
 # name the operator gave; only the connection target is rewritten.
 sub _resolve_dispatch_hosts ($hosts) {
+    _require_readable_key();
     my $r = Exec::Registry::resolve_dispatch($hosts);
     unless ($r->{ok}) {
         my @u = @{ $r->{unknown} };
         die "Error: unknown agent" . (@u > 1 ? 's' : '') . ": " . join(', ', @u) . "\n"
+          . Exec::Registry::did_you_mean(\@u)
           . "Only registered agents can be addressed - run "
           . "'ctrl-exec-dispatcher list-agents' to see them.\n";
     }
     return $r->{hosts};
+}
+
+# T-076: dispatcher.key is deliberately root/service-user only (a ctrl-exec
+# group member must not be able to authenticate to agents as the dispatcher), so
+# a group member's connection would fail inside LWP with a bare "Permission
+# denied". Every command that connects to an agent resolves its hosts through
+# _resolve_dispatch_hosts, which calls this first (run also calls it up front).
+# Message on STDERR, exit 1.
+sub _require_readable_key () {
+    my $config = eval { _load_config() } or return;   # a bad config is reported by the command itself
+    my $key = $config->{key} // return;
+    return unless defined Exec::Agent::Config::unreadable_path($key);
+    my $user = getpwuid($>) // $>;
+    print STDERR "Error: cannot read $key as $user - ced connects to agents with that key,"
+      . " which only root and the ctrl-exec service user can read.\n"
+      . "Use sudo (sudo ctrl-exec-dispatcher ...) or the API.\n";
+    exit 1;
 }
 
 # Days until a cert expiry string ("Mon DD HH:MM:SS YYYY GMT") elapses, or undef
@@ -129,6 +149,7 @@ sub mode_run ($opts, @args) {
 
     my ($hosts, $script, $script_args) = _parse_run_args(@args);
     my $config   = _load_config();
+    _require_readable_key();    # before auth and the run lock: it cannot connect anyway
     my $username = $opts->{username} // $ENV{USER} // '';
     my $token    = $opts->{token}    // $ENV{ENVEXEC_TOKEN} // '';
 

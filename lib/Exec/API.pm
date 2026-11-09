@@ -983,8 +983,11 @@ sub _send_auth_denied ($conn, $auth, $config) {
 sub _resolve_or_404 ($conn, $hosts) {
     my $resolved = Exec::Registry::resolve_dispatch($hosts);
     return $resolved if $resolved->{ok};
+    # T-076: the same "Did you mean <fqdn>?" hint as the CLI, in the detail text.
+    my $hint = Exec::Registry::did_you_mean($resolved->{unknown}) =~ s/\n\z//r =~ s/\n/ /gr;
     _send_error($conn, 404, 'unknown agent',
-        'not a registered agent: ' . join(', ', @{ $resolved->{unknown} }));
+        'not a registered agent: ' . join(', ', @{ $resolved->{unknown} })
+        . (length $hint ? ". $hint" : ''));
     return;
 }
 

@@ -163,7 +163,8 @@ newgrp ctrl-exec           # apply the new group to this shell (or re-login)
 > (`setup-*`, `pairing-mode`, `rotate-cert`, `approve`/`deny`) use root-owned
 > keys and require `sudo`.
 
-> **Auth hook.** `ced` is gated by system permissions and needs no hook. The
+> **Auth hook.** `ced` needs no hook; it runs as root (the dispatcher key is
+> root and service user only, so `ctrl-exec` group members use the API). The
 > install seeds `/etc/ctrl-exec-dispatcher/auth-hook` as an example (it allows
 > everything) but does not enable it, so the API denies every request until you
 > write a hook and set `auth_hook` in `ctrl-exec.conf` (or deliberately set

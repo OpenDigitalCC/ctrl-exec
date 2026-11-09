@@ -275,7 +275,9 @@ cert_days = 365
 `auth_hook` is not set in the shipped `ctrl-exec.conf` (it is commented out),
 so a fresh install fails closed: the API refuses every request
 (`api_auth_default = deny`) until you configure authorisation. CLI use (`ced`)
-is gated by system user and group permissions and needs no hook. The install
+needs no hook: it runs as root (`sudo ced ...`), because `dispatcher.key` is
+readable only by root and the `ctrl-exec` service user, by design. Members of
+the `ctrl-exec` group can read state but not the key; operators use the API. The install
 seeds `/etc/ctrl-exec-dispatcher/auth-hook` as a starting point, but that file
 authorises everything (`exit 0`) and is inactive until named. To use the API,
 write a hook with real rules (see *Auth Hook* below), then add

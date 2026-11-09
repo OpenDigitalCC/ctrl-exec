@@ -278,6 +278,21 @@ sub resolve_dispatch ($refs, %opts) {
     return { ok => 1, hosts => \@hosts };
 }
 
+# T-076: "Did you mean <fqdn>?\n" lines for unknown agent references, one per
+# reference when exactly one registered name is that reference (without any
+# :port) followed by a dot (ced ping d1 when d1.example.com is registered).
+# Empty when there is no single match.
+sub did_you_mean ($unknown, %opts) {
+    my $agents = eval { list_agents(%opts) } // [];
+    my @hints;
+    for my $u (@$unknown) {
+        my ($name) = $u =~ /^(.+?)(?::\d+)?$/;
+        my @m = grep { index($_, "$name.") == 0 } map { $_->{hostname} // () } @$agents;
+        push @hints, "Did you mean $m[0]?\n" if @m == 1;
+    }
+    return join '', @hints;
+}
+
 # Return the registry record for a single agent, or undef if not found.
 #
 # Required opts:

@@ -22,8 +22,10 @@ ca   = /etc/ctrl-exec-dispatcher/ca.crt
 # decide. To enable one, write a hook (auth-hook.example, installed beside this
 # file or under /usr/share/ctrl-exec/examples/, authorises EVERYTHING - copy it
 # and add real rules), make it executable by the ctrl-exec user, then uncomment
-# the line below and restart ctrl-exec-api. CLI use (ced) is gated by system
-# permissions and does not need a hook.
+# the line below and restart ctrl-exec-api. CLI use (ced) needs no hook: it
+# runs as root (sudo), the only user besides the ctrl-exec service user who can
+# read dispatcher.key. Operators use the API; ctrl-exec group members can read
+# state but not the key.
 # auth_hook = /etc/ctrl-exec-dispatcher/auth-hook
 
 # What the API does when no auth_hook is set: deny (default) or allow. Ignored

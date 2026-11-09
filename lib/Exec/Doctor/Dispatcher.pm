@@ -72,7 +72,12 @@ sub checks (%o) {
     # cannot search would be judged absent, so say so instead of guessing.
     for my $d ($old, $new) {
         next unless -d $d && !-x _;
-        push @f, $N->('access', "Could not search $d (permission denied), so nothing else was checked.",
+        # T-076: for a non-root caller this is also why ced will not work for them.
+        push @f, $> ? $P->('access', "Could not search $d (permission denied) as " . _me()
+                          . ", so ced will not work for this user, and nothing else was checked.",
+                          "use sudo (sudo ctrl-exec-dispatcher ...) or the API; the dispatcher's key is"
+                          . ' root and service user only by design, not for the ctrl-exec group')
+                  : $N->('access', "Could not search $d (permission denied), so nothing else was checked.",
                       $as_root);
         return \@f;
     }
@@ -114,6 +119,12 @@ sub checks (%o) {
         return \@f;
     }
 
+    if ($> && defined Exec::Agent::Config::unreadable_path($config->{key})) {
+        push @f, $P->('key-unreadable', "Could not read $config->{key} (permission denied) as " . _me()
+            . ", so ced will not work for this user.",
+            'use sudo (sudo ctrl-exec-dispatcher ...) or the API; the key is readable by root and the'
+            . ' service user only, by design, so the ctrl-exec group cannot read it');
+    }
     push @f, _cert_checks($config);
     push @f, _auth_checks($config, $path);
     push @f, _api_checks($config, $path);
@@ -121,6 +132,8 @@ sub checks (%o) {
     push @f, _rotation_checks($config);
     return \@f;
 }
+
+sub _me () { scalar(getpwuid($>)) // $> }
 
 sub _cert_checks ($config) {
     my @f;
