@@ -8,7 +8,7 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 ## 0.14.4 — (unreleased)
 
 - **Fixed** a certificate renewal asked the agent for a CSR named by `fqdn()`, which the dispatcher refuses unless it equals the registered name (it binds the CSR CN to it), so an agent registered as `host..` (R-029) or paired with `request-pairing --name foo` (0.14.3) could not renew; the CSR now carries the CN of the agent's current certificate, falling back to `fqdn()` only when that is missing, unreadable or has no CN. (T-084)
-- **Fixed** an agent on a node with no DNS domain paired as `host..` (`hostfqdn()` returned a trailing dot) and `ced run host` said unknown agent; the default name now has trailing dots removed and falls back to the short hostname unless it is a valid hostname with a domain, and the dispatcher refuses a new pairing request whose hostname is not a valid DNS name (`invalid-hostname`). Registrations already on disk, such as `host..`, keep loading and renewing. (R-029, T-084)
+- **Fixed** an agent on a node with no DNS domain paired as `host..` (`hostfqdn()` returned a trailing dot) and `ced run host` said unknown agent; the default name now has trailing dots removed and falls back to the short hostname when no domain is left, and the dispatcher refuses a new pairing request whose hostname has an empty label (`host..`, `host.`; `invalid-hostname`); other names, such as ones with `_`, pair as before. Registrations already on disk, such as `host..`, keep loading and renewing. (R-029, T-084)
 
 ## 0.14.3 — an agent chooses its name; a re-paired node replaces its old registration
 

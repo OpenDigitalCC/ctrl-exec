@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 # T-084: the agent's default name has no trailing dots and always has a valid
-# form; the dispatcher refuses a new pairing request named 'host..' but a
+# form (no empty label); the dispatcher refuses a new pairing request named 'host..' but a
 # registry record already named that still loads.
 use strict;
 use warnings;
@@ -16,6 +16,7 @@ use Exec::Agent::Server qw();
 use Exec::Pairing       qw();
 use Exec::Registry      qw();
 use Exec::Log           qw();
+use Exec::Hostname      qw();
 
 Exec::Log::init('test');
 { no warnings 'redefine'; *Exec::Log::log_action = sub {}; }
@@ -39,7 +40,9 @@ is name_for('host.example.com'),     'host.example.com', 'a valid FQDN is unchan
 is name_for('host.example.com.'),    'host.example.com', 'a rooted FQDN loses its dot';
 is name_for('host', 'host'),         'host', 'no domain: hostname()';
 is name_for(undef, 'short1'),        'short1', 'no hostfqdn: hostname()';
-is name_for('bad_name.example.com', 'short2'), 'short2', 'invalid FQDN: hostname()';
+is name_for('a..b.example.com', 'short2'), 'short2', 'empty label: hostname()';
+is name_for('db_01.example.com'), 'db_01.example.com', "'_' still allowed, as before";
+ok !Exec::Hostname::has_empty_label('db_01'), "a new request named 'db_01' is not refused for its '_'";
 
 # --- dispatcher: new request ---
 my $d = tempdir(CLEANUP => 1);
@@ -65,7 +68,7 @@ sub pair_reply ($hostname) {
     my $raw = <$client> // '';
     return ($raw, \@log);
 }
-for my $bad ('host..', 'host.', 'bad_name') {
+for my $bad ('host..', 'host.', 'a..b') {
     my ($raw, $log) = pair_reply($bad);
     like $raw, qr/invalid hostname/, "new request '$bad' refused";
     is $log->[0]{REASON}, 'invalid-hostname', "  logged invalid-hostname";

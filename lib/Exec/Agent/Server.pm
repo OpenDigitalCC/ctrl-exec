@@ -1043,9 +1043,10 @@ sub fqdn {
     return $FQDN if defined $FQDN;
     my $f = eval { require Net::Domain; Net::Domain::hostfqdn() };
     # hostfqdn() can return 'host..' on a node with no DNS domain: strip the
-    # trailing dots, and keep the result only if it is a valid name with a domain.
+    # trailing dots, and keep the result only if it still has a domain and no
+    # empty label.
     if (defined $f) { $f =~ s/\.+\z//; }
-    $FQDN = (defined $f && $f =~ /\./ && Exec::Hostname::valid($f)) ? $f : hostname();
+    $FQDN = (defined $f && $f =~ /\./ && !Exec::Hostname::has_empty_label($f)) ? $f : hostname();
     return $FQDN;
 }
 
