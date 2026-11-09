@@ -38,7 +38,7 @@ is_deeply(complete('cea', 'request-pairing', '--dispatcher', 'h', '--ba'), ['--b
 is_deeply(complete('cea', 'request-pairing', '--lookup-by', ''), [qw(hostname ip)], '--lookup-by values');
 is_deeply(complete('cea', '--'),
     [qw(--allowlist --background --brief --config --dispatcher --dispatcher-fingerprint --fix
-        --json --lookup-by --pidfile --port --rekey --timeout --version)],
+        --json --lookup-by --name --pidfile --port --rekey --timeout --version)],
     'all options');
 is_deeply(complete('cea', 'serve', '--al'), ['--allowlist'], 'serve --allowlist');
 is_deeply(complete('cea', 'do'), ['doctor'], 'doctor completes');

@@ -45,6 +45,7 @@ sub main {
         'background'    => \$opts{background},
         'timeout=i'     => \$opts{timeout},
         'lookup-by=s'   => \$opts{lookup_by},
+        'name=s'        => \$opts{name},
         'dispatcher-fingerprint=s' => \$opts{dispatcher_fingerprint},
         'rekey'         => \$opts{rekey},
         'pidfile=s'     => \$opts{pidfile},
@@ -805,6 +806,15 @@ MSG
     }
 }
 
+# A hostname for request-pairing --name: one or more dot-separated labels, each
+# 1-63 of letters, digits and hyphens, not starting or ending with a hyphen,
+# 253 characters at most. A subset of what the dispatcher accepts
+# (Exec::Registry::valid_agent_name).
+sub valid_pairing_name ($name) {
+    return 0 unless defined $name && length $name <= 253;
+    return $name =~ /\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\z/ ? 1 : 0;
+}
+
 sub mode_request_pairing ($opts) {
     my $ctrl_exec_host  = $opts->{dispatcher}
         or die "--dispatcher <host> required for request-pairing\n";
@@ -814,6 +824,15 @@ sub mode_request_pairing ($opts) {
 
     if (defined $lookup_by && $lookup_by ne 'ip' && $lookup_by ne 'hostname') {
         die "--lookup-by must be 'ip' or 'hostname'\n";
+    }
+
+    # The name to register under (T-081), refused here if it is not a hostname,
+    # before any key is made or anything connects.
+    if (defined $opts->{name}) {
+        die "--name must be a hostname: dot-separated labels of letters, digits and "
+          . "hyphens\n(each 1-63 characters, not starting or ending with '-'; "
+          . "253 in all)\n"
+            unless valid_pairing_name($opts->{name});
     }
 
     # Verified pairing (T-041): the dispatcher's CA fingerprint, refused here if
@@ -842,8 +861,10 @@ sub mode_request_pairing ($opts) {
     die "Cannot write to '$cert_dir' - re-run as root or with sudo\n"
         unless -w $cert_dir;
 
-    my $host = Exec::Agent::Server::fqdn();
-    unless ($host =~ /\./) {
+    # The request's hostname, and the CSR's CN: --name when given, else this
+    # host's FQDN (and a warning when that is only a short name).
+    my $host = $opts->{name} // Exec::Agent::Server::fqdn();
+    unless (defined $opts->{name} || $host =~ /\./) {
         warn <<"WARN";
 Warning: could not determine a fully-qualified domain name for this host;
 registering the short name '$host'. A dispatcher on a different network or
@@ -1370,6 +1391,7 @@ Usage: ctrl-exec-agent <mode> [options]
 Modes:
   serve                          Start the agent server
   request-pairing --dispatcher <host> [--dispatcher-fingerprint SHA256:<hex>] [--rekey]
+                 [--name <name>]
                                  Request pairing with the ctrl-exec dispatcher host.
                                  An agent already paired keeps its key and
                                  certificate and adds the dispatcher
@@ -1396,6 +1418,8 @@ Options:
                                  CSR, a dispatcher whose certificate does not
                                  chain to the CA with this fingerprint (from
                                  'ctrl-exec-dispatcher ca-fingerprint')
+  --name <name>                  request-pairing: the name to register under
+                                 (default: this host's FQDN)
   --rekey                        request-pairing: make a new key and have this
                                  dispatcher sign it, even when already paired
                                  (other dispatchers then need re-pairing)

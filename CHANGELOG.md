@@ -7,6 +7,8 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 
 ## 0.14.3 — (unreleased)
 
+- **Added** `ctrl-exec-agent request-pairing --name <name>`: the agent registers under the name the operator chose instead of the FQDN from `hostfqdn()` (which carries a DHCP lease's domain); validated as a hostname before any key is made, used as the request's hostname and the CSR CN, FQDN warning skipped. Default unchanged. (T-081)
+
 ## 0.14.2 — netboot images carry their scripts; ced through the API socket
 
 Upgrading from 0.14.1: nothing to do. Existing agent registrations are not

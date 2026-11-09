@@ -59,6 +59,9 @@ approve it on the dispatcher, then `sudo systemctl start ctrl-exec-agent`. Until
 the agent is paired its unit fails once with the "not paired" message and does
 not restart in a loop.
 
+Add `--name <agent-name>` to request-pairing to register under a name of your
+choosing instead of the host's FQDN.
+
 ## Options
 
 `services.ctrl-exec-agent.` followed by:

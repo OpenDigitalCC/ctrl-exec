@@ -150,6 +150,21 @@ banner; colons and either case accepted). The agent refuses, before sending
 its CSR, a control host whose certificate does not chain to that CA. Use it on
 any network you do not control.
 .TP
+.BI \-\-name " name"
+With
+.BR request-pairing :
+the name to register under, instead of this host's fully-qualified domain name.
+A hostname: dot-separated labels of letters, digits and hyphens, each 1 to 63
+characters and not starting or ending with a hyphen, 253 characters at most,
+with or without a domain. Anything else is refused before a key is made or
+anything connects. The name is the request's hostname, shown by
+.B list\-requests
+and registered by
+.BR approve ,
+and the certificate request's CN. An agent that keeps its certificate (already
+paired with another dispatcher) keeps that certificate's name; only the
+registration takes the new one.
+.TP
 .BI \-\-lookup-by " ip|hostname"
 Suggest how the control host should resolve this agent for dispatch
 (default: hostname). The control host's

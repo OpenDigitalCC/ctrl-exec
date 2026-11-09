@@ -1370,9 +1370,9 @@ request and stored in the registry so dispatch can reach it without a
 per-command `--port`; the operator can override it with `approve --agent-port`.
 
 ```bash
-ctrl-exec-agent request-pairing --dispatcher <host> [--dispatcher-fingerprint SHA256:<hex>] [--rekey]
+ctrl-exec-agent request-pairing --dispatcher <host> [--dispatcher-fingerprint SHA256:<hex>] [--rekey] [--name <name>]
 ctrl-exec-agent request-pairing --dispatcher <host> --background [--timeout <n>]
-    [--dispatcher-fingerprint SHA256:<hex>] [--rekey]
+    [--dispatcher-fingerprint SHA256:<hex>] [--rekey] [--name <name>]
 ```
 
 An agent that is not yet paired generates a new key. An agent already paired
@@ -1408,6 +1408,19 @@ keeps its key and certificate; see *Pairing with another dispatcher* below.
   verify, so each of them refuses the agent until it is re-paired with it;
   the command names them. Use it when the certificate's issuing dispatcher is
   gone (below).
+
+`--name <name>`
+: The name to register under, instead of the host's FQDN (from
+  `Net::Domain::hostfqdn()`, which on a host whose search domain comes from a
+  DHCP lease carries that lease's domain). A hostname: dot-separated labels of
+  letters, digits and hyphens, each 1-63 characters and not starting or ending
+  with `-`, 253 in all; with or without a domain. Anything else is refused
+  before a key is made or anything connects. It is the request's hostname
+  (shown by `ced list-requests`, so an approver can bind to exactly the name
+  it expects), the name `approve` registers, and the CN of the certificate
+  request. The FQDN warning is skipped. An agent that keeps its certificate
+  (already paired) keeps that certificate's CN; only the registration takes
+  the new name. Without `--name` nothing changes.
 
 `--port <n>`
 : Override the pairing port on the dispatcher (default 7444).
