@@ -5,7 +5,9 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
-## 0.14.3 — (unreleased)
+## 0.14.3 — an agent chooses its name; a re-paired node replaces its old registration
+
+Upgrading from 0.14.2: nothing to do.
 
 - **Added** `ctrl-exec-agent request-pairing --name <name>`: the agent registers under the name the operator chose instead of the FQDN from `hostfqdn()` (which carries a DHCP lease's domain); validated as a hostname before any key is made, used as the request's hostname and the CSR CN, FQDN warning skipped. Default unchanged. (T-081)
 - **Added** `ced approve <reqid> --replace` unregisters any other agent whose registered address is the address the request came from, once the new agent is registered (logged `unpair` with `REPLACED_BY`; the old certificate stays valid until expiry, as for `unpair`), for a node that re-pairs under a new name; `list-requests`, the pairing queue and `approve` note such an agent, and without the flag nothing is removed. `unpair` is now in `docs/REFERENCE.md`. (T-082)
