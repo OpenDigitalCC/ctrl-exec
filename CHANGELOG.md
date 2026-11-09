@@ -5,7 +5,11 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
-## 0.14.2 — (unreleased)
+## 0.14.2 — netboot images carry their scripts; ced through the API socket
+
+Upgrading from 0.14.1: nothing to do. Existing agent registrations are not
+changed; a new pairing of an agent whose name does not resolve on the
+dispatcher is registered by the address its request came from.
 
 - **Fixed** the NixOS module left a script given as a path literal (`scripts.<name>.source = ./name.sh;`) out of the built system, so a system built for another machine (a netboot or squashfs image) had an empty `/opt/ctrl-exec-scripts` and activation failed with `install: cannot stat`; on a host that evaluates its own configuration the file happened to be there. A new flake check (`script-closure`) builds a system with such a script and fails unless the script is in its closure. (T-077)
 - **Fixed** `ctrl-exec-agent request-pairing --background` returned the request id only once the request was approved or timed out when its output was captured (`reqid=$(...)`), because the waiting child kept the caller's stdout; the child now runs in its own session with stdin, stdout and stderr on `/dev/null`, so the command returns as soon as the id is printed and completion is followed with `pairing-status` or the log (`pair-complete`, `pair-denied`, `pair-timeout`, as before). Output, exit codes and the non-background path are unchanged. (T-078)
