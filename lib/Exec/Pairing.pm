@@ -850,8 +850,12 @@ sub _handle_pair_request ($conn, $peer_ip, $log_fn, $max_queue = undef, $pairing
     # The hostname becomes the registry key (a filename). Reject anything that
     # is not a plain agent name/hostname so a hostile pairing client cannot
     # traverse out of the registry directory on approval.
+    # A new request must also be a valid DNS name (T-084); valid_agent_name is
+    # wider so that existing registry records keep loading.
     require Exec::Registry;
-    unless (Exec::Registry::valid_agent_name($data->{hostname})) {
+    require Exec::Hostname;
+    unless (Exec::Registry::valid_agent_name($data->{hostname})
+            && Exec::Hostname::valid($data->{hostname})) {
         _send_raw($conn, encode_json({ status => 'error', reason => 'invalid hostname' }));
         $log_fn->({ ACTION => 'pair-reject', IP => $peer_ip, REASON => 'invalid-hostname' });
         return;

@@ -25,6 +25,7 @@ use Exec::Agent::Schema       qw();
 use Exec::Agent::AgentPairing qw();
 use Exec::Agent::ExecClient   qw();
 use Exec::CertInfo            qw();
+use Exec::Hostname            qw();
 use Exec::Auth                qw();
 use Exec::Http                qw();
 use Exec::Input               qw();
@@ -1037,11 +1038,14 @@ sub config_files_signature (@paths) {
 # dispatcher itself moves. Prefer Net::Domain::hostfqdn(); fall back to the short
 # name only when no domain is configured. Memoised - the name does not change
 # while the process runs, and the serve path calls this per request.
-my $FQDN;
+our $FQDN;
 sub fqdn {
     return $FQDN if defined $FQDN;
     my $f = eval { require Net::Domain; Net::Domain::hostfqdn() };
-    $FQDN = (defined $f && length $f && $f =~ /\./) ? $f : hostname();
+    # hostfqdn() can return 'host..' on a node with no DNS domain: strip the
+    # trailing dots, and keep the result only if it is a valid name with a domain.
+    if (defined $f) { $f =~ s/\.+\z//; }
+    $FQDN = (defined $f && $f =~ /\./ && Exec::Hostname::valid($f)) ? $f : hostname();
     return $FQDN;
 }
 

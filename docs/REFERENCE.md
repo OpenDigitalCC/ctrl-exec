@@ -1459,7 +1459,7 @@ keeps its key and certificate; see *Pairing with another dispatcher* below.
   it expects), the name `approve` registers, and the CN of the certificate
   request. The FQDN warning is skipped. An agent that keeps its certificate
   (already paired) keeps that certificate's CN; only the registration takes
-  the new name. Without `--name` nothing changes.
+  the new name. Without `--name` the name is the host's FQDN with any trailing dots removed; if that is not a valid hostname with a domain (a node with no DNS domain), it is the short hostname. The dispatcher refuses a new pairing request whose hostname is not a valid DNS name (`pair-reject`, reason `invalid-hostname`); registrations already on disk are not checked. A certificate renewal keeps the CN of the agent's current certificate.
 
 `--port <n>`
 : Override the pairing port on the dispatcher (default 7444).

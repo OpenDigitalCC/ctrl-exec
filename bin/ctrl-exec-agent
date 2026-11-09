@@ -11,6 +11,7 @@ use Exec::Agent::Config    qw();
 use Exec::Agent::Schema    qw();
 use Exec::Agent::AgentPairing   qw();
 use Exec::CertInfo              qw();
+use Exec::Hostname              qw();
 use Exec::Agent::Server         qw();
 use Exec::Random                qw();
 use Exec::RateLimit qw();
@@ -806,15 +807,6 @@ MSG
     }
 }
 
-# A hostname for request-pairing --name: one or more dot-separated labels, each
-# 1-63 of letters, digits and hyphens, not starting or ending with a hyphen,
-# 253 characters at most. A subset of what the dispatcher accepts
-# (Exec::Registry::valid_agent_name).
-sub valid_pairing_name ($name) {
-    return 0 unless defined $name && length $name <= 253;
-    return $name =~ /\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\z/ ? 1 : 0;
-}
-
 sub mode_request_pairing ($opts) {
     my $ctrl_exec_host  = $opts->{dispatcher}
         or die "--dispatcher <host> required for request-pairing\n";
@@ -832,7 +824,7 @@ sub mode_request_pairing ($opts) {
         die "--name must be a hostname: dot-separated labels of letters, digits and "
           . "hyphens\n(each 1-63 characters, not starting or ending with '-'; "
           . "253 in all)\n"
-            unless valid_pairing_name($opts->{name});
+            unless Exec::Hostname::valid($opts->{name});
     }
 
     # Verified pairing (T-041): the dispatcher's CA fingerprint, refused here if
