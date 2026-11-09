@@ -988,8 +988,15 @@ WARN
             exit 0;
         }
 
-        # Child: detach from terminal, wait for approval with timeout.
-        # $submitted->{sock} is inherited across the fork.
+        # Child: detach, then wait for approval with timeout. $submitted->{sock}
+        # is inherited across the fork. Its own session and stdin/stdout/stderr
+        # on /dev/null let go of the caller's pipe: $(...) in the orchestrator
+        # returns when the parent exits, not when this child does (T-078). The
+        # outcome goes to the log (pair-complete, pair-denied, pair-timeout).
+        POSIX::setsid();
+        open STDIN,  '<', '/dev/null';
+        open STDOUT, '>', '/dev/null';
+        open STDERR, '>', '/dev/null';
         local $SIG{ALRM} = sub {
             Exec::Log::log_action('WARNING', {
                 ACTION => 'pair-timeout',

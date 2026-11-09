@@ -170,8 +170,13 @@ the pid file of the running agent to reload. Default: the init script's pid
 file, else systemd's main pid.
 .TP
 .B \-\-background
-Non-interactive pairing: print the request ID and wait for approval in the
-background. For orchestrated installations.
+Non-interactive pairing: print the request ID and return; a detached process
+(its own session, standard input, output and error on /dev/null) waits for
+approval and stores the certificate. The command returns, and a caller
+capturing its output with $(...) continues, as soon as the ID is printed.
+Follow the outcome with
+.B pairing\-status
+or the log. For orchestrated installations.
 .TP
 .BI \-\-timeout " n"
 Seconds to wait for approval in background mode (default 30, max 600).

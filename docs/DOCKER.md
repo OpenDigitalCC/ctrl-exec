@@ -964,7 +964,9 @@ running as a small supervisor:
 
 For automated or orchestrated deployments, `--background` mode can be used
 instead. This prints the `reqid` to stdout and exits immediately, leaving a
-background process to wait for approval (`--timeout`, up to 600 seconds):
+background process to wait for approval (`--timeout`, up to 600 seconds). The
+command returns once the `reqid` is printed, even inside `$(...)`; follow the
+outcome with `pairing-status` or the log:
 
 ```bash
 ctrl-exec-agent request-pairing --dispatcher "$DISPATCHER_HOST" --background \

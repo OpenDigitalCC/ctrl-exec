@@ -1396,8 +1396,10 @@ keeps its key and certificate; see *Pairing with another dispatcher* below.
 
 `--background`
 : Non-interactive mode for orchestrated installations. Prints the request
-  ID to stdout and exits immediately, leaving a background process to wait
-  for approval and store the certificate on receipt. See
+  ID to stdout and exits immediately, leaving a background process (in its
+  own session, with no stdin, stdout or stderr) to wait for approval and
+  store the certificate on receipt; `$(...)` returns as soon as the ID is
+  printed. See
   [Orchestrated pairing](#orchestrated-pairing) below.
 
 `--timeout <n>`
@@ -1519,7 +1521,12 @@ dispatcher that fails verification gets no CSR and the command exits non-zero
 with nothing on stdout.
 
 The command exits 0 immediately, printing the request ID and nothing else.
-The background process is now waiting for approval.
+The background process is now waiting for approval. It holds none of the
+caller's file descriptors (it runs in its own session with stdin, stdout and
+stderr on `/dev/null`), so `$(...)` returns as soon as the ID is printed, not
+when approval arrives. The process writes nothing to the terminal: follow the
+outcome with `pairing-status` or the log (`pair-complete`, `pair-denied`,
+`pair-timeout`).
 
 On the dispatcher host (or via the orchestrator calling it remotely):
 

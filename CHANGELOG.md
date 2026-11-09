@@ -8,6 +8,7 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 ## 0.14.2 — (unreleased)
 
 - **Fixed** the NixOS module left a script given as a path literal (`scripts.<name>.source = ./name.sh;`) out of the built system, so a system built for another machine (a netboot or squashfs image) had an empty `/opt/ctrl-exec-scripts` and activation failed with `install: cannot stat`; on a host that evaluates its own configuration the file happened to be there. A new flake check (`script-closure`) builds a system with such a script and fails unless the script is in its closure. (T-077)
+- **Fixed** `ctrl-exec-agent request-pairing --background` returned the request id only once the request was approved or timed out when its output was captured (`reqid=$(...)`), because the waiting child kept the caller's stdout; the child now runs in its own session with stdin, stdout and stderr on `/dev/null`, so the command returns as soon as the id is printed and completion is followed with `pairing-status` or the log (`pair-complete`, `pair-denied`, `pair-timeout`, as before). Output, exit codes and the non-background path are unchanged. (T-078)
 
 ## 0.14.1 — the agent on NixOS; ced for operators says what it needs
 
