@@ -11,7 +11,7 @@
     in
     {
       packages = forAllSystems (pkgs:
-        let p = pkgs.callPackage ./nix/package.nix { };
+        let p = pkgs.callPackages ./nix/package.nix { };
         in p // { default = p.ctrl-exec-agent; });
 
       # The module's `package` option defaults to the package built from this
@@ -20,7 +20,7 @@
       nixosModules.ctrl-exec-agent = ./nix/module.nix;
       nixosModules.default = self.nixosModules.ctrl-exec-agent;
 
-      overlays.default = final: _prev: final.callPackage ./nix/package.nix { };
+      overlays.default = final: _prev: final.callPackages ./nix/package.nix { };
 
       checks = forAllSystems (pkgs: {
         agent = pkgs.testers.runNixOSTest ./nix/tests/agent.nix;
