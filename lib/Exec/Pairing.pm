@@ -424,9 +424,10 @@ sub agents_at_address ($req, %opts) {
     require Exec::Registry;
     # An unreadable registry gives no note rather than failing the listing.
     my $agents = eval { Exec::Registry::list_agents(registry_dir => $opts{registry_dir}) } // [];
-    return sort map { $_->{hostname} }
+    my @names = sort map { $_->{hostname} }
         grep { defined $_->{ip} && $_->{ip} eq $src
                && lc($_->{hostname} // '') ne lc($req->{hostname} // '') } @$agents;
+    return @names;
 }
 
 # The note shown beside a request whose address is another agent's registered

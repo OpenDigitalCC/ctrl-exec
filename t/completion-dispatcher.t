@@ -48,7 +48,7 @@ is_deeply(complete(words => ['ced', '--config', '/nonexistent/x', 'pi']), ['ping
 
 # Options.
 is_deeply(complete(words => ['ced', 'approve', '--']),
-    [qw(--agent-port --config --ip --json --lookup-by --port --token --username --version)],
+    [qw(--agent-port --config --ip --json --lookup-by --port --replace --token --username --version)],
     'approve options');
 is_deeply(complete(words => ['ced', 'edit-agent', 'alpha', '--r']), ['--rename'], 'edit-agent --rename');
 is_deeply(complete(words => ['ced', 'run', '--as']), ['--async'], 'run --async');

@@ -95,7 +95,7 @@ _ctrl_exec_dispatcher() {
         run)          mode_opts="--async" ;;
         wait)         mode_opts="--timeout" ;;
         pairing-mode) mode_opts="--timeout" ;;
-        approve)      mode_opts="--lookup-by --ip --agent-port" ;;
+        approve)      mode_opts="--lookup-by --ip --agent-port --replace" ;;
         edit-agent)   mode_opts="--rename --ip --agent-port --lookup-by" ;;
         list-agents)  mode_opts="--tags" ;;
         doctor)       mode_opts="--fix --brief" ;;
