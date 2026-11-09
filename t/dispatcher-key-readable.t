@@ -118,6 +118,23 @@ SKIP: {
         is_deeply [ grep { $_->{check} eq 'key-unreadable' } @{ doctor($x) } ], [], 'readable: no finding';
     };
 
+    subtest 'doctor: unreadable key with a usable API socket is a note (T-080)' => sub {
+        require IO::Socket::UNIX;
+        my $x = fixture();
+        my $sock = "$x->{root}/api.sock";
+        my $l = IO::Socket::UNIX->new(Local => $sock, Listen => 1) or die "listen: $!";
+        open my $c, '>>', $x->{conf} or die; print $c "api_socket = $sock\n"; close $c;
+        chmod 0, $x->{key};
+        my ($n) = grep { $_->{check} eq 'key-unreadable' } @{ doctor($x) };
+        ok $n, 'a finding';
+        is $n->{severity}, 'note', 'a note, not a problem';
+        like $n->{what}, qr/go through the API socket/, 'says run and ping use the socket';
+        close $l; unlink $sock;
+        ($n) = grep { $_->{check} eq 'key-unreadable' } @{ doctor($x) };
+        is $n->{severity}, 'problem', 'socket gone: a problem again';
+        chmod 0600, $x->{key};
+    };
+
     subtest 'doctor: a directory it cannot search is a problem for this caller' => sub {
         my $x = fixture();
         chmod 0, $x->{dir};

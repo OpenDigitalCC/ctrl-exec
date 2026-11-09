@@ -27,6 +27,7 @@ use Exec::DispatcherConfig qw();
 use Exec::Agent::Config    qw();
 use Exec::CertInfo         qw();
 use Exec::Registry         qw();
+use Exec::APIClient        qw();
 
 use constant EXPIRY_PROBLEM_DAYS => 30;
 
@@ -76,7 +77,7 @@ sub checks (%o) {
         push @f, $> ? $P->('access', "Could not search $d (permission denied) as " . _me()
                           . ", so ced will not work for this user, and nothing else was checked.",
                           "use sudo (sudo ctrl-exec-dispatcher ...) or the API; the dispatcher's key is"
-                          . ' root and service user only by design, not for the ctrl-exec group')
+                          . ' root and service user only by design, not for the ctrl-exec group; with api_socket set, ced run|ping use the API by themselves')
                   : $N->('access', "Could not search $d (permission denied), so nothing else was checked.",
                       $as_root);
         return \@f;
@@ -119,11 +120,19 @@ sub checks (%o) {
         return \@f;
     }
 
-    if ($> && defined Exec::Agent::Config::unreadable_path($config->{key})) {
+    my $sock = $config->{api_socket};
+    if ($> && defined Exec::Agent::Config::unreadable_path($config->{key})
+        && defined $sock && length $sock && !defined Exec::APIClient::unusable_reason($sock)) {
+        # T-080: ced run|ping take the API socket for this user, so they work.
+        push @f, $N->('key-unreadable', "Could not read $config->{key} as " . _me()
+            . "; ced run and ping go through the API socket ($sock) instead, other commands"
+            . ' that contact agents need sudo.', 'nothing to do; the key is root and service user only by design');
+    }
+    elsif ($> && defined Exec::Agent::Config::unreadable_path($config->{key})) {
         push @f, $P->('key-unreadable', "Could not read $config->{key} (permission denied) as " . _me()
             . ", so ced will not work for this user.",
             'use sudo (sudo ctrl-exec-dispatcher ...) or the API; the key is readable by root and the'
-            . ' service user only, by design, so the ctrl-exec group cannot read it');
+            . ' service user only, by design, so the ctrl-exec group cannot read it; with api_socket set, ced run|ping use the API by themselves');
     }
     push @f, _cert_checks($config);
     push @f, _auth_checks($config, $path);

@@ -83,6 +83,15 @@ The dispatcher sends a JSON context object to the script via stdin on the
 agent. This includes the script name, username, token, arguments, timestamp,
 peer IP, and request ID. See INSTALL.md for the full context structure.
 
+A user who cannot read `dispatcher.key` (a `ctrl-exec` group member) runs
+`run` and `ping` unchanged when `api_socket` is set and they may connect to it:
+`ced` sends the request to the API over the socket and prints the result as
+above, with the same exit codes. The API runs the auth hook and the run lock
+(`ced` does not), so the hook decides by `peer_uid`, `--username` and
+`--token`; a denial exits 1 as usual. `--async` and `--port` are refused on this
+route (use `sudo`). Without a usable `api_socket`, `ced` stops with the message
+"cannot read `<key>`" and a line saying how to enable the socket. See API.md.
+
 ```bash
 # Single host
 ced run web-01 deploy-app
@@ -243,6 +252,9 @@ ced ping web-01 --json
 
 Output columns: host, status (ok/error), round-trip time, cert expiry,
 agent version.
+
+For a user who cannot read `dispatcher.key`, `ping` goes through the API socket
+when `api_socket` is set (see `run`); it does not renew certificates.
 
 ---
 

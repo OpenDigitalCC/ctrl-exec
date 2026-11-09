@@ -27,10 +27,21 @@ Run an allowlisted script on one or more agents in parallel. A host argument
 matching a registered agent is resolved from the registry (address and port);
 others are used verbatim. Everything after
 .B \-\-
-is passed to the script.
+is passed to the script. A user who cannot read the dispatcher key
+(a ctrl-exec group member) has the request sent to the API over
+.B api_socket
+when it is set and usable, with the same output and exit codes; the API runs
+the auth hook and the lock, and
+.B \-\-async
+and
+.B \-\-port
+are refused.
 .TP
 .BI "ping " "host[:port] [host...]"
 Test mTLS connectivity and report certificate expiry and agent version.
+Through the API socket, as
+.BR run ,
+for a user who cannot read the dispatcher key.
 .TP
 .B pairing-mode
 Accept agent pairing requests interactively on port 7444. The banner prints

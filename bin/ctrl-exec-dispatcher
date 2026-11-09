@@ -18,6 +18,7 @@ use Exec::CA        qw();
 use Exec::CertInfo  qw();
 use Exec::Registry  qw();
 use Exec::Agent::Config qw();
+use Exec::APIClient qw();
 use Exec::Rotation  qw();
 use JSON                qw(encode_json decode_json);
 use Getopt::Long        qw(GetOptions :config pass_through);
@@ -30,6 +31,7 @@ our $VERSION = 'UNINSTALLED';
 # ambiguous one is refused (exit 78), see Exec::DispatcherConfig.
 my $CONFIG_PATH;
 my $PAIR_PORT   = 7444;
+my $API_ERROR;    # T-080: why a usable-looking API socket did not answer
 my $PAIRING_PIDFILE = '/var/lib/ctrl-exec/pairing-mode.pid';
 
 main() unless caller;
@@ -128,8 +130,72 @@ sub _require_readable_key () {
     my $user = getpwuid($>) // $>;
     print STDERR "Error: cannot read $key as $user - ced connects to agents with that key,"
       . " which only root and the ctrl-exec service user can read.\n"
-      . "Use sudo (sudo ctrl-exec-dispatcher ...) or the API.\n";
+      . "Use sudo (sudo ctrl-exec-dispatcher ...) or the API.\n"
+      . _api_socket_hint($config) . "\n";
     exit 1;
+}
+
+# T-080: with the key unreadable, `run` and `ping` use the API socket when
+# api_socket is set and this user may connect to it. $API_ERROR holds why a
+# socket that looked usable was not (for the message above); declared at the top.
+
+# The one line the T-076 message adds about the socket route.
+sub _api_socket_hint ($config) {
+    my $sock = $config->{api_socket};
+    return "To use ced without sudo, ask for the API socket (api_socket) to be enabled;"
+         . " ced then uses it by itself."
+        unless defined $sock && length $sock;
+    my $why = $API_ERROR // Exec::APIClient::unusable_reason($sock) // "it did not answer";
+    return "ced would use the API socket (api_socket = $sock), but $why.";
+}
+
+# The socket to use instead of connecting to agents, or undef: only when the
+# key is unreadable and api_socket is set and usable by this user.
+sub _api_socket_route ($config) {
+    my $key = $config->{key} // return;
+    return unless defined Exec::Agent::Config::unreadable_path($key);
+    my $sock = $config->{api_socket};
+    return unless defined $sock && length $sock;
+    return if defined Exec::APIClient::unusable_reason($sock);
+    return $sock;
+}
+
+# POST $body to $url on the API socket and return the decoded 200 reply, or
+# undef when the socket cannot be reached (the caller falls back to the T-076
+# message). Every other reply ends the command here, as the direct path would:
+# a hook denial and a lock conflict print what the CLI prints and exit 1; an
+# unknown agent or a malformed request is an error. The API, not ced, runs the
+# auth hook and the run lock on this route.
+sub _api_post ($opts, $sock, $url, $body) {
+    my $r = Exec::APIClient::request($sock, 'POST', $url, $body);
+    if (!$r->{status}) {
+        $API_ERROR = $r->{error};
+        return;
+    }
+    my $d = $r->{data} // {};
+    return $d if $r->{status} == 200;
+    if ($r->{status} == 403) {
+        _auth_error({ reason => $d->{error}, code => $d->{code} }, $opts->{json});
+        exit 1;
+    }
+    if ($r->{status} == 409) {
+        _lock_error({ conflicts => $d->{conflicts} // [] }, $opts->{json});
+        exit 1;
+    }
+    my $what = $r->{status} == 404 && ($d->{error} // '') eq 'unknown agent'
+        ? ($d->{detail} =~ s/^not a registered agent:/unknown agent:/r)
+        : "the API refused the request (HTTP $r->{status}): " . ($d->{error} // $r->{error} // 'no reason given')
+          . (defined $d->{detail} ? " - $d->{detail}" : '');
+    die "Error: $what\n";
+}
+
+# `--async` and `--port` have no API route: stop plainly, never drop them.
+sub _api_refuse_options ($opts, $key) {
+    for my $o (grep { defined $opts->{$_} } qw(async port)) {
+        print STDERR "Error: --$o is not available through the API socket, which ced uses because"
+          . " it cannot read $key.\nRun it with sudo: sudo ctrl-exec-dispatcher ...\n";
+        exit 1;
+    }
 }
 
 # Days until a cert expiry string ("Mon DD HH:MM:SS YYYY GMT") elapses, or undef
@@ -149,9 +215,26 @@ sub mode_run ($opts, @args) {
 
     my ($hosts, $script, $script_args) = _parse_run_args(@args);
     my $config   = _load_config();
-    _require_readable_key();    # before auth and the run lock: it cannot connect anyway
     my $username = $opts->{username} // $ENV{USER} // '';
     my $token    = $opts->{token}    // $ENV{ENVEXEC_TOKEN} // '';
+
+    # T-080: no readable key but a usable API socket - the API runs the hook
+    # and the lock, and the agents. Same output and exit codes as below.
+    if (my $sock = _api_socket_route($config)) {
+        _api_refuse_options($opts, $config->{key});
+        my $d = _api_post($opts, $sock, '/run', {
+            hosts => $hosts, script => $script, args => $script_args,
+            username => $username, token => $token,
+        });
+        if ($d) {
+            my $results = $d->{results} // [];
+            if ($opts->{json}) { print encode_json({ ok => 1, results => $results }), "\n" }
+            else               { _format_run_results($results) }
+            exit((grep { ($_->{exit} // -1) != 0 } @$results) ? 1 : 0);
+        }
+    }
+
+    _require_readable_key();    # before auth and the run lock: it cannot connect anyway
 
     my $auth = Exec::Auth::check(
         action    => 'run',
@@ -305,6 +388,19 @@ sub mode_ping ($opts, @hosts) {
     my $config   = _load_config();
     my $username = $opts->{username} // $ENV{USER} // '';
     my $token    = $opts->{token}    // $ENV{ENVEXEC_TOKEN} // '';
+
+    # T-080: through the API socket when the key is unreadable (see mode_run).
+    if (my $sock = _api_socket_route($config)) {
+        _api_refuse_options($opts, $config->{key});
+        my $d = _api_post($opts, $sock, '/ping',
+                          { hosts => \@hosts, username => $username, token => $token });
+        if ($d) {
+            my $results = $d->{results} // [];
+            if ($opts->{json}) { print encode_json({ ok => 1, results => $results }), "\n" }
+            else               { _format_ping_results($results) }
+            return;
+        }
+    }
 
     my $auth = Exec::Auth::check(
         action    => 'ping',

@@ -219,6 +219,12 @@ that **manage the CA or certificates** (`setup-ca`, `setup-ctrl-exec`,
 both classes require `sudo`. This keeps the dispatcher's and CA's private keys
 readable only by root, not by every operator in the group.
 
+A group member can still `run` and `ping` without sudo through the API: with
+`ctrl-exec-api` running and `api_socket` set (see *API unix socket* below), `ced`
+sends those two commands to the API over the socket by itself when it cannot
+read the key, and the auth hook decides what the user may do (`docs/API.md` has
+an example hook that allows one uid a set of scripts on named hosts).
+
 
 ## Running the Tests
 
@@ -577,7 +583,8 @@ The examples below omit `sudo` for brevity, but commands that contact agents
 (`run`, `ping`, `maintain`) or manage certificates (`setup-*`, `pairing-mode`,
 `rotate-cert`, `approve`/`deny`) use root-owned keys and must be run with `sudo`.
 The read-only commands (`list-agents`, `status`, `list-locks`) work without sudo
-for `ctrl-exec` group members - see *ctrl-exec group* above.
+for `ctrl-exec` group members - see *ctrl-exec group* above - and `run` and
+`ping` too when `api_socket` is enabled (`ced` then uses the API by itself).
 
 ### Run
 

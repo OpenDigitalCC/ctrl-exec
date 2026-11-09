@@ -161,10 +161,13 @@ newgrp ctrl-exec           # apply the new group to this shell (or re-login)
 > monitoring commands (`list-agents`, `status`, `list-locks`) work without sudo.
 > Commands that contact agents (`run`, `ping`) or manage the CA/certs
 > (`setup-*`, `pairing-mode`, `rotate-cert`, `approve`/`deny`) use root-owned
-> keys and require `sudo`.
+> keys and require `sudo` - except `run` and `ping`, which `ced` sends to the API
+> by itself when `api_socket` is enabled and your user may use it (the auth hook
+> decides what you may run).
 
 > **Auth hook.** `ced` needs no hook; it runs as root (the dispatcher key is
-> root and service user only, so `ctrl-exec` group members use the API). The
+> root and service user only, so `ctrl-exec` group members' `run` and `ping` go
+> through the API socket when `api_socket` is set). The
 > install seeds `/etc/ctrl-exec-dispatcher/auth-hook` as an example (it allows
 > everything) but does not enable it, so the API denies every request until you
 > write a hook and set `auth_hook` in `ctrl-exec.conf` (or deliberately set

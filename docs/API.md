@@ -47,6 +47,26 @@ TLS. Over the socket, a client speaks the same HTTP:
 curl -s --unix-socket /run/ctrl-exec-api/api.sock http://localhost/health
 ```
 
+**`ced` through the socket.** A user who cannot read `dispatcher.key` (the
+key is root and service user only, so a `ctrl-exec` group member cannot
+connect to agents) needs no client of their own: when `api_socket` is set in
+`ctrl-exec.conf` and the user may connect to it, `ced run` and `ced ping` send
+the request to `POST /run` or `POST /ping` on the socket and print the result
+as they do on the direct path - the same text, the same `--json`, the same exit
+codes. A user who can read the key (root, the service user) is unchanged and
+connects to agents directly. `--username` (default `$USER`) and `--token`
+(default `$ENVEXEC_TOKEN`) go in the request body, and the **API** runs the
+auth hook and the run lock - `ced` does neither on this route, so the hook
+decides by `peer_uid`, `username`, `token`, script and hosts. A hook denial
+prints `Denied: <reason>` on stderr (with `--json`, `{"ok":0,"error":...,"code":...}`
+on stdout) and exits 1, as on the direct path; a lock conflict prints
+`Locked: ...` and exits 1. Not available on this route, and refused with a
+message that says to use sudo: `--async` (`status` and `wait` read the run
+records and connect to agents with the key) and `--port`. `ced ping` through
+the API does not renew certificates (the API has no CA key; `ced maintain`
+does). When `api_socket` is unset, or the socket cannot be used, `ced` stops
+with the key message and one line about the socket.
+
 The server uses a fork-per-request model: the parent accepts connections and
 forks a child per request. The child handles the request and exits. The parent
 reaps children with a SIGCHLD handler calling `waitpid(-1, WNOHANG)`.
@@ -405,6 +425,37 @@ install seeds an example `auth-hook` that allows every request (`exit 0`); it
 is inactive until you copy it, add real rules and name it in `auth_hook`. Set
 `api_auth_default = allow` only on isolated networks where no credential
 checking is required.
+
+**Example: one user, named scripts, named hosts.** Every request on the API
+reaches the hook first with `action=api` (no script, no hosts), then again with
+the real `run` or `ping`; the hook must authorise both. This one allows the
+user with uid 1001 (`peer_uid`, from the kernel, so it cannot be claimed) to
+run `health-check` and `backup` on `app-01` and `app-02` and to ping them, and
+refuses everyone else on the socket:
+
+```bash
+#!/bin/bash
+# /etc/ctrl-exec-dispatcher/auth-hook
+ALLOWED_UID=1001
+ALLOWED_HOSTS=" app-01 app-02 "
+ALLOWED_SCRIPTS=" health-check backup "
+
+[ "$ENVEXEC_PEER_UID" = "$ALLOWED_UID" ] || exit 3    # not this user (or TCP)
+
+case "$ENVEXEC_ACTION" in
+  api) exit 0 ;;                                       # the API's first check
+  run|ping)
+    case "$ENVEXEC_ACTION" in
+      run) [[ "$ALLOWED_SCRIPTS" == *" $ENVEXEC_SCRIPT "* ]] || exit 3 ;;
+    esac
+    IFS=, read -ra hosts <<< "$ENVEXEC_HOSTS"
+    for h in "${hosts[@]}"; do
+      [[ "$ALLOWED_HOSTS" == *" $h "* ]] || exit 3
+    done
+    exit 0 ;;
+esac
+exit 1
+```
 
 Always use `ENVEXEC_ARGS_JSON` in hook scripts to inspect script arguments.
 `ENVEXEC_ARGS` (space-joined) is deprecated and unreliable for arguments
