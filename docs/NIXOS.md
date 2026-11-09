@@ -126,6 +126,13 @@ Off by default, as on other platforms. `executor.enable = true` runs
 sets `executor_socket`. Profiles (`run_as`, capabilities, writable paths) are
 applied only with it, and `--async` runs are refused while it is on.
 
+Without it, scripts run as `ctrl-exec-agent` under the service's sandbox: no
+devices (`PrivateDevices`), no capabilities, no new privileges. A script that
+touches `/dev`, needs root or needs a capability (for example `zfs`, `zpool`
+or `mount`) cannot work; set `executor.enable = true` and give the script a
+profile with `run_as` in `scripts.conf`. `ctrl-exec-agent self-check` states
+this when `executor_socket` is unset.
+
 ## What the module sets up
 
 - User and group `ctrl-exec-agent`; `nobody` for the default profile.

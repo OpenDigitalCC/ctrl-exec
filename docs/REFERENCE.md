@@ -1355,6 +1355,14 @@ Under normal operation this is started and managed by the init system
 (systemd or procd). Run directly for debugging or on systems without
 a supported init system.
 
+Without the executor (`executor_socket` unset) scripts run directly as the
+agent's own user, with no profile applied. Under the shipped systemd unit that
+means no devices (`PrivateDevices=yes`), no capabilities and no new privileges
+(the procd init script sets only the user). A script that touches `/dev`, needs
+root or needs a capability (for example `zfs`, `zpool` or `mount`) needs the
+executor and a profile with `run_as` in `scripts.conf`. `self-check` states
+this when `executor_socket` is unset.
+
 The agent picks up an edit to `agent.conf` or `scripts.conf` by itself: before
 it handles each connection it checks whether either file changed on disk
 (inode, size, modification or change time) since it last read them, and if so

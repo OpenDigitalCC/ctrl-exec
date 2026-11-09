@@ -1221,8 +1221,16 @@ sub mode_self_check {
         }
     }
     else {
+        # Say what is in force. The unit is not visible from here (and self-check
+        # runs under sudo, so its own uid says nothing), so the user and the
+        # hardening are named as the shipped units' (procd sets only the user).
         print "  Executor: not configured (executor_socket unset) - scripts run "
-            . "directly; per-script profiles are NOT applied\n";
+            . "directly as the agent's service user (ctrl-exec-agent with the shipped units);\n"
+            . "    per-script profiles are NOT applied.\n"
+            . "    With the shipped systemd unit that is no devices (PrivateDevices),\n"
+            . "    no capabilities and no new privileges: a script that needs root,\n"
+            . "    a device (/dev/...) or a capability needs the executor and a\n"
+            . "    profile in scripts.conf\n";
     }
 
     print "Self-check complete.\n";

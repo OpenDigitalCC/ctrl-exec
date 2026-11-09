@@ -80,9 +80,13 @@ my $tmp = tempdir(CLEANUP => 1);
     my $l = IO::Socket::UNIX->new(Local => $path, Listen => 1) or die $!;
     ($out, $rc) = _check("executor_socket = $path\n");
     like $out, qr/Executor: OK/, 'self-check: executor reachable -> OK';
+    unlike $out, qr/PrivateDevices|run directly/, 'self-check: executor set -> no sandbox text';
 
     ($out, $rc) = _check("");
-    like $out, qr/Executor: not configured.*profiles are NOT applied/, 'self-check: unset -> says profiles not applied';
+    like $out, qr/Executor: not configured.*profiles are NOT applied/s, 'self-check: unset -> says profiles not applied';
+    like $out, qr/scripts run directly as the agent's service user \(ctrl-exec-agent/, 'self-check: unset -> names the user scripts run as';
+    like $out, qr/PrivateDevices.*no capabilities.*needs root,\s+a device \(\/dev\/\.\.\.\) or a capability needs the executor and a\s+profile/s,
+        'self-check: unset -> says what needs the executor';
     is $rc, 0, 'self-check: unset executor is not an error';
 }
 

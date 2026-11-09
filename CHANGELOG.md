@@ -9,6 +9,7 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 
 - **Added** `ctrl-exec-agent request-pairing --name <name>`: the agent registers under the name the operator chose instead of the FQDN from `hostfqdn()` (which carries a DHCP lease's domain); validated as a hostname before any key is made, used as the request's hostname and the CSR CN, FQDN warning skipped. Default unchanged. (T-081)
 - **Added** `ced approve <reqid> --replace` unregisters any other agent whose registered address is the address the request came from, once the new agent is registered (logged `unpair` with `REPLACED_BY`; the old certificate stays valid until expiry, as for `unpair`), for a node that re-pairs under a new name; `list-requests`, the pairing queue and `approve` note such an agent, and without the flag nothing is removed. `unpair` is now in `docs/REFERENCE.md`. (T-082)
+- **Changed** `self-check` with `executor_socket` unset now says which user scripts run as and, with the shipped systemd unit, that they have no devices or capabilities and so need the executor and a profile for root, `/dev` or a capability; NIXOS.md and REFERENCE.md say the same, so a missing `/dev/zfs` is no longer read as a udev fault. (T-083)
 
 ## 0.14.2 — netboot images carry their scripts; ced through the API socket
 
