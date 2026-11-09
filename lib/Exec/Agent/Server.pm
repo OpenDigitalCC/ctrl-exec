@@ -625,6 +625,13 @@ sub handle_ping ($conn, $body, $peer, $config, $trusted, $peer_serial, $version)
     });
 }
 
+# The CN for a renewal CSR: the CN of the agent's current certificate, which is
+# the name it is registered under (the dispatcher binds the CSR CN to it). Falls
+# back to fqdn() when the certificate is missing, unreadable or has no CN.
+sub renewal_cn ($config) {
+    return Exec::CertInfo::cn_from_path($config->{cert}) // fqdn();
+}
+
 # POST /renew - the dispatcher asks the agent to begin a cert renewal. The agent
 # generates a CSR from its EXISTING key (key continuity preserved - no new key)
 # carrying its current identity (CN), and returns it. Intentionally exempt from
@@ -642,7 +649,7 @@ sub handle_renew ($conn, $body, $peer, $config) {
     }
 
     my $r = eval {
-        Exec::Agent::AgentPairing::generate_csr_only(hostname => fqdn(), key_path => $key);
+        Exec::Agent::AgentPairing::generate_csr_only(hostname => renewal_cn($config), key_path => $key);
     };
     if (!$r || !$r->{csr_pem}) {
         Exec::Log::log_action('ERR', {

@@ -74,6 +74,16 @@ sub subject_from_pem ($pem) {
     return $1;
 }
 
+# The subject CN of the certificate file at $path, or undef when the file is
+# missing, not a certificate, or has no CN.
+sub cn_from_path ($path) {
+    return unless defined $path && -f $path;
+    my $out = `openssl x509 -noout -subject -nameopt RFC2253 -in \Q$path\E 2>/dev/null`;
+    return unless defined $out && $out =~ /^subject=.*?\bCN=((?:[^,\\\n]|\\.)+)/m;
+    (my $cn = $1) =~ s/\\(.)/$1/g;
+    return length $cn ? $cn : undef;
+}
+
 # The public key (PEM) of a certificate ('x509') or a certificate request
 # ('req') held in a PEM string, or undef. Two values are compared to tell
 # whether a certificate and a CSR carry the same key.
