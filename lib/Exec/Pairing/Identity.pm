@@ -9,7 +9,7 @@ use strict;
 use warnings;
 use feature      qw(signatures);
 no warnings      qw(experimental::signatures);
-use Socket qw(getaddrinfo getnameinfo
+use Socket qw(getaddrinfo getnameinfo EAI_NONAME EAI_NODATA
               AI_NUMERICHOST NI_NAMEREQD NI_NUMERICHOST NIx_NOSERV);
 
 # Forward-confirmed reverse DNS of an IP. Returns { ptr => $name, confirmed => 0|1 }
@@ -50,6 +50,30 @@ sub reverse_lookup ($ip, $timeout = undef) {
     return $out;   # undef on timeout or any failure
 }
 
+# Does a name resolve from this dispatcher? Returns 1 when it has at least one
+# address, 0 when the resolver says definitively that it has none (no such
+# name / no address), and undef when that cannot be told (timeout, temporary
+# resolver failure, empty name) - callers treat undef as "leave things alone".
+# Bounded by $timeout seconds (default 2), like reverse_lookup. Done once at
+# queue time so approve never blocks on DNS.
+sub forward_lookup ($name, $timeout = undef) {
+    $timeout //= 2;
+    return unless defined $name && length $name;
+
+    my $out = eval {
+        local $SIG{ALRM} = sub { die "timeout\n" };
+        alarm $timeout;
+        my ($err, @ai) = getaddrinfo($name, '');
+        if ($err) {
+            my $code = $err + 0;
+            ($code == EAI_NONAME || $code == EAI_NODATA) ? 0 : undef;
+        }
+        else { @ai ? 1 : 0 }
+    };
+    alarm 0;
+    return $out;
+}
+
 # Operator-facing identity lines for a queued request: the reported name (which
 # becomes the registry key), the source IP as this dispatcher saw it, the
 # agent's self-reported IP when it differs (a sign of NAT in between), and the
@@ -74,7 +98,22 @@ sub identity_lines ($req) {
     else {
         push @lines, "  Reverse DNS:   (none resolvable from this dispatcher)";
     }
+    push @lines, sprintf("  Lookup:        ip (%s does not resolve here)", $req->{hostname} // '?')
+        if lookup_defaults_to_ip($req);
     return @lines;
+}
+
+# True when approve will register this request with lookup_by=ip on its own:
+# the agent did not ask for a lookup_by, and the requested name was found not to
+# resolve from this dispatcher at queue time. A name that resolves to any
+# address (even a different one - NAT) keeps hostname; an unknown result
+# (timeout, old queued request) changes nothing. 'approve --lookup-by' is
+# checked by the caller.
+sub lookup_defaults_to_ip ($req) {
+    return 0 if defined $req->{lookup_by} && length $req->{lookup_by};
+    return 0 unless defined $req->{name_resolves} && !$req->{name_resolves};
+    return 0 unless length($req->{ip} // '') || length($req->{source_ip} // '');
+    return 1;
 }
 
 # A one-or-two-line recommendation for how to register the agent so this

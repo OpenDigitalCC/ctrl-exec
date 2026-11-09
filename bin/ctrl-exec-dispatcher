@@ -696,6 +696,9 @@ sub mode_list_requests {
             Exec::Pairing::code_label($r);
         # An agent already paired elsewhere keeps its certificate (T-062).
         print "$_\n" for Exec::Pairing::kept_cert_lines($r);
+        # T-079: approve will register this one by IP (name does not resolve).
+        printf "%-10s  lookup: ip (%s does not resolve here)\n", '', $r->{hostname}
+            if Exec::Pairing::Identity::lookup_defaults_to_ip($r);
     }
     print "\nReverse DNS is how this dispatcher resolves each agent's IP; "
         . "(ok) = forward-confirmed.\n"

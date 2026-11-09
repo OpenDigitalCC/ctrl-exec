@@ -442,8 +442,21 @@ sub approve_request (%opts) {
     # Dispatch-resolution preferences: operator override (approve flags) wins
     # over the agent-suggested/reported value in the request; then the default.
     my $lookup_by = _effective_lookup_by($opts{lookup_by}, $req->{lookup_by});
+    # T-079: nobody chose a lookup_by and the name was found not to resolve at
+    # queue time (recorded then, so no DNS here): register by IP.
+    my $by_ip_default = 0;
+    if (!defined $opts{lookup_by} && $lookup_by eq 'hostname'
+        && Exec::Pairing::Identity::lookup_defaults_to_ip($req)) {
+        $lookup_by     = 'ip';
+        $by_ip_default = 1;
+    }
     my $port      = _effective_port($opts{port}, $req->{port});
-    my $ip        = _effective_ip($opts{ip}, $req->{ip});
+    # Registered by IP on that default: the address the request came from, the
+    # one this dispatcher has seen work (the agent's self-reported IP may be on
+    # another network), unless approve --ip names one.
+    my $ip        = $by_ip_default
+                  ? _effective_ip($opts{ip}, $req->{source_ip}, $req->{ip})
+                  : _effective_ip($opts{ip}, $req->{ip});
 
     require Exec::CA;
 
@@ -547,11 +560,14 @@ sub approve_request (%opts) {
     print "$_\n" for kept_cert_lines($req, $pin_ca);
     printf "  Registered:  %s   lookup_by=%s   addr=%s:%s\n",
         $name, $lookup_by, $addr, ($port // '?');
+    print "  Registered by IP: $name does not resolve here.\n" if $by_ip_default;
     if (length($req->{source_ip} // '') || $req->{reverse_confirmed}) {
         print "  If this dispatcher cannot reach it by that, fix without re-pairing:\n";
         printf "    ctrl-exec-dispatcher edit-agent %s --lookup-by ip --ip %s\n",
             $name, $req->{source_ip}
-            if length($req->{source_ip} // '');
+            if length($req->{source_ip} // '') && !$by_ip_default;
+        printf "    ctrl-exec-dispatcher edit-agent %s --lookup-by hostname\n", $name
+            if $by_ip_default;
         printf "    ctrl-exec-dispatcher edit-agent %s --rename %s\n",
             $name, $req->{reverse_dns}
             if $req->{reverse_confirmed} && length($req->{reverse_dns} // '')
@@ -684,6 +700,8 @@ sub _print_queue ($reqs) {
             $r->{ip}       // '?',
             code_label($r),
             $r->{received} // '?';
+        printf "      lookup: ip (%s does not resolve here)\n", $r->{hostname}
+            if Exec::Pairing::Identity::lookup_defaults_to_ip($r);
     }
 }
 
@@ -852,6 +870,10 @@ sub _handle_pair_request ($conn, $peer_ip, $log_fn, $max_queue = undef, $pairing
     # approving (and so list-requests/approve never block on DNS). Bounded by a
     # short timeout; absent/slow PTR just yields no reverse name.
     my $rev = Exec::Pairing::Identity::reverse_lookup($peer_ip);
+    # Likewise whether the requested name resolves here at all, so approve can
+    # register by IP when the agent did not choose and the name cannot work
+    # (T-079). undef (timeout / unknown) is simply not recorded.
+    my $name_resolves = Exec::Pairing::Identity::forward_lookup($hostname);
 
     # Queue depth check - expire stale entries first, then count remaining
     _expire_stale_requests($pairing_dir);
@@ -875,6 +897,7 @@ sub _handle_pair_request ($conn, $peer_ip, $log_fn, $max_queue = undef, $pairing
         csr       => $csr,
         nonce     => $nonce,
         lookup_by => $lookup_by,
+        (defined $name_resolves ? (name_resolves => $name_resolves) : ()),
         port      => $agent_port,
         received  => $received,
         code      => $code,

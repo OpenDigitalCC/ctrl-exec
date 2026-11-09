@@ -374,7 +374,18 @@ every agent's connection appears to come from the bridge gateway). Use
   hostname; `ip` connects to the IP recorded at pairing. Use `ip` when the
   agent-reported hostname does not resolve from the dispatcher. This overrides
   any value the agent suggested with `request-pairing --lookup-by`. See
-  *Dispatch host resolution* under `run`.
+  *Dispatch host resolution* under `run`. When neither you nor the agent chose
+  a value, and the agent's requested name did not resolve from the dispatcher
+  when the request arrived (checked once at queue time, with a short timeout,
+  so approve never waits on DNS), the agent is registered `lookup_by = ip` with
+  the address the request came from (not the address the agent reports for
+  itself, which may be on another network; `approve --ip` overrides) instead,
+  because a hostname lookup is known to fail.
+  `list-requests` marks such a request, and `approve` says "Registered by IP"
+  and prints `edit-agent <name> --lookup-by hostname` to switch back. A name
+  that resolves to any address keeps `hostname` (the source IP is the wrong
+  one behind NAT), as does an explicit `--lookup-by hostname`, on either side.
+  Existing registrations are not changed.
 
 `--ip <addr>`
 : The address to record for this agent (registry `ip`), used by dispatch when
@@ -455,8 +466,9 @@ With `--json`, returns an array of objects with fields:
 : The agent's operational port (default 7443). Used by dispatch.
 
 `lookup_by`
-: How dispatch resolves this agent: `hostname` (default) or `ip`. See
-  *Dispatch host resolution* under `run`.
+: How dispatch resolves this agent: `hostname` (default) or `ip`. An agent
+  whose name did not resolve at pairing and who asked for nothing is registered
+  `ip` (see `approve --lookup-by`). See *Dispatch host resolution* under `run`.
 
 `tags`
 : Object of the agent's key/value tags, cached from `/capabilities` on the
