@@ -5,13 +5,16 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
-## 0.14.1 — (unreleased)
+## 0.14.1 — the agent on NixOS; ced for operators says what it needs
+
+Upgrading from 0.14.0: nothing to do. `script_path` is unset by default, so
+scripts get the same PATH as before.
 
 - **Added** `script_path` in agent.conf: the PATH scripts get, run directly, async or through the executor (both read the same value from the same file and follow a reload), so a host such as NixOS, whose standard directories are almost empty, can name its own (`/run/wrappers/bin:/run/current-system/sw/bin`). Unset, the fixed PATH of earlier releases is used, so existing hosts are unchanged. An invalid value never stops the agent or the executor: both log the reason and use the default; `self-check` shows the PATH in force and `doctor` reports an invalid value, and notes an entry that is missing or whose directory is not root-owned or is writable by others. The PATH never comes from a request or an inherited environment. (T-074)
 - **Added** Nix flake with `ctrl-exec-agent` and `ctrl-exec-dispatcher` packages, a NixOS module `services.ctrl-exec-agent` (users, directories, units with the shipped hardening, `agent.conf`/`scripts.conf` as real files, scripts copied out of the Nix store as root-owned files, opt-in executor, `script_path`) and a two-node NixOS VM test (pairing, direct run, run under a profile, staged-cert adoption), so the agent runs on NixOS; docs/NIXOS.md. (T-075)
 - **Changed** `ced` run by a user who cannot read `dispatcher.key` (a `ctrl-exec` group member; the key stays 0600 by design, so the group cannot authenticate to agents as the dispatcher) now stops before connecting with a plain message on stderr - the key path, the user, and "use sudo or the API" - and exit 1, instead of LWP's "SSL_key_file ... Permission denied"; `doctor` run by such a user reports a PROBLEM that ced will not work for them (it was a note, or nothing, when the directory could not be searched). Commands that do not connect to agents, and root, are unchanged. `ced ping|run <short name>` for an unknown agent adds "Did you mean <name>.example.com?" when exactly one registered name starts with `<name>.`. The `ced` doc lines now say who can run it. (T-076)
 
-## 0.14.0 — (unreleased)
+## 0.14.0 — an agent serves several dispatchers; doctor
 
 - **Changed** the agent's `ca.crt` is a bundle of dispatcher CAs: pairing appends the dispatcher's CA (once per SHA-256 fingerprint) instead of replacing it, so pairing a dispatcher that has its own CA no longer cuts off the dispatchers already paired; an existing single-CA `ca.crt` is a bundle of one and is used as it is. A renewed agent certificate must come from the CA that issued the current one. (T-061)
 - **Changed** the trusted-dispatcher map is keyed by issuing CA and serial (`<ca-fingerprint> <hex-serial> <dispatcher-id>`), so a certificate from another trusted CA that carries a trusted serial is refused instead of being taken for that dispatcher; rotation records the caller's CA. A pre-0.14 map is upgraded in place on the agent's first start with the fingerprint of its CA (logged `trusted-map-upgrade`), with no operator step. (T-061)
