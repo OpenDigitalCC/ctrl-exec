@@ -52,6 +52,13 @@ is_deeply(complete(words => ['ced', 'approve', '--']),
     'approve options');
 is_deeply(complete(words => ['ced', 'edit-agent', 'alpha', '--r']), ['--rename'], 'edit-agent --rename');
 is_deeply(complete(words => ['ced', 'run', '--as']), ['--async'], 'run --async');
+is_deeply(complete(words => ['ced', 'run', '--inp']), [qw(--input-field --input-file --input-json)],
+    'run input options');
+is_deeply(complete(words => ['ced', 'run', 'alpha', 'deploy', '--input-file', "$tmp/sc"]), ["$tmp/scripts.conf"],
+    '--input-file completes files');
+is_deeply(complete(words => ['ced', 'run', '--input-field', '']), [], '--input-field value: nothing offered');
+is_deeply(complete(words => ['ced', 'run', '--input-file', "$tmp/scripts.conf", 'al']), ['alpha'],
+    'the option value is not taken as a host');
 is_deeply(complete(words => ['ced', 'list-agents', '--ta']), ['--tags'], 'list-agents --tags');
 is_deeply(complete(words => ['ced', 'doctor', '--f']), ['--fix'], 'doctor --fix');
 is_deeply(complete(words => ['ced', 'doctor', '--b']), ['--brief'], 'doctor --brief');

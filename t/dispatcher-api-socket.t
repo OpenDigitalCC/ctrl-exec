@@ -22,7 +22,7 @@ use FindBin qw($Bin);
 use lib "$Bin/../lib", "$Bin/lib";
 use File::Temp qw(tempdir);
 use File::Path qw(make_path);
-use JSON qw(decode_json);
+use JSON qw(decode_json encode_json);
 use ChildGuard qw(guarded_fork);
 
 plan skip_all => 'root reads every file' unless $>;
@@ -86,6 +86,9 @@ if ($pid == 0) {
         };
         *Exec::Registry::did_you_mean = sub { '' };
         *Exec::Engine::dispatch_all = sub (%o) {
+            if ($o{input}) {    # T-086: what reached dispatch
+                open my $fh, '>', "$r/dispatch.input" or die; print $fh encode_json($o{input}); close $fh;
+            }
             my $fail = $o{script} eq 'fail';
             return [ { host => 'agent-01', exit => ($fail ? 3 : 0), rtt => '12ms', reqid => 'abc123',
                        stdout => ($fail ? '' : "hello\n"), stderr => ($fail ? "boom\n" : '') } ];
@@ -134,6 +137,23 @@ subtest 'run: output and exit equal the direct path' => sub {
     is $rc, 0, 'exit 0';
     ok !-e "$r/cli-hook.called", 'ced did not call its own hook (the API does)';
     like slurp("$r/hook.seen"), qr/^run tester $/m, 'the API\'s hook saw the run with $USER as username';
+};
+
+subtest 'run: --input-file and --input-json reach dispatch through the API' => sub {
+    unlink "$r/dispatch.input", "$r/hook.seen";
+    spew("$r/doc", "line1\nSOCKET-SECRET-ced86\n");
+    my ($out, $err, $rc) = ced('run', 'agent-01', 'backup', '--input-file', "$r/doc", '--input-field', 'key');
+    is $rc, 0, 'exit 0' or diag $err;
+    is_deeply decode_json(slurp("$r/dispatch.input")), { key => "line1\nSOCKET-SECRET-ced86\n" }, 'the file, as the named field';
+    unlike slurp("$r/hook.seen"), qr/SOCKET-SECRET/, 'the API\'s hook never saw the value';
+    unlink "$r/dispatch.input";
+    spew("$r/f.json", encode_json({ a => 'x', b => 'y' }));
+    ($out, $err, $rc) = ced('run', 'agent-01', 'backup', '--input-json', "$r/f.json");
+    is_deeply decode_json(slurp("$r/dispatch.input")), { a => 'x', b => 'y' }, 'fields JSON';
+    unlink "$r/dispatch.input";
+    ($out, $err, $rc) = ced('run', 'agent-01', 'backup', '--input-json', "$r/f.json", '--input-file', "$r/doc");
+    isnt $rc, 0, 'both refused';
+    ok !-e "$r/dispatch.input", 'nothing dispatched';
 };
 
 subtest 'run --json' => sub {

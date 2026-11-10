@@ -7,6 +7,8 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 
 ## 0.14.5 — (unreleased)
 
+- **Added** `ced run --input-file <file|-> [--input-field <name>]` and `--input-json <file|->` send confidential script input (`input=raw`, `raw:<name>`, `fields`) from the dispatcher CLI, on the direct path and through the API socket, so an automation with `ced` and the dispatcher key no longer needs `ctrl-exec-api` and the CLI plugin just to pass stdin; the input gets the API's validation before any hook, lock or dispatch and reaches only the agents (never argv, logs, the run store or the hook environment), it is refused with `--async`, and the usage text notes that without `--json` the exit status is 0/1, not the script's. (T-086, R-031)
+
 ## 0.14.4 — renewal keeps the agent's name; no trailing dots in a default name
 
 Upgrading from 0.14.3: nothing to do. Upgrade agents paired with

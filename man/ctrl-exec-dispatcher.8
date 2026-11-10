@@ -36,6 +36,25 @@ the auth hook and the lock, and
 and
 .B \-\-port
 are refused.
+.IP
+.BI "\-\-input-file " "file|\-"
+sends the file (or stdin) as the script's confidential input, one field named
+.B input
+or
+.BI \-\-input-field " name"
+(scripts declared input=raw or raw:name).
+.BI "\-\-input-json " "file|\-"
+sends a JSON object of named string fields (input=fields). The two are
+exclusive and not available with
+.BR \-\-async .
+The input is checked as the API checks it before the auth hook or any dispatch,
+and goes only to the agents: never to a command line, a log line, the run
+store or the hook environment (which sees field names and the total size).
+Without
+.B \-\-json
+the exit status is 0 or 1, not the script's exit code; use
+.B \-\-json
+for each host's exit code.
 .TP
 .BI "ping " "host[:port] [host...]"
 Test mTLS connectivity and report certificate expiry and agent version.

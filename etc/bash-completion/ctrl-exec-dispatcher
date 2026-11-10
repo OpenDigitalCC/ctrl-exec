@@ -50,11 +50,11 @@ _ctrl_exec_dispatcher() {
 
     # Value of an option that takes one.
     case $prev in
-        --config)
+        --config|--input-file|--input-json)
             COMPREPLY=($(compgen -f -- "$cur")); return 0 ;;
         --lookup-by)
             COMPREPLY=($(compgen -W "ip hostname" -- "$cur")); return 0 ;;
-        --port|--username|--token|--agent-port|--ip|--rename|--tags|--timeout)
+        --port|--username|--token|--agent-port|--ip|--rename|--tags|--timeout|--input-field)
             return 0 ;;
     esac
 
@@ -68,7 +68,7 @@ _ctrl_exec_dispatcher() {
             ((i++)); continue
         fi
         case $w in
-            --config|--port|--username|--token|--lookup-by|--agent-port|--ip|--rename|--tags|--timeout)
+            --config|--port|--username|--token|--lookup-by|--agent-port|--ip|--rename|--tags|--timeout|--input-file|--input-field|--input-json)
                 # a value follows unless it was given as --opt=value
                 [[ ${COMP_WORDS[i+1]} == = ]] || ((i++))
                 continue ;;
@@ -92,7 +92,7 @@ _ctrl_exec_dispatcher() {
 
     local mode_opts=""
     case $mode in
-        run)          mode_opts="--async" ;;
+        run)          mode_opts="--async --input-file --input-field --input-json" ;;
         wait)         mode_opts="--timeout" ;;
         pairing-mode) mode_opts="--timeout" ;;
         approve)      mode_opts="--lookup-by --ip --agent-port --replace" ;;

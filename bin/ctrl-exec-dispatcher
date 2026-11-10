@@ -8,6 +8,7 @@ use FindBin qw($Bin);
 use lib "$Bin/../lib";
 
 use Exec::Log     qw();
+use Exec::Input   qw();
 use Exec::Engine  qw();
 use Exec::Auth    qw();
 use Exec::DispatcherConfig qw();
@@ -51,6 +52,9 @@ sub main {
         'rename=s'    => \$opts{rename},
         'tags=s'      => \$opts{tags},
         'async'       => \$opts{async},
+        'input-file=s'  => \$opts{input_file},
+        'input-field=s' => \$opts{input_field},
+        'input-json=s'  => \$opts{input_json},
         'timeout=i'   => \$opts{timeout},
         'replace'     => \$opts{replace},
         'fix'         => \$opts{fix},
@@ -210,6 +214,67 @@ sub _days_until_expiry ($expiry_str) {
     return int(($epoch - time()) / 86400);
 }
 
+# Confidential run input (T-086) from --input-file / --input-json, or nothing
+# when neither is given. Validated by Exec::Input, the same check the API
+# applies, before any hook, lock or dispatch. The values are held in memory
+# only: never in argv, a log line, the run store or the hook environment (the
+# hook sees the field names and a total size, as for the API). Messages name
+# the option and the field, never the content.
+sub _load_run_input ($opts, $config) {
+    my ($file, $field, $json) = @$opts{qw(input_file input_field input_json)};
+    return unless defined $file || defined $field || defined $json;
+
+    die "Error: --input-file and --input-json are mutually exclusive\n"
+        if defined $file && defined $json;
+    die "Error: --input-field needs --input-file\n" if defined $field && !defined $file;
+    die "Error: input is not available with --async\n" if $opts->{async};
+
+    my $input;
+    if (defined $file) {
+        $input = { ($field // 'input') => _slurp_input($file, '--input-file', 1) };
+    }
+    else {
+        my $bytes = _slurp_input($json, '--input-json', 0);
+        # JSON::PP quotes the text near a fault; report only the offset.
+        $input = eval { decode_json($bytes) };
+        if ($@) {
+            my $at = $@ =~ /at character offset (\d+)/ ? " (at character $1)" : '';
+            die "Error: --input-json is not valid JSON$at\n";
+        }
+        die "Error: --input-json must be a JSON object of string fields\n"
+            unless ref $input eq 'HASH';
+    }
+
+    my $v = Exec::Input::validate($input, Exec::Input::max_bytes($config));
+    die "Error: invalid input: $v->{error}\n" unless $v->{ok};
+    die "Error: --input-json has no fields\n" unless @{ $v->{names} };
+    return ($input, $v);
+}
+
+# The bytes of FILE, or of stdin for '-'. $text: decode as UTF-8 (the request
+# carries JSON strings, so binary content must be base64-encoded first).
+sub _slurp_input ($file, $opt, $text) {
+    my $bytes;
+    if ($file eq '-') {
+        local $/;
+        binmode STDIN;
+        $bytes = <STDIN>;
+    }
+    else {
+        open my $fh, '<:raw', $file or die "Error: $opt: cannot read '$file': $!\n";
+        local $/;
+        $bytes = <$fh>;
+        close $fh;
+    }
+    $bytes //= '';
+    return $bytes unless $text;
+    require Encode;
+    my $str = eval { Encode::decode('UTF-8', $bytes, Encode::FB_CROAK()) };
+    die "Error: $opt input is not valid UTF-8 text; the request carries JSON strings,"
+      . " so base64-encode binary content first\n" unless defined $str;
+    return $str;
+}
+
 sub mode_run ($opts, @args) {
     die "Usage: ctrl-exec-dispatcher run <host>[:<port>] [<host>...] <script> [-- <arg>...]\n"
         unless @args >= 2;
@@ -218,6 +283,7 @@ sub mode_run ($opts, @args) {
     my $config   = _load_config();
     my $username = $opts->{username} // $ENV{USER} // '';
     my $token    = $opts->{token}    // $ENV{ENVEXEC_TOKEN} // '';
+    my ($input, $iv) = _load_run_input($opts, $config);
 
     # T-080: no readable key but a usable API socket - the API runs the hook
     # and the lock, and the agents. Same output and exit codes as below.
@@ -226,6 +292,7 @@ sub mode_run ($opts, @args) {
         my $d = _api_post($opts, $sock, '/run', {
             hosts => $hosts, script => $script, args => $script_args,
             username => $username, token => $token,
+            (defined $input ? (input => $input) : ()),
         });
         if ($d) {
             my $results = $d->{results} // [];
@@ -242,6 +309,8 @@ sub mode_run ($opts, @args) {
         script    => $script,
         hosts     => $hosts,
         args      => $script_args,
+        input_names => $iv ? $iv->{names} : [],
+        input_bytes => $iv ? $iv->{bytes} : 0,
         username  => $username,
         token     => $token,
         source_ip => '127.0.0.1',
@@ -300,6 +369,7 @@ sub mode_run ($opts, @args) {
         port     => $opts->{port},
         username => $username,
         token    => $token,
+        (defined $input ? (input => $input) : ()),
     );
 
     if ($opts->{json}) {
@@ -1280,6 +1350,14 @@ Modes:
                              Run a script on one or more hosts
                              [--async] submit detached; returns a reqid to
                              poll with status/wait (for long-running jobs)
+                             [--input-file <file|->] send the file (or stdin)
+                             as the script's confidential input, field
+                             'input' or [--input-field <name>] (input=raw,
+                             raw:<name>); [--input-json <file|->] sends a
+                             JSON object of string fields (input=fields).
+                             Exclusive; not with --async. Without --json the
+                             exit is 0/1, not the script's code: use --json
+                             for per-host exit codes.
   status <reqid>             Show the current state of an async run
   wait <reqid> [--timeout <n>]
                              Poll an async run until complete (default 300s);

@@ -120,6 +120,40 @@ Output shows per-host status, exit code, round-trip time, stdout, and stderr.
 Exit code is 0 if all hosts succeeded, 1 if any host failed or returned
 a non-zero exit.
 
+#### Script input (`--input-file`, `--input-field`, `--input-json`)
+
+A script declared `input=raw`, `input=raw:<name>` or `input=fields` in the
+agent's `scripts.conf` takes confidential input (see Confidential run input
+below). `ced run` sends it without the API:
+
+```bash
+# input=raw: the whole file (or stdin for -) is the one field, named "input"
+ced run db-01 store-secret --input-file ./doc.txt
+ced run db-01 store-secret --input-file - < ./doc.txt
+
+# input=raw:<name>: name the field the script expects
+ced run db-01 store-secret --input-file ./doc.txt --input-field key
+
+# input=fields: a JSON object of named string fields
+ced run db-01 store-secret --input-json ./fields.json
+```
+
+`--input-file` and `--input-json` are exclusive; `--input-field` needs
+`--input-file`; none of them is available with `--async`. A file is read as
+UTF-8 text (base64-encode binary content first). `ced` applies the same
+checks as the API (at most 32 fields, names `A-Z a-z 0-9 _ . -` of 1-64
+characters, string values, `max_input_bytes` in total) before the auth hook,
+the lock or any dispatch, and refuses with a message that names the option or
+field, never the content. The input is sent to every host and goes nowhere
+else: not onto a command line, into a log line, the run store or the hook's
+environment, which sees only the field names and the total size
+(`ENVEXEC_INPUT_NAMES_JSON`, `ENVEXEC_INPUT_BYTES`). Through the API socket
+the request body carries it, as `POST /run` does.
+
+Without `--json` the exit status is 0 or 1 (1 when any host failed), not the
+script's exit code; use `--json` for each host's `exit`, `stdout` and
+`stderr`.
+
 #### Asynchronous runs (`--async`)
 
 For jobs that run longer than the dispatcher `read_timeout` (default 60s),
