@@ -36,6 +36,8 @@ LOCKS_DIR="/var/lib/ctrl-exec/locks"
 RUNS_DIR="/var/lib/ctrl-exec/runs"
 AGENT_RUNS_DIR="/var/lib/ctrl-exec-agent/runs"
 SYSTEMD_DIR="/etc/systemd/system"
+# Present only while systemd is the running init (sd_booted's test).
+SYSTEMD_RUN_DIR="/run/systemd/system"
 # Bash completion: the lazily loaded directory if the system has one, else the
 # older source-everything directory. Empty (completion skipped) if neither exists.
 if [[ -d /usr/share/bash-completion/completions ]]; then
@@ -283,7 +285,9 @@ HAS_SYSTEMD=false
 HAS_PROCD=false
 
 detect_init() {
-    if command -v systemctl &>/dev/null; then
+    # A running systemd, not the systemctl binary: a container image can carry
+    # systemctl with supervisord or nothing as PID 1, where every call fails.
+    if [[ -d "$SYSTEMD_RUN_DIR" ]]; then
         HAS_SYSTEMD=true
     elif [[ -f /sbin/procd ]]; then
         HAS_PROCD=true

@@ -13,7 +13,10 @@ Supported platforms:
 
 Debian / Ubuntu
 : `apt` package manager, systemd for service management. All Perl dependencies
-  available as system packages - no CPAN required.
+  available as system packages - no CPAN required. `install.sh` installs
+  units only when systemd is running (`/run/systemd/system` exists); in a
+  container that has `systemctl` but another PID 1 it warns, skips the units
+  and exits 0 - start the services by hand.
 
 Alpine Linux
 : `apk` package manager. No systemd - services run directly or in Docker.
