@@ -5,6 +5,8 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
+## 0.14.5 — (unreleased)
+
 ## 0.14.4 — renewal keeps the agent's name; no trailing dots in a default name
 
 Upgrading from 0.14.3: nothing to do. Upgrade agents paired with
