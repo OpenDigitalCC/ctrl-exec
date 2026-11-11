@@ -45,6 +45,11 @@ my %CODE_REASON = (
 #                                   API caller on the unix socket)
 #   peer_uid  => $n                (the socket caller's uid from SO_PEERCRED;
 #                                   undef for TCP callers and the CLI)
+#   listener  => $str              (API callers: unix | tcp | tls, the listener the
+#                                   connection arrived on, set by the API's accept
+#                                   loop. With 'caller' it reaches the hook as
+#                                   ENVEXEC_CALLER / ENVEXEC_LISTENER. The agent side
+#                                   passes neither, and neither variable is set)
 #   submitter => \%rec             ('status' only: the stored submitter; its
 #                                   peer_uid reaches the hook as owner_peer_uid)
 #   dispatcher        => $str      (calling dispatcher's stable identity, default '')
@@ -157,6 +162,7 @@ sub check (%opts) {
         input_names       => $input_names,
         input_bytes       => $input_bytes,
         peer_uid          => $peer_uid,
+        (exists $opts{caller} ? (caller => $opts{caller}, listener => $opts{listener}) : ()),
     );
 
     my $hook_timeout = $config->{auth_hook_timeout} // 10;
@@ -227,6 +233,7 @@ sub _build_context (%opts) {
         input_names       => $opts{input_names} // [],
         input_bytes       => 0 + ($opts{input_bytes} // 0),
         peer_uid          => (defined $opts{peer_uid} ? 0 + $opts{peer_uid} : undef),
+        (exists $opts{caller} ? (caller => $opts{caller}, listener => $opts{listener}) : ()),
         timestamp         => strftime('%Y-%m-%dT%H:%M:%SZ', gmtime),
     };
 }
@@ -257,6 +264,16 @@ sub _run_hook ($hook, $context, $timeout = undef) {
     # The kernel-reported uid of a caller on the API's unix socket; empty for
     # TCP callers, where no such identity exists.
     $ENV{ENVEXEC_PEER_UID}  = $context->{peer_uid} // '';
+    # Dispatcher-side hooks: who is asking (cli | api) and, for api, which listener
+    # (unix | tcp | tls; empty for cli). Set by the code path, never from the
+    # request. The agent-side hook is given neither, so they are cleared there.
+    if (exists $context->{caller}) {
+        $ENV{ENVEXEC_CALLER}   = $context->{caller};
+        $ENV{ENVEXEC_LISTENER} = $context->{caller} eq 'api' ? ($context->{listener} // '') : '';
+    }
+    else {
+        delete @ENV{qw(ENVEXEC_CALLER ENVEXEC_LISTENER)};
+    }
     # The calling dispatcher's stable identity (and its cert serial). Hooks
     # author per-dispatcher policy against ENVEXEC_DISPATCHER, never the serial,
     # which rotates. Empty when the caller did not resolve a dispatcher.

@@ -892,7 +892,11 @@ Key settings:
   `ENVEXEC_OWNER_PEER_UID` (null / empty for a run started over TCP or recorded
   before this), beside the current caller's `peer_uid`, so a hook can allow
   "same uid as the starter". It is for hooks only and is not in the status
-  response. The packaged systemd unit creates `/run/ctrl-exec-api`
+  response. Every dispatcher-side hook call also gets `ENVEXEC_CALLER` (`cli` for
+  `ced`, `api` for a request the API serves) and `ENVEXEC_LISTENER` (`unix`,
+  `tcp` or `tls` for an API caller, empty for `ced`), set by ctrl-exec and not
+  from the request; `ced` through this socket is `api` on `unix`. The agent's
+  hook is not given them. The packaged systemd unit creates `/run/ctrl-exec-api`
   for it. At start-up an existing socket nothing answers on (left by a crash)
   is replaced; a socket another process answers on, or a path that is not a
   socket (a file, directory or symlink), stops start-up and is left alone. The

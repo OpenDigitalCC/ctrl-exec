@@ -204,6 +204,8 @@ subtest 'socket: mode 0660, configured group, caller recorded as the socket' => 
     my %env = map { /^(ENVEXEC_\w+)=(.*)$/ ? ($1 => $2) : () } split /\n/, slurp("$tmp/hook.env");
     is($env{ENVEXEC_SOURCE_IP}, "unix:$sock", 'hook: caller recorded as the socket');
     is($env{ENVEXEC_PEER_UID}, $<, 'hook: ENVEXEC_PEER_UID is the caller uid (SO_PEERCRED)');
+    is($env{ENVEXEC_CALLER}, q(api), q(hook: ENVEXEC_CALLER api));
+    is($env{ENVEXEC_LISTENER}, q(unix), q(hook: ENVEXEC_LISTENER unix, from the live accept loop));
     my $ctx = eval { decode_json(slurp("$tmp/hook.json")) } // {};
     is($ctx->{peer_uid}, $<, 'hook stdin: peer_uid');
     is($ctx->{source_ip}, "unix:$sock", 'hook stdin: source_ip');
@@ -247,6 +249,7 @@ subtest 'socket: a TCP caller has no peer uid' => sub {
     my %env = map { /^(ENVEXEC_\w+)=(.*)$/ ? ($1 => $2) : () } split /\n/, slurp("$tmp/hook2.env");
     is($env{ENVEXEC_SOURCE_IP}, '127.0.0.1', 'source ip');
     is($env{ENVEXEC_PEER_UID}, '', 'ENVEXEC_PEER_UID empty');
+    is($env{ENVEXEC_LISTENER}, q(tcp), q(hook: ENVEXEC_LISTENER tcp (plain TCP)));
     stop($api);
 };
 

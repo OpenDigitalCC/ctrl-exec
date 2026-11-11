@@ -426,6 +426,19 @@ is inactive until you copy it, add real rules and name it in `auth_hook`. Set
 `api_auth_default = allow` only on isolated networks where no credential
 checking is required.
 
+**Who is calling.** The hook also gets `ENVEXEC_CALLER` (`cli` or `api`) and
+`ENVEXEC_LISTENER` (`unix`, `tcp` or `tls` for an API caller; empty for the
+CLI), and the same two as `caller` and `listener` in its JSON on stdin. `ced`
+sets `cli` when it connects to agents directly; every request the API serves
+sets `api` and the listener the connection arrived on - including `ced run` and
+`ced ping` sent through the API socket, which are `api` on `unix`. ctrl-exec
+sets both itself, never from the request, so a request body cannot claim
+them. Use them to tell the CLI from an API caller that also appears as
+`127.0.0.1`: `[ "$ENVEXEC_CALLER" = cli ] && exit 0`, or
+`[ "$ENVEXEC_LISTENER" = tls ]` to require a token only on the TLS listener.
+Hooks that ignore them are unaffected. The agent's own auth hook is not given
+them (they are not set there).
+
 **Example: one user, named scripts, named hosts.** Every request on the API
 reaches the hook first with `action=api` (no script, no hosts), then again with
 the real `run` or `ping`; the hook must authorise both. This one allows the

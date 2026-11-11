@@ -619,6 +619,8 @@ ENVEXEC_USERNAME    username from request (may be empty)
 ENVEXEC_TOKEN       token from request (may be empty)
 ENVEXEC_SOURCE_IP   originating IP address (the proxy's, not the client's, behind a reverse proxy - not client identity); unix:<path> on the API's unix socket
 ENVEXEC_PEER_UID    API unix-socket caller's uid (SO_PEERCRED); empty otherwise
+ENVEXEC_CALLER      cli | api (dispatcher side only; not set for the agent's hook)
+ENVEXEC_LISTENER    unix | tcp | tls for an api caller; empty for cli (dispatcher side only)
 ENVEXEC_OWNER_PEER_UID  status only: the socket uid that started the run being read; empty if it came over TCP or predates this
 ENVEXEC_TIMESTAMP   ISO8601 UTC timestamp
 ```

@@ -747,6 +747,8 @@ ENVEXEC_USERNAME    username from request (may be empty)
 ENVEXEC_TOKEN       token from request (may be empty)
 ENVEXEC_SOURCE_IP   127.0.0.1 for CLI, caller IP for API (the proxy's address behind a reverse proxy - not client identity), unix:<path> for the API's unix socket
 ENVEXEC_PEER_UID    uid of an API caller on the unix socket (empty otherwise)
+ENVEXEC_CALLER      cli (ced connecting directly) | api (a request the API serves)
+ENVEXEC_LISTENER    unix | tcp | tls for an api caller (empty for cli)
 ENVEXEC_TIMESTAMP   ISO 8601 UTC timestamp
 ```
 

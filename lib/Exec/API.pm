@@ -251,7 +251,7 @@ sub run (%opts) {
                 if ($l->{kind} eq 'tls') {
                     $conn = _start_tls($conn, $l->{ctx}, $peer) or exit 0;
                 }
-                _handle_connection($conn, $peer, $config, $peer_uid);
+                _handle_connection($conn, $peer, $config, $peer_uid, $l->{kind});
                 if ($l->{kind} eq 'tls') {
                     $conn->close(SSL_no_shutdown => 1);
                 } else {
@@ -371,8 +371,13 @@ sub _peer_uid ($conn) {
 # (undef for TCP). Set per connection; every auth check passes it to the hook.
 our $PEER_UID;
 
-sub _handle_connection ($conn, $peer, $config, $peer_uid = undef) {
+# Which listener the connection arrived on (unix | tcp | tls), from the accept
+# loop and never the request; every auth check passes it to the hook.
+our $LISTENER;
+
+sub _handle_connection ($conn, $peer, $config, $peer_uid = undef, $listener = undef) {
     local $PEER_UID = $peer_uid;
+    local $LISTENER = $listener;
 
     # Read request line
     my $request_line = <$conn>;
@@ -453,6 +458,8 @@ sub _handle_connection ($conn, $peer, $config, $peer_uid = undef) {
         } : ''),
         source_ip => $peer,
         peer_uid  => $PEER_UID,
+        caller    => 'api',
+        listener  => $LISTENER,
         config    => $config,
     );
     unless ($auth->{ok}) {
@@ -514,6 +521,8 @@ sub _handle_ping ($conn, $peer, $body, $config) {
         token     => $token,
         source_ip => $peer,
         peer_uid  => $PEER_UID,
+        caller    => 'api',
+        listener  => $LISTENER,
         config    => $config,
     );
     unless ($auth->{ok}) {
@@ -584,6 +593,8 @@ sub _handle_run ($conn, $peer, $body, $config) {
         token     => $token,
         source_ip => $peer,
         peer_uid  => $PEER_UID,
+        caller    => 'api',
+        listener  => $LISTENER,
         config    => $config,
     );
     unless ($auth->{ok}) {
@@ -676,6 +687,8 @@ sub _handle_discovery ($conn, $peer, $body, $config) {
         token     => $token,
         source_ip => $peer,
         peer_uid  => $PEER_UID,
+        caller    => 'api',
+        listener  => $LISTENER,
         config    => $config,
     );
     unless ($auth->{ok}) {
@@ -921,6 +934,8 @@ sub _handle_status ($conn, $reqid, $peer, $auth_token, $config) {
         token     => $auth_token,
         source_ip => $peer,
         peer_uid  => $PEER_UID,
+        caller    => 'api',
+        listener  => $LISTENER,
         config    => $config,
     );
     unless ($auth->{ok}) {
