@@ -5,7 +5,10 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
-## 0.14.6 — (unreleased)
+## 0.14.6 — large script input and large results get through
+
+Upgrading from 0.14.5: nothing to do. Upgrade the agents as well as the
+dispatcher: input over 16 KiB needs the agent fix.
 
 - **Fixed** the agent, the API and both pairing exchanges read the whole request body: they read it with one `read`, which on a TLS connection returns at most one 16 KiB record, so a run with input over about 16 KB reached the agent cut short and failed with `invalid JSON`; one helper now reads until `Content-Length` bytes have arrived, a body that ends early is answered 400 (or the exchange's own error) and never passed on, and a peer that stops sending mid-body is given up on after 30 seconds. (T-089, R-034)
 - **Fixed** a sync run (`ced run`, the API, ping and the other host fan-outs) with a large result could hang forever: each host worker wrote its whole result to a pipe and the dispatcher waited for the worker to exit before reading it, so a result over the 64 KiB pipe buffer blocked both for good; the dispatcher now reads the pipes as results arrive and reaps a worker once its pipe closes, with the same concurrency limit, failure reasons and result order. The agent had the same pattern reading a script's stdout and stderr one after the other, so a script writing over 64 KiB to stderr before closing stdout hung the run; both are now read together. (T-090, R-034)
