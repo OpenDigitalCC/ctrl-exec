@@ -1000,8 +1000,8 @@ sub validate_profiles ($allowlist, $config) {
 sub bind_problem ($v) {
     return 'empty' unless defined $v && length $v;
     require Socket;
-    return undef if defined Socket::inet_pton(Socket::AF_INET(), $v);
-    return undef if defined Socket::inet_pton(Socket::AF_INET6(), $v);
+    return if defined Socket::inet_pton(Socket::AF_INET(), $v);
+    return if defined Socket::inet_pton(Socket::AF_INET6(), $v);
     return 'expected an IPv4 or IPv6 address such as 127.0.0.1 or ::1, not a host name,'
          . ' bracketed address, zone id or port';
 }

@@ -121,7 +121,9 @@ sub start_executor {
         exec($BIN, 'serve', $sock, $agent_conf, $scripts_conf, scalar getpwuid($>))
             or POSIX::_exit(127);
     }
-    for (1 .. 100) { return 1 if -S $sock; select undef, undef, undef, 0.05 }
+    # The executor binds its socket before it makes the input directory (it
+    # accepts only after both), so wait for both: under load the gap is visible.
+    for (1 .. 100) { return 1 if -S $sock && -d $base; select undef, undef, undef, 0.05 }
     return 0;
 }
 sub stop_executor { kill 'TERM', $epid; waitpid $epid, 0; unlink $sock }
