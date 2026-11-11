@@ -6,6 +6,7 @@ use feature      qw(signatures);
 no warnings      qw(experimental::signatures);
 use JSON  qw(encode_json decode_json);
 use Carp  qw(croak);
+use IO::Select;
 use Exec::CertInfo qw();
 use Exec::Random   qw();
 
@@ -394,42 +395,63 @@ sub _fan_out ($entries, $max, $worker) {
                 exit 0;
             }
             close $w;
-            $pipes{$pid} = { fh => $r, name => $name, target => $target };
+            $pipes{$pid} = { fh => $r, name => $name, target => $target, raw => '' };
         }
 
-        my $pid = waitpid -1, 0;
-        if ($pid <= 0) {
-            # Nothing to collect although workers are outstanding (ECHILD: they
-            # were reaped elsewhere, e.g. by an inherited SIGCHLD reaper). Report
-            # each as lost, with the errno, instead of dropping them silently.
-            my $why = "waitpid: $!";
-            for my $p (sort keys %pipes) {
-                close $pipes{$p}{fh};
-                push @out, {
-                    name    => $pipes{$p}{name},
-                    target  => $pipes{$p}{target},
-                    result  => undef,
-                    failure => $why,
-                };
+        # Drain the pipes BEFORE reaping. A worker writes its whole result to
+        # its pipe and only then exits; a result over the pipe buffer (64 KiB
+        # on Linux) blocks it in print until someone reads. Reaping first (the
+        # old waitpid -1) therefore deadlocked the parent and the worker for
+        # good. So read whatever arrives from any open pipe, and reap a worker
+        # only once its pipe has reached EOF (it has finished writing).
+        my $sel = IO::Select->new(map { $_->{fh} } values %pipes);
+        my @ready = $sel->can_read;
+        next unless @ready;          # EINTR: look again
+        for my $fh (@ready) {
+            my ($pid) = grep { $pipes{$_}{fh} == $fh } keys %pipes;
+            next unless defined $pid;
+            my $n = sysread $fh, my $chunk, 65536;
+            if (!defined $n) {
+                next if $!{EINTR} || $!{EAGAIN};
+                $n = 0;              # a read error ends this worker's output
             }
-            %pipes = ();
-            last;
+            if ($n) {
+                $pipes{$pid}{raw} .= $chunk;
+                next;
+            }
+
+            # EOF: the worker has finished writing. Reap it for its wait status.
+            my $w = delete $pipes{$pid};
+            close $fh;
+            my $raw = $w->{raw};
+            my $reaped = waitpid $pid, 0;
+            my $status = $?;
+            my $decoded = length $raw ? scalar eval { decode_json($raw) } : undef;
+            if ($reaped != $pid) {
+                # ECHILD: the worker was reaped elsewhere (e.g. by an inherited
+                # SIGCHLD reaper), so there is no wait status. A result that
+                # arrived intact is still good; otherwise report the worker as
+                # lost, with the errno, instead of dropping it silently.
+                if (ref $decoded eq 'HASH' && !exists $decoded->{_worker_died}) {
+                    push @out, { name => $w->{name}, target => $w->{target}, result => $decoded };
+                } else {
+                    push @out, {
+                        name    => $w->{name},
+                        target  => $w->{target},
+                        result  => undef,
+                        failure => "waitpid: $!",
+                    };
+                }
+                next;
+            }
+            my ($result, $failure) = _worker_outcome($decoded, $status, length $raw);
+            push @out, {
+                name   => $w->{name},
+                target => $w->{target},
+                result => $result,
+                (defined $failure ? (failure => $failure) : ()),
+            };
         }
-        next unless exists $pipes{$pid};
-        my $status = $?;
-        my $fh  = $pipes{$pid}{fh};
-        my $raw = do { local $/; <$fh> };
-        close $fh;
-        $raw //= '';
-        my $decoded = length $raw ? scalar eval { decode_json($raw) } : undef;
-        my ($result, $failure) = _worker_outcome($decoded, $status, length $raw);
-        push @out, {
-            name   => $pipes{$pid}{name},
-            target => $pipes{$pid}{target},
-            result => $result,
-            (defined $failure ? (failure => $failure) : ()),
-        };
-        delete $pipes{$pid};
     }
 
     return \@out;

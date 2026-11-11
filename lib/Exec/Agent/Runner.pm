@@ -9,6 +9,7 @@ use File::Path qw(remove_tree);
 use File::Temp qw(tempdir);
 use File::Spec qw();
 use Encode     qw();
+use IO::Select;
 use Fcntl  qw(O_WRONLY O_CREAT O_EXCL O_NOFOLLOW);
 use POSIX  qw(WIFEXITED WEXITSTATUS EINTR EAGAIN EPIPE);
 use Fcntl  qw(F_GETFL F_SETFL O_NONBLOCK);
@@ -143,8 +144,9 @@ sub _run_forked ($script_path, $args, $stdin_data, $extra_env, $timeout, $path) 
     }
     close $stdin_w;
 
-    my $stdout = _slurp_utf8($stdout_r);
-    my $stderr = _slurp_utf8($stderr_r);
+    # Read both pipes together: draining one to EOF first deadlocks a script that
+    # fills the other (64 KiB) before it closes this one.
+    my ($stdout, $stderr) = _slurp_pair_utf8($stdout_r, $stderr_r);
     close $stdout_r;
     close $stderr_r;
 
@@ -240,11 +242,27 @@ sub _write_stdin ($fh, $data, $timeout = undef) {
 # byte sequence that is not UTF-8 with U+FFFD, so the JSON reply always
 # encodes (a malformed string made encode_json die). Exec::Agent::ExecClient
 # decodes executor output the same way.
-sub _slurp_utf8 ($fh) {
-    binmode $fh, ':raw';
-    local $/;
-    my $bytes = <$fh> // '';
-    return Encode::decode('UTF-8', $bytes);
+# Read two pipes to EOF concurrently (select), returning both decoded as UTF-8.
+sub _slurp_pair_utf8 ($out_fh, $err_fh) {
+    my %buf = (out => '', err => '');
+    my %fh  = (out => $out_fh, err => $err_fh);
+    binmode $_, ':raw' for values %fh;
+    my $sel = IO::Select->new(values %fh);
+    while ($sel->count) {
+        my @ready = $sel->can_read;
+        next unless @ready;     # EINTR
+        for my $h (@ready) {
+            my ($which) = grep { $fh{$_} == $h } keys %fh;
+            my $n = sysread $h, my $chunk, 65536;
+            if (!defined $n) {
+                next if $!{EINTR} || $!{EAGAIN};
+                $n = 0;
+            }
+            if ($n) { $buf{$which} .= $chunk; next }
+            $sel->remove($h);
+        }
+    }
+    return (Encode::decode('UTF-8', $buf{out}), Encode::decode('UTF-8', $buf{err}));
 }
 
 sub _error ($msg) {

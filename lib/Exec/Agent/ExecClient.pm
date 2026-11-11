@@ -161,7 +161,7 @@ sub run (%o) {
         if $v2 && $exit == -1 && $out eq '' && $err eq $OLD_EXECUTOR_REPLY;
 
     # The frame carries the action's output as bytes; decode it as the direct
-    # path does (Runner::_slurp_utf8): UTF-8 once, anything else as U+FFFD.
+    # path does (Runner::_slurp_pair_utf8): UTF-8 once, anything else as U+FFFD.
     return { exit   => $exit,
              stdout => Encode::decode('UTF-8', $out),
              stderr => Encode::decode('UTF-8', $err) };
