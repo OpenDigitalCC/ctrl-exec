@@ -12,6 +12,8 @@ use warnings;
 use feature      qw(signatures);
 no warnings      qw(experimental::signatures);
 use JSON qw(encode_json);
+use Socket qw(SOL_SOCKET SO_RCVTIMEO);
+use Errno  qw(EINTR);
 
 my %PHRASE = (
     200 => 'OK',
@@ -39,6 +41,35 @@ sub args_problem ($args) {
             if !defined $a || ref $a;
     }
     return;
+}
+
+# Read exactly $len body bytes from $conn. Returns the body, or undef when the
+# peer closed or the connection failed first: a short body is never returned,
+# so no caller can act on a truncated request.
+#
+# One `read` is not enough on a TLS connection: IO::Socket::SSL's tied read
+# returns at most one TLS record (16 KiB), so a body larger than that arrived
+# cut short (R-034). A plain or unix socket's buffered read fills the request
+# itself, but the same loop serves all of them.
+#
+# The wait on each read is bounded by $idle seconds (SO_RCVTIMEO on the
+# socket, so it needs no alarm and does not disturb one a caller holds): a peer
+# that stops sending mid-body ends the read instead of holding the handler. The
+# bound is per read, not for the whole body.
+sub read_body ($conn, $len, $idle = 30) {
+    return '' unless $len > 0;
+    # Restore the socket's own receive timeout afterwards: a caller (the pairing
+    # client waits minutes for approval on the same socket) keeps its own.
+    my $prev = getsockopt($conn, SOL_SOCKET, SO_RCVTIMEO) // pack('l! l!', 0, 0);
+    setsockopt($conn, SOL_SOCKET, SO_RCVTIMEO, pack('l! l!', $idle, 0));
+    my $body = '';
+    while (length($body) < $len) {
+        my $n = read($conn, $body, $len - length($body), length($body));
+        if (!defined $n) { next if $! == EINTR; last }
+        last if $n == 0;
+    }
+    setsockopt($conn, SOL_SOCKET, SO_RCVTIMEO, $prev);
+    return length($body) == $len ? $body : undef;
 }
 
 # Write a raw (already-serialised) JSON body as an HTTP/1.0 response.

@@ -7,6 +7,8 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 
 ## 0.14.6 — (unreleased)
 
+- **Fixed** the agent, the API and both pairing exchanges read the whole request body: they read it with one `read`, which on a TLS connection returns at most one 16 KiB record, so a run with input over about 16 KB reached the agent cut short and failed with `invalid JSON`; one helper now reads until `Content-Length` bytes have arrived, a body that ends early is answered 400 (or the exchange's own error) and never passed on, and a peer that stops sending mid-body is given up on after 30 seconds. (T-089, R-034)
+
 ## 0.14.5 — ced run sends script input; install.sh in containers
 
 Upgrading from 0.14.4: nothing to do.

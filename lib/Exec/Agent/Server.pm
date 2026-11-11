@@ -108,7 +108,13 @@ sub handle_connection ($conn, $peer, $allowlist, $config, $revoked, $trusted, $p
             _send_raw($conn, 413, encode_json({ error => 'request too large' }));
             return;
         }
-        read $conn, $body, $len;
+        # The whole body or a 400: one read on a TLS connection returns at most
+        # one record (R-034), and a truncated body must never reach a handler.
+        $body = Exec::Http::read_body($conn, $len);
+        unless (defined $body) {
+            _send_raw($conn, 400, encode_json({ error => 'request body incomplete' }));
+            return;
+        }
     }
 
     if ($method eq 'POST' && $path eq '/run') {

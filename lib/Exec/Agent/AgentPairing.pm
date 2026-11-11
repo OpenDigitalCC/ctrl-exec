@@ -11,6 +11,7 @@ use Carp qw(croak);
 use Exec::CertInfo qw();
 use Exec::Cmd      qw();
 use Exec::Digest   qw();
+use Exec::Http     qw();
 use Exec::FileUtil qw(slurp);
 use Exec::Log qw();
 use Exec::Random qw();
@@ -330,8 +331,8 @@ sub submit_pairing_request (%opts) {
     return { ok => 0, error => "no Content-Length in pairing acknowledgement" }
         unless defined $content_length;
 
-    my $body = '';
-    read $sock, $body, $content_length;
+    my $body = Exec::Http::read_body($sock, $content_length);
+    return { ok => 0, error => "incomplete acknowledgement body" } unless defined $body;
 
     return { ok => 0, error => "empty acknowledgement body" } unless length $body;
 
@@ -479,10 +480,10 @@ sub await_pairing_result (%opts) {
     return { ok => 0, error => "no Content-Length in pairing result" }
         unless defined $content_length;
 
-    my $body = '';
-    read $sock, $body, $content_length;
+    my $body = Exec::Http::read_body($sock, $content_length);
     close $sock;
 
+    return { ok => 0, error => "incomplete result body" } unless defined $body;
     return { ok => 0, error => "empty result body" } unless length $body;
 
     my $data = eval { JSON::decode_json($body) };

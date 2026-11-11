@@ -419,7 +419,13 @@ sub _handle_connection ($conn, $peer, $config, $peer_uid = undef) {
     # Read body
     my $body = '';
     if ($content_length > 0) {
-        read $conn, $body, $content_length;
+        # The whole body or a 400: a single read on a TLS connection returns at
+        # most one record (R-034).
+        $body = Exec::Http::read_body($conn, $content_length);
+        unless (defined $body) {
+            _send_error($conn, 400, 'bad request', 'request body incomplete');
+            return;
+        }
     }
 
     Exec::Log::log_action('INFO', {

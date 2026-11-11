@@ -838,7 +838,12 @@ sub _handle_pair_request ($conn, $peer_ip, $log_fn, $max_queue = undef, $pairing
     }
     my $body = '';
     if ($content_length) {
-        read $conn, $body, $content_length;
+        $body = Exec::Http::read_body($conn, $content_length);
+        unless (defined $body) {
+            _send_raw($conn, encode_json({ status => 'error', reason => 'request body incomplete' }));
+            $log_fn->({ ACTION => 'pair-reject', IP => $peer_ip, REASON => 'body-incomplete' });
+            return;
+        }
     }
 
     my $data = eval { decode_json($body) };
