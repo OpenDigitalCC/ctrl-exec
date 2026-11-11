@@ -5,6 +5,8 @@ detail lives in the git log; each entry is anchored to the commit ref (or the
 release commit) it lands at, not a date. Bullets mark what was **added**,
 **changed**, or **removed** at the level of the area touched.
 
+## 0.14.7 — (unreleased)
+
 ## 0.14.6 — large script input and large results get through
 
 Upgrading from 0.14.5: nothing to do. Upgrade the agents as well as the
