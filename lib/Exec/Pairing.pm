@@ -567,6 +567,7 @@ sub approve_request (%opts) {
         reqid             => $reqid,
         lookup_by         => $lookup_by,
         port              => $port,
+        (defined $opts{read_timeout} ? (read_timeout => $opts{read_timeout}) : ()),
         dispatcher_serial => $disp_serial,
         serial_status     => (length $disp_serial ? 'current' : 'unknown'),
         serial_confirmed  => (length $disp_serial

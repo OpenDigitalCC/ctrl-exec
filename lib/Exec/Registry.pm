@@ -37,6 +37,9 @@ my $DEFAULT_PORT = 7443;
 #   port      => $int   the agent's operational port. Default 7443. Used by
 #       resolve_target so non-default-port agents are reachable without a
 #       per-command --port. Out-of-range values normalise to 7443.
+#   read_timeout => $int   seconds the dispatcher waits for this agent's
+#       response (T-094). Positive integer, else croak; omitted = no field
+#       (the dispatcher's global read_timeout applies).
 #
 # Optional pinned CA (keep-certificate pairing, T-062):
 #   agent_ca     => $pem   the CA that issued the agent's certificate
@@ -64,6 +67,11 @@ sub register_agent (%opts) {
         serial_broadcast  => $opts{serial_broadcast}  // '',
         serial_confirmed  => $opts{serial_confirmed}  // '',
     };
+    if (defined $opts{read_timeout}) {
+        valid_read_timeout($opts{read_timeout})
+            or croak "invalid read_timeout '$opts{read_timeout}' - a positive whole number of seconds";
+        $record->{read_timeout} = int($opts{read_timeout});
+    }
     # Pinned issuing CA (T-062): an agent that kept a certificate another
     # dispatcher's CA issued is verified against this CA alone (Exec::Engine),
     # and this dispatcher does not renew its certificate.
@@ -342,6 +350,8 @@ sub remove_agent (%opts) {
 #   ip        => $str       new address
 #   port      => $int       new operational port (normalised)
 #   lookup_by => $str       'ip' | 'hostname' (normalised)
+#   read_timeout => $int|'default'  seconds to wait for this agent (positive
+#       integer, else croak); 'default' removes the field (global applies)
 sub edit_agent (%opts) {
     my $hostname = $opts{hostname} or croak "hostname required";
     my $dir      = $opts{registry_dir} // $REGISTRY_DIR;
@@ -355,6 +365,17 @@ sub edit_agent (%opts) {
         $record->{ip}        = $opts{ip}                       if defined $opts{ip};
         $record->{port}      = _norm_port($opts{port})         if defined $opts{port};
         $record->{lookup_by} = _norm_lookup_by($opts{lookup_by}) if defined $opts{lookup_by};
+
+        if (defined $opts{read_timeout}) {
+            if ($opts{read_timeout} eq 'default') {
+                delete $record->{read_timeout};
+            }
+            else {
+                valid_read_timeout($opts{read_timeout})
+                    or croak "invalid read_timeout '$opts{read_timeout}' - a positive whole number of seconds";
+                $record->{read_timeout} = int($opts{read_timeout});
+            }
+        }
 
         my $new = $opts{new_name};
         if (defined $new && length $new && $new ne $hostname) {
@@ -438,6 +459,13 @@ sub _norm_lookup_by ($v) {
 # reject a hostile agent-supplied hostname before it becomes a filename.
 sub valid_agent_name ($name) {
     return defined $name && $name =~ /^[A-Za-z0-9][A-Za-z0-9._-]*\z/;
+}
+
+# True when $v is a usable per-agent read timeout: a positive whole number of
+# seconds (a JSON number or a numeric string). Records are read as written, so
+# this also judges a value found on disk.
+sub valid_read_timeout ($v) {
+    return defined $v && !ref $v && $v =~ /^[1-9][0-9]{0,8}\z/ ? 1 : 0;
 }
 
 # Normalise a port to an integer in 1..65535, or the default 7443.

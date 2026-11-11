@@ -48,6 +48,7 @@ sub main {
         'token=s'    => \$opts{token},
         'lookup-by=s' => \$opts{lookup_by},
         'agent-port=i' => \$opts{agent_port},
+        'read-timeout=s' => \$opts{read_timeout},
         'ip=s'        => \$opts{ip},
         'rename=s'    => \$opts{rename},
         'tags=s'      => \$opts{tags},
@@ -640,14 +641,15 @@ sub mode_list_agents ($opts) {
     printf "%s\n", '-' x 112;
     for my $a (@$agents) {
         my $days = _days_until_expiry($a->{expiry});
-        printf "%-30s  %-16s  %-5s  %-8s  %-22s  %-24s  %s\n",
+        printf "%-30s  %-16s  %-5s  %-8s  %-22s  %-24s  %s%s\n",
             $a->{hostname}  // '?',
             $a->{ip}        // '?',
             $a->{port}      // 7443,
             $a->{lookup_by} // 'hostname',
             $a->{paired}    // '?',
             $a->{expiry}    // '?',
-            (defined $days ? $days : '?');
+            (defined $days ? $days : '?'),
+            (defined $a->{read_timeout} ? "  read_timeout=$a->{read_timeout}s" : '');
     }
 }
 
@@ -877,7 +879,7 @@ sub mode_list_requests {
 
 sub mode_approve ($opts, $reqid = undef) {
     die "Usage: ctrl-exec-dispatcher approve <reqid> "
-      . "[--lookup-by ip|hostname] [--ip <addr>] [--agent-port <n>] [--replace]\n" unless $reqid;
+      . "[--lookup-by ip|hostname] [--ip <addr>] [--agent-port <n>] [--read-timeout <n>] [--replace]\n" unless $reqid;
 
     my $lookup_by = $opts->{lookup_by};
     if (defined $lookup_by && $lookup_by ne 'ip' && $lookup_by ne 'hostname') {
@@ -887,6 +889,11 @@ sub mode_approve ($opts, $reqid = undef) {
     my $agent_port = $opts->{agent_port};
     if (defined $agent_port && ($agent_port !~ /^\d+$/ || $agent_port < 1 || $agent_port > 65535)) {
         die "--agent-port must be a port number (1-65535)\n";
+    }
+
+    my $read_timeout = $opts->{read_timeout};
+    if (defined $read_timeout && !Exec::Registry::valid_read_timeout($read_timeout)) {
+        die "--read-timeout must be a positive whole number of seconds\n";
     }
 
     my $ip = $opts->{ip};
@@ -901,6 +908,7 @@ sub mode_approve ($opts, $reqid = undef) {
         lookup_by       => $lookup_by,
         ip              => $ip,
         port            => $agent_port,
+        read_timeout    => $read_timeout,
         replace         => $opts->{replace},
         dispatcher_id   => _resolve_dispatcher_id($config),
         dispatcher_cert => $config->{cert},
@@ -1287,7 +1295,8 @@ sub mode_unpair ($opts, $hostname = undef) {
 
 sub mode_edit_agent ($opts, $name = undef) {
     die "Usage: ctrl-exec-dispatcher edit-agent <name> "
-      . "[--rename <new>] [--ip <addr>] [--agent-port <n>] [--lookup-by ip|hostname]\n"
+      . "[--rename <new>] [--ip <addr>] [--agent-port <n>] [--lookup-by ip|hostname] "
+      . "[--read-timeout <n>|default]\n"
         unless $name;
 
     my %changes;
@@ -1295,10 +1304,16 @@ sub mode_edit_agent ($opts, $name = undef) {
     $changes{ip}        = $opts->{ip}         if defined $opts->{ip};
     $changes{port}      = $opts->{agent_port} if defined $opts->{agent_port};
     $changes{lookup_by} = $opts->{lookup_by}  if defined $opts->{lookup_by};
+    $changes{read_timeout} = $opts->{read_timeout} if defined $opts->{read_timeout};
 
     die "Nothing to change. Pass at least one of "
-      . "--rename, --ip, --agent-port, --lookup-by.\n"
+      . "--rename, --ip, --agent-port, --lookup-by, --read-timeout.\n"
         unless %changes;
+
+    if (defined $changes{read_timeout} && $changes{read_timeout} ne 'default'
+        && !Exec::Registry::valid_read_timeout($changes{read_timeout})) {
+        die "--read-timeout must be a positive whole number of seconds, or 'default'\n";
+    }
 
     if (defined $changes{lookup_by}
         && $changes{lookup_by} ne 'ip' && $changes{lookup_by} ne 'hostname') {
@@ -1327,6 +1342,7 @@ sub mode_edit_agent ($opts, $name = undef) {
         (defined $changes{ip}       ? (IP          => $record->{ip})     : ()),
         (defined $changes{port}     ? (PORT        => $record->{port})   : ()),
         (defined $changes{lookup_by}? (LOOKUP_BY   => $record->{lookup_by}) : ()),
+        (defined $changes{read_timeout} ? (READ_TIMEOUT => $record->{read_timeout} // 'default') : ()),
     });
 
     if ($opts->{json}) {
@@ -1339,6 +1355,8 @@ sub mode_edit_agent ($opts, $name = undef) {
     printf "  ip:        %s\n", $record->{ip}        // '';
     printf "  port:      %s\n", $record->{port}      // 7443;
     printf "  lookup_by: %s\n", $record->{lookup_by} // 'hostname';
+    printf "  read_timeout: %s\n", defined $record->{read_timeout} ? "$record->{read_timeout}s" : 'default'
+        if defined $changes{read_timeout};
 }
 
 sub usage {
@@ -1378,6 +1396,8 @@ Modes:
                              agent self-reports it; needed when a NAT hides it)
                              [--agent-port <n>] overrides the agent's
                              reported operational port (default: 7443)
+                             [--read-timeout <n>] seconds to wait for this
+                             agent's response (default: read_timeout)
                              [--replace] also unpairs another agent
                              registered at the request's source address
   deny <reqid>               Deny a pairing request
@@ -1390,6 +1410,7 @@ Modes:
   edit-agent <name>          Edit a registered agent without re-pairing:
                              [--rename <new>] [--ip <addr>]
                              [--agent-port <n>] [--lookup-by ip|hostname]
+                             [--read-timeout <n>|default]
   list-locks                 Show currently held script locks
   rotate-cert                Rotate dispatcher certificate and broadcast new serial
   maintain                   One maintenance pass (ping/renew, rotate, expire, purge);

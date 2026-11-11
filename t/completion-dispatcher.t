@@ -48,9 +48,13 @@ is_deeply(complete(words => ['ced', '--config', '/nonexistent/x', 'pi']), ['ping
 
 # Options.
 is_deeply(complete(words => ['ced', 'approve', '--']),
-    [qw(--agent-port --config --ip --json --lookup-by --port --replace --token --username --version)],
+    [qw(--agent-port --config --ip --json --lookup-by --port --read-timeout --replace --token --username --version)],
     'approve options');
-is_deeply(complete(words => ['ced', 'edit-agent', 'alpha', '--r']), ['--rename'], 'edit-agent --rename');
+is_deeply(complete(words => ['ced', 'edit-agent', 'alpha', '--r']), [qw(--read-timeout --rename)], 'edit-agent --r');
+is_deeply(complete(words => ['ced', 'edit-agent', 'alpha', '--read']), ['--read-timeout'], 'edit-agent --read-timeout');
+is_deeply(complete(words => ['ced', 'edit-agent', 'alpha', '--read-timeout', '']), [], '--read-timeout value: nothing offered');
+is_deeply(complete(words => ['ced', 'edit-agent', 'alpha', '--read-timeout', '300', '--l']), ['--lookup-by'],
+    'the --read-timeout value is not taken as a host');
 is_deeply(complete(words => ['ced', 'run', '--as']), ['--async'], 'run --async');
 is_deeply(complete(words => ['ced', 'run', '--inp']), [qw(--input-field --input-file --input-json)],
     'run input options');

@@ -461,6 +461,12 @@ every agent's connection appears to come from the bridge gateway). Use
   when the dispatcher reaches the agent on a different port than the agent
   binds — for example a port-mapped container. Default 7443.
 
+`--read-timeout <n>`
+: Seconds the dispatcher waits for this agent's response, stored in the
+  registry as `read_timeout`. A positive whole number; anything else is
+  refused. Unset (the default) uses the dispatcher's `read_timeout`. See
+  *Per-agent read timeout* under `edit-agent`.
+
 ---
 
 ### deny
@@ -557,6 +563,7 @@ tracking are left intact. At least one change flag is required.
 ced edit-agent <name> --ip 10.0.0.42
 ced edit-agent <name> --agent-port 7450 --lookup-by ip
 ced edit-agent old-name --rename new-name
+ced edit-agent <name> --read-timeout 900
 ```
 
 `--rename <new-name>`
@@ -573,6 +580,20 @@ ced edit-agent old-name --rename new-name
 `--lookup-by <ip|hostname>`
 : Update how dispatch resolves this agent. See *Dispatch host resolution*
   under `run`.
+
+`--read-timeout <n|default>`
+: Per-agent read timeout (seconds, a positive whole number; anything else is
+  refused). *Per-agent read timeout:* every call to this agent (`run`,
+  `--async` submit, `status`, `ping`, capabilities, certificate renewal, and
+  the same calls through the API) waits `n` seconds for the response instead
+  of the dispatcher's `read_timeout`, so one agent with long jobs can have a
+  long wait without changing every other call. `default` removes the setting
+  and the global value applies again. The same flag is accepted by `approve`.
+  A value that is not a positive whole number in a registry record (for
+  example a hand-edited file) is logged as `ACTION=read-timeout-invalid` and
+  the global `read_timeout` is used; the call is not refused. An older
+  dispatcher ignores the field. For jobs longer than any read timeout, use
+  `run --async`.
 
 `--json` prints the updated record. The agent's certificate is unaffected;
 renaming or re-addressing does not require the agent to re-pair, since mTLS
@@ -850,7 +871,8 @@ Key settings:
   before reporting a timeout error. Default: 60. The script continues
   running on the agent after a timeout - only the dispatcher's ability to
   receive the output is affected. Raise this value for scripts that are
-  expected to take longer than 60 seconds.
+  expected to take longer than 60 seconds. One agent can override it with
+  `edit-agent <name> --read-timeout <n>`.
 
   ```
   read_timeout = 120

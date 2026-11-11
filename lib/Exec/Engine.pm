@@ -571,7 +571,7 @@ sub _dispatch_one (%opts) {
         }
         else {
             my $raw_err = $@ || ($resp ? $resp->status_line : 'no response');
-            my $timeout = $config->{read_timeout} // $config->{timeout} // 60;
+            my $timeout = $ua->timeout;
             $err = ($raw_err =~ /read timeout/i)
                 ? "read timeout after ${timeout}s"
                 : _transport_error($raw_err, $host, $port, $config);
@@ -984,9 +984,33 @@ sub _build_ua ($config, $name = undef) {
             SSL_verify_mode => 0x01,
             verify_hostname => 0,   # verified by CA, not hostname
         },
-        timeout => $config->{read_timeout} // $config->{timeout} // 60,
+        timeout => _read_timeout($config, $name),
     );
     return $ua;
+}
+
+# Seconds to wait for agent $name: its registry record's read_timeout (T-094)
+# when set, else the dispatcher's global read_timeout (60 by default). A value
+# on disk that is not a positive whole number is logged and the global value
+# used - a hand-edited record never fails a call.
+sub _read_timeout ($config, $name) {
+    my $global = $config->{read_timeout} // $config->{timeout} // 60;
+    return $global unless defined $name && length $name;
+    require Exec::Registry;
+    return $global unless Exec::Registry::valid_agent_name($name);
+    my $rec = eval {
+        Exec::Registry::get_agent(hostname => $name, registry_dir => $config->{registry_dir})
+    } or return $global;
+    return $global unless exists $rec->{read_timeout};
+    my $v = $rec->{read_timeout};
+    return int($v) if Exec::Registry::valid_read_timeout($v);
+    Exec::Log::log_action('WARNING', {
+        ACTION => 'read-timeout-invalid',
+        AGENT  => $name,
+        VALUE  => (ref $v ? 'non-scalar' : $v // ''),
+        USING  => "${global}s (global read_timeout)",
+    });
+    return $global;
 }
 
 # The CA certificate (PEM) pinned in agent $name's registry entry, or undef
