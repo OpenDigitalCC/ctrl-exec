@@ -999,6 +999,24 @@ Key settings:
 `port`
 : Port the agent listens on for mTLS connections from the dispatcher. Default: 7443.
 
+`bind`
+: The one address the agent listens on: an IPv4 or IPv6 literal (`127.0.0.1`,
+  `::1`), passed to the listener as its local address. Not a host name, and no
+  brackets, zone id or port. Unset (the default), the agent listens on every
+  address, as before. Connections to any other address of the host are refused
+  by the kernel, unlike `allowed_ips`, which drops them after the TCP accept.
+  An invalid value, or an address this host does not have, stops the agent
+  starting (exit 78 for an invalid value): the reason is printed and logged
+  (`ACTION=config-error`, or `Cannot start server on <address>`), `doctor`
+  reports it, and `self-check` shows the address in force (`Listens on`). Like
+  `port`, it is read once at start: a change needs a restart. IPv6 is
+  supported; `0.0.0.0` and `::` are accepted and mean every address of that
+  family.
+
+  ```
+  bind = 127.0.0.1
+  ```
+
 `cert`, `key`, `ca`
 : Paths to the agent's TLS certificate, private key, and CA certificate. Like
   `port`, these are read once at start: a change needs a restart (SIGHUP keeps
@@ -1426,7 +1444,7 @@ entry naming a profile `agent.conf` does not define skips only that script
 rest loads. On a successful reload `allowed_ips`,
 the rate-limit settings, `max_children`, `auth_hook`, `script_dirs`, `script_path`, `[tags]`,
 `[profile ...]` blocks, `executor_socket` and the other keys apply to
-subsequent connections. `port`, `cert`, `key` and `ca` cannot change without a
+subsequent connections. `port`, `bind`, `cert`, `key` and `ca` cannot change without a
 restart (the listener is bound and holds that identity): the running values are
 kept and `ACTION=reload-note` logs that a restart is needed. The executor
 re-reads `agent.conf` by itself when its modification time changes.

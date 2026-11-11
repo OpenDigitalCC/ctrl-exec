@@ -110,10 +110,13 @@ sub _need_root ($mode, @paths) {
 # Is the agent listening on its port? A plain TCP connect to loopback: needs no
 # root and no TLS material, and works the same under systemd, OpenRC, procd or a
 # hand-started process.
-sub _agent_listening ($port) {
-    require IO::Socket::INET;
-    my $probe = IO::Socket::INET->new(
-        PeerHost => '127.0.0.1',
+sub _agent_listening ($port, $bind = undef) {
+    # With 'bind' set the agent answers on that address only (T-092). A
+    # wildcard bind answers on loopback of its family.
+    my $host = !defined $bind ? '127.0.0.1' : $bind eq '0.0.0.0' ? '127.0.0.1' : $bind eq '::' ? '::1' : $bind;
+    require IO::Socket::IP;
+    my $probe = IO::Socket::IP->new(
+        PeerHost => $host,
         PeerPort => $port,
         Proto    => 'tcp',
         Timeout  => 3,
@@ -399,6 +402,7 @@ sub mode_serve ($opts) {
         my $err = $@ || 'unknown configuration error';
         $err =~ s/ at \S+ line \d+\.?\s*$//;   # strip Perl's "at FILE line N" tail
         $err =~ s/\s+\z//;
+        Exec::Log::log_action('ERROR', { ACTION => 'config-error', MSG => $err });
         print STDERR <<"MSG";
 ctrl-exec-agent: cannot start - configuration error.
 
@@ -595,6 +599,7 @@ MSG
 
     my $server = IO::Socket::SSL->new(
         LocalPort        => $config->{port},
+        (defined $config->{bind} ? (LocalAddr => $config->{bind}) : ()),
         Listen           => 10,
         ReuseAddr        => 1,
         SSL_cert_file    => $config->{cert},
@@ -608,12 +613,14 @@ MSG
         SSL_startHandshake => 0,
         SSL_create_ctx_callback => sub ($ctx) { $listener_ctx = $ctx },
         Exec::TLS::hardening(),
-    ) or die "Cannot start server: $IO::Socket::SSL::SSL_ERROR\n";
+    ) or die "Cannot start server" . (defined $config->{bind} ? " on $config->{bind}" : '')
+           . ": $IO::Socket::SSL::SSL_ERROR\n";
     $listener_cas = join ',', map { $_->{fpr} } @$ca_bundle;
 
     Exec::Log::log_action('INFO', {
         ACTION => 'start',
         PORT   => $config->{port},
+        (defined $config->{bind} ? (BIND => $config->{bind}) : ()),
     });
 
     # Aggregate concurrent-handler cap, on top of the per-IP rate limit below.
@@ -1114,11 +1121,12 @@ sub mode_self_check {
     my $config = eval { Exec::Agent::Config::load_config($CONFIG_PATH) };
     if ($@) { print "Config error: $@\n"; exit 1; }
     print "  Config OK (port $config->{port})\n";
+    print "  Listens on: " . (defined $config->{bind} ? "$config->{bind} only (bind)" : 'every address (bind unset)') . "\n";
 
     # Informational only: self-check is a local check and its result does not
     # depend on the agent running.
     if (defined $config->{port} && $config->{port} =~ /^\d+$/) {
-        if (_agent_listening($config->{port})) {
+        if (_agent_listening($config->{port}, $config->{bind})) {
             print "  Agent: running (listening on port $config->{port})\n";
         }
         else {
@@ -1240,7 +1248,7 @@ sub mode_self_ping {
 
     # self-ping talks to the running agent: say so plainly if it is not there,
     # before any pairing or TLS detail that would only obscure the cause.
-    unless (_agent_listening($port)) {
+    unless (_agent_listening($port, $config->{bind})) {
         STDOUT->flush;
         print STDERR _not_running_message($port);
         exit 1;

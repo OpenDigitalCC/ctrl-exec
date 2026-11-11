@@ -72,6 +72,12 @@ choosing instead of the host's FQDN.
 `port`, `openFirewall`
 : Listen port (default 7443) and whether to open it in the firewall.
 
+`bind`
+: The one IPv4 or IPv6 address the agent listens on (written to `agent.conf` as
+  `bind`), for example `"127.0.0.1"`. Default `null`: every address. It must be
+  an address, not a host name; an invalid value stops the agent starting. A
+  change needs a restart, which the module does for you.
+
 `scripts.<name>.source`, `scripts.<name>.options`
 : The allowlist. See *Scripts* below. `options` are the `key=value` options of
   a `scripts.conf` entry (`profile`, `input`, `output`, `dispatchers`).

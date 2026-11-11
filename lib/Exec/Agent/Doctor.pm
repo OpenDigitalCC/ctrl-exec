@@ -274,7 +274,7 @@ sub _cert_and_trust_checks ($config, %o) {
     }
 
     my $port = $config->{port};
-    if ($o{listening} && defined $port && !$o{listening}->($port)) {
+    if ($o{listening} && defined $port && !$o{listening}->($port, $config->{bind})) {
         push @f, $N->('agent-not-running', "The agent is not running (nothing listens on port $port).",
                       $o{start_command} // 'sudo systemctl start ctrl-exec-agent');
     }

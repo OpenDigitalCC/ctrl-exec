@@ -181,6 +181,16 @@ sub _validate_config ($config, $path) {
         . " (expected warn or strict)"
         unless $config->{script_ownership} =~ /\A(?:warn|strict)\z/;
 
+    # bind (T-092): the one address the listener binds to. Unset, the agent
+    # listens on every address, as before. A value that is not an IPv4 or IPv6
+    # literal is a config error: a listener on an address the operator did not
+    # mean is worse than none, so the agent refuses to start (the reason is
+    # logged and printed by serve; doctor and self-check show it).
+    if (defined $config->{bind}
+        && defined(my $why = bind_problem($config->{bind}))) {
+        croak "Invalid bind '$config->{bind}' in '$path' ($why)";
+    }
+
     # script_path (T-074): an invalid value does not stop the agent. It is
     # reported (here, by doctor and self-check) and scripts get the default
     # PATH; the executor does the same with its own copy of this file. The raw
@@ -983,10 +993,23 @@ sub validate_profiles ($allowlist, $config) {
     return @unknown;
 }
 
+# Why a bind value cannot be used, or undef when it can (T-092). It must be one
+# IPv4 or IPv6 literal, exactly as inet_pton reads it: no host name (a name can
+# resolve to several addresses, or change), no brackets, no zone id, no port.
+# "0.0.0.0" and "::" are literals and mean every address of that family.
+sub bind_problem ($v) {
+    return 'empty' unless defined $v && length $v;
+    require Socket;
+    return undef if defined Socket::inet_pton(Socket::AF_INET(), $v);
+    return undef if defined Socket::inet_pton(Socket::AF_INET6(), $v);
+    return 'expected an IPv4 or IPv6 address such as 127.0.0.1 or ::1, not a host name,'
+         . ' bracketed address, zone id or port';
+}
+
 # Settings the running process has already acted on and cannot change without a
-# restart: the listener is bound to 'port' and holds the TLS identity loaded from
+# restart: the listener is bound to 'port' (on 'bind') and holds the TLS identity loaded from
 # 'cert', 'key' and 'ca'. A reload keeps the running value of these and says so.
-use constant RESTART_ONLY_KEYS => qw(port cert key ca);
+use constant RESTART_ONLY_KEYS => qw(port bind cert key ca);
 
 # Plan a reload of agent.conf and scripts.conf (SIGHUP, or either file changed
 # on disk, T-059). Nothing is applied here: the caller swaps the result in only

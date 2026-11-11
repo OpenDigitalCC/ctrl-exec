@@ -7,6 +7,8 @@ release commit) it lands at, not a date. Bullets mark what was **added**,
 
 ## 0.14.7 — (unreleased)
 
+- **Added** agent.conf `bind = <address>`: the agent listens on that one IPv4 or IPv6 address instead of every address (HPS: an admin agent on 127.0.0.1 only); unset, it behaves as before. An invalid value (a host name, a bracketed address) stops the agent starting with the reason printed and logged, and `self-check` shows the address in force; the NixOS module has a `bind` option. (T-092, R-036)
+
 ## 0.14.6 — large script input and large results get through
 
 Upgrading from 0.14.5: nothing to do. Upgrade the agents as well as the

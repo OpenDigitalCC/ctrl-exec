@@ -8,7 +8,7 @@
 # The agent reloads this file, together with scripts.conf, by itself when
 # either changes on disk (at the next connection), and on SIGHUP (systemctl
 # reload ctrl-exec-agent). Everything takes effect for subsequent connections
-# except port, cert, key and ca: the listener is already bound and holds that
+# except port, bind, cert, key and ca: the listener is already bound and holds that
 # TLS identity, so changing them needs a restart (a reload keeps the running
 # value and logs that a restart is needed). If this file does not parse, the
 # previous configuration stays in force and the reason is logged. A
@@ -20,6 +20,15 @@ port = 7443
 cert = /etc/ctrl-exec-agent/agent.crt
 key  = /etc/ctrl-exec-agent/agent.key
 ca   = /etc/ctrl-exec-agent/ca.crt
+
+# The one address the agent listens on: an IPv4 or IPv6 address, not a host
+# name (127.0.0.1 or ::1 for an agent only local callers reach). Unset, the
+# agent listens on every address. Any other value, or an address this host
+# does not have, stops the agent starting; the reason is printed and logged.
+# Unlike allowed_ips below, other addresses are refused before accept.
+# A change needs a restart.
+#
+# bind = 127.0.0.1
 
 # Trusted dispatchers (written automatically at pairing time).
 # Path to the map of dispatcher cert serials this agent accepts, each with the

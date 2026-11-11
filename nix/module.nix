@@ -104,6 +104,18 @@ in
       description = "TCP port the agent listens on (the dispatcher connects to it).";
     };
 
+    bind = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "127.0.0.1";
+      description = ''
+        The one IPv4 or IPv6 address the agent listens on, written to
+        agent.conf as `bind`. Null (the default) leaves `bind` out: the agent
+        listens on every address. Not a host name; an invalid value stops the
+        agent starting.
+      '';
+    };
+
     openFirewall = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -126,7 +138,7 @@ in
       example = { script_ownership = "strict"; allowed_ips = "192.0.2.10"; };
       description = ''
         Extra top-level agent.conf keys (see etc/agent.conf.example), merged
-        with the module's own: port, cert, key, ca, script_path and, with the
+        with the module's own: port, bind (when set), cert, key, ca, script_path and, with the
         executor enabled, executor_socket.
       '';
     };
@@ -196,7 +208,8 @@ in
       key = lib.mkDefault "${confDir}/agent.key";
       ca = lib.mkDefault "${confDir}/ca.crt";
       script_path = lib.mkDefault cfg.scriptPath;
-    } // lib.optionalAttrs cfg.executor.enable { executor_socket = lib.mkDefault execSock; };
+    } // lib.optionalAttrs (cfg.bind != null) { bind = lib.mkDefault cfg.bind; }
+      // lib.optionalAttrs cfg.executor.enable { executor_socket = lib.mkDefault execSock; };
 
     services.ctrl-exec-agent.profiles.default = lib.mkDefault {
       run_as = "nobody";
