@@ -230,6 +230,10 @@ sub start_mitm ($chain_file, $key_file) {
         close $l;
         return ($pid, $port, $count);
     }
+    # The client refuses this listener and closes, sometimes while the server
+    # side is still writing the end of the handshake: ignore SIGPIPE, which
+    # otherwise killed this child before it wrote its count (a flaky undef).
+    $SIG{PIPE} = "IGNORE";
     alarm $STEP;
     my $a = $l->accept;
     my $n = 0;
