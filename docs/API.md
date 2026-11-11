@@ -192,7 +192,7 @@ Request body:
   body of up to 1 MiB plus `max_input_bytes`; larger is a 413.
 
 `username`, `token`
-: Optional. Passed to auth hook and forwarded to the agent as request context.
+: Optional. Passed to auth hook and forwarded to the agent as request context. With `api_forward_token = no` in the dispatcher config the agents receive an empty token; the hook still gets the real one.
 
 `async`
 : Optional boolean (default `false`). When `true`, each agent starts the

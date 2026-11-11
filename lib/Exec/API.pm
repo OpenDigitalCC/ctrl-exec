@@ -630,7 +630,7 @@ sub _handle_run ($conn, $peer, $body, $config) {
         args     => $args,
         reqid    => $reqid,
         username => $username,
-        token    => $token,
+        token    => (Exec::Auth::forward_token_enabled($config) ? $token : ''),
         config   => $config,
         async    => $async,
         (defined $input ? (input => $input) : ()),

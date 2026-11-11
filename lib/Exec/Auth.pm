@@ -202,6 +202,14 @@ sub generic_denials_enabled ($config) {
     return ($v =~ /^\s*[1y]/i) ? 1 : 0;
 }
 
+# Whether the API forwards the caller's token to the agents on a run (default
+# yes). api_forward_token = no/0/off/false sends them an empty token once the
+# API's own hook has passed; an unrecognised value keeps the default.
+sub forward_token_enabled ($config) {
+    my $v = $config->{api_forward_token} // '';
+    return ($v =~ /^\s*(?:0|n|no|off|false)\s*$/i) ? 0 : 1;
+}
+
 # Disclosable fields for a denied auth result, to be merged into a 403 body.
 # With auth_deny_generic off (default): the specific reason and code. With it
 # on: a generic message only. Returns a hashref (no 'ok' key - the caller adds

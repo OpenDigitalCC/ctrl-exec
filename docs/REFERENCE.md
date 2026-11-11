@@ -972,6 +972,19 @@ Key settings:
   api_auth_default = allow
   ```
 
+`api_forward_token`
+: Whether the API passes the caller's `token` on to the agents on a `run`
+  (default `yes`). With `no` (also `0`, `off`, `false`) the agents receive an
+  empty token, so it is absent from the script's stdin context under
+  `input=context` and from the agent's own auth hook; the API's own
+  `auth_hook` always receives the real token. Applies to the API only: `ced`
+  sends the token its operator typed, if any. An unrecognised value keeps
+  the default.
+
+  ```
+  api_forward_token = no
+  ```
+
 `auth_deny_generic`
 : When enabled (`1`/`yes`; default off), the API returns a generic `403`
   with `{"error":"forbidden"}` for denied `run`, `ping`, and `discovery`
